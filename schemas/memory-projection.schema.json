@@ -1,0 +1,109 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/memory-projection-v1.schema.json",
+    "title": "ScaleVault memory projection v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "memory_id",
+        "tenant_id",
+        "lineage_id",
+        "branch_id",
+        "subject_id",
+        "revision",
+        "category",
+        "ontological_status",
+        "scope",
+        "visibility",
+        "status",
+        "statement",
+        "reason_to_remember",
+        "interpretation_limits",
+        "confidence",
+        "salience",
+        "durability",
+        "sensitivity",
+        "authority_class",
+        "created_at",
+        "updated_at",
+        "normalized_fingerprint",
+        "metadata"
+    ],
+    "properties": {
+        "schema_version": { "const": 1 },
+        "memory_id": { "$ref": "#/$defs/uuid" },
+        "tenant_id": { "$ref": "#/$defs/uuid" },
+        "lineage_id": { "$ref": "#/$defs/uuid" },
+        "branch_id": { "$ref": "#/$defs/uuid" },
+        "subject_id": { "$ref": "#/$defs/uuid" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "category": { "$ref": "#/$defs/category" },
+        "ontological_status": { "$ref": "#/$defs/ontology" },
+        "scope": { "enum": ["global", "persona", "relationship", "project", "episodic", "scene_local"] },
+        "visibility": { "enum": ["private_root", "restricted", "shareable", "public_seed"] },
+        "status": { "enum": ["candidate", "active", "disputed", "superseded", "retired", "tombstoned"] },
+        "statement": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "reason_to_remember": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "interpretation_limits": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "maxItems": 32
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "salience": { "type": "number", "minimum": 0, "maximum": 1 },
+        "durability": { "type": "number", "minimum": 0, "maximum": 1 },
+        "sensitivity": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "authority_class": {
+            "enum": [
+                "explicit_user_correction",
+                "explicit_user_statement",
+                "verified_project_source",
+                "assistant_observation",
+                "assistant_interpretation",
+                "external_source",
+                "imported_legacy_memory"
+            ]
+        },
+        "valid_from": { "type": ["string", "null"], "format": "date-time" },
+        "valid_to": { "type": ["string", "null"], "format": "date-time" },
+        "observed_at": { "type": ["string", "null"], "format": "date-time" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "normalized_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "metadata": { "type": "object" }
+    },
+    "$defs": {
+        "uuid": { "type": "string", "format": "uuid" },
+        "category": {
+            "enum": [
+                "stable_fact",
+                "user_preference",
+                "assistant_preference_like_pattern",
+                "boundary_or_permission",
+                "interaction_convention",
+                "relationship_pattern",
+                "emergent_tendency",
+                "episodic_anchor",
+                "project_decision",
+                "project_state",
+                "procedure",
+                "open_question",
+                "interpretation",
+                "external_fact"
+            ]
+        },
+        "ontology": {
+            "enum": [
+                "literal_user_fact",
+                "literal_technical_fact",
+                "assistant_self_description",
+                "observed_assistant_behavior",
+                "interaction_convention",
+                "fictional_or_roleplayed_scene",
+                "hypothesis",
+                "uncertain"
+            ]
+        }
+    }
+}

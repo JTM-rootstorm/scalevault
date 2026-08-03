@@ -1,0 +1,28 @@
+[Unit]
+Description=ScaleVault outbound relay node agent
+After=network-online.target kivra-memory-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=memory-node
+Group=memory-node
+WorkingDirectory=/opt/kivra-memory/app
+EnvironmentFile=-/etc/kivra-memory/node-agent.env
+ExecStart=/opt/kivra-memory/app/bin/memory-node-agent
+Restart=always
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/kivra-memory/node-agent
+
+[Install]
+WantedBy=multi-user.target

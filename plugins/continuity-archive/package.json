@@ -1,0 +1,13 @@
+{
+    "name": "@scalevault/continuity-archive",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "check": "tsc --noEmit",
+        "test": "node --test test/*.test.mjs"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.2"
+    }
+}

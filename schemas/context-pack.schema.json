@@ -1,0 +1,51 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/context-pack-v1.schema.json",
+    "title": "ScaleVault context pack v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "context_pack_id",
+        "persona",
+        "active_boundaries",
+        "user_preferences",
+        "relationship_patterns",
+        "project_context",
+        "episodic_anchors",
+        "open_questions",
+        "conflicts",
+        "excluded_scope_summary",
+        "provenance"
+    ],
+    "properties": {
+        "schema_version": { "const": 1 },
+        "context_pack_id": { "type": "string", "format": "uuid" },
+        "persona": { "$ref": "#/$defs/items" },
+        "active_boundaries": { "$ref": "#/$defs/items" },
+        "user_preferences": { "$ref": "#/$defs/items" },
+        "relationship_patterns": { "$ref": "#/$defs/items" },
+        "project_context": { "$ref": "#/$defs/items" },
+        "episodic_anchors": { "$ref": "#/$defs/items" },
+        "open_questions": { "$ref": "#/$defs/items" },
+        "conflicts": { "type": "array", "items": { "type": "object" } },
+        "excluded_scope_summary": { "type": "object" },
+        "provenance": { "type": "array", "items": { "type": "object" } }
+    },
+    "$defs": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["memory_id", "revision", "statement"],
+                "properties": {
+                    "memory_id": { "type": "string", "format": "uuid" },
+                    "revision": { "type": "integer", "minimum": 1 },
+                    "statement": { "type": "string", "minLength": 1 },
+                    "scores": { "type": "object", "additionalProperties": { "type": "number" } }
+                }
+            }
+        }
+    }
+}

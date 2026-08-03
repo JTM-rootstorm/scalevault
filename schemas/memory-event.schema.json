@@ -1,0 +1,60 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/memory-event-v1.schema.json",
+    "title": "ScaleVault memory event v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "sequence",
+        "event_id",
+        "tenant_id",
+        "lineage_id",
+        "branch_id",
+        "actor_id",
+        "client_id",
+        "operation",
+        "correlation_id",
+        "idempotency_key",
+        "payload",
+        "payload_sha256",
+        "created_at"
+    ],
+    "properties": {
+        "schema_version": { "const": 1 },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "event_id": { "$ref": "#/$defs/uuid" },
+        "tenant_id": { "$ref": "#/$defs/uuid" },
+        "lineage_id": { "$ref": "#/$defs/uuid" },
+        "branch_id": { "$ref": "#/$defs/uuid" },
+        "actor_id": { "$ref": "#/$defs/uuid" },
+        "client_id": { "$ref": "#/$defs/uuid" },
+        "session_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "operation": {
+            "enum": [
+                "observed",
+                "remembered",
+                "revised",
+                "linked",
+                "conflict_opened",
+                "conflict_resolved",
+                "superseded",
+                "retired",
+                "tombstoned",
+                "branch_created",
+                "visibility_changed"
+            ]
+        },
+        "memory_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "expected_revision": { "type": ["integer", "null"], "minimum": 1 },
+        "causation_event_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "correlation_id": { "$ref": "#/$defs/uuid" },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "payload": { "type": "object" },
+        "payload_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "created_at": { "type": "string", "format": "date-time" }
+    },
+    "$defs": {
+        "uuid": { "type": "string", "format": "uuid" }
+    }
+}

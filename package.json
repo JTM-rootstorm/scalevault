@@ -1,0 +1,12 @@
+{
+    "name": "scalevault-workspace",
+    "private": true,
+    "packageManager": "pnpm@10.15.0",
+    "workspaces": [
+        "plugins/*"
+    ],
+    "scripts": {
+        "check": "pnpm --recursive check",
+        "test": "pnpm --recursive test"
+    }
+}

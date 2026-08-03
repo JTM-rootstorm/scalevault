@@ -1,0 +1,40 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/export-manifest-v1.schema.json",
+    "title": "ScaleVault archive export manifest v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "first_event_sequence",
+        "last_event_sequence",
+        "event_count",
+        "previous_manifest_sha256",
+        "files",
+        "exporter_version",
+        "exported_at"
+    ],
+    "properties": {
+        "schema_version": { "const": 1 },
+        "first_event_sequence": { "type": "integer", "minimum": 1 },
+        "last_event_sequence": { "type": "integer", "minimum": 1 },
+        "event_count": { "type": "integer", "minimum": 1 },
+        "previous_manifest_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "files": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "sha256"],
+                "properties": {
+                    "path": { "type": "string", "minLength": 1 },
+                    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                }
+            }
+        },
+        "exporter_version": { "type": "string", "minLength": 1 },
+        "exported_at": { "type": "string", "format": "date-time" },
+        "git_commit_sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40,64}$" }
+    }
+}

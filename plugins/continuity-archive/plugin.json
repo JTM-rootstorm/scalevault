@@ -1,0 +1,12 @@
+{
+    "schema_version": 1,
+    "name": "Continuity Archive",
+    "description": "Connects supported clients to a user-controlled continuity node.",
+    "privacy": {
+        "memory_node": "user_hosted",
+        "relay_persists_payloads": false,
+        "github_bridge": "optional_third_party_transport"
+    },
+    "capability_profile": "chatgpt_public_plugin_detected",
+    "mcp_endpoint_template": "https://{installation_id}.memory-relay.example/mcp"
+}
