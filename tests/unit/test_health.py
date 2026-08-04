@@ -1,16 +1,105 @@
+from typing import Any, cast
+
 import pytest
 from httpx import ASGITransport, AsyncClient
-from kivra_memory.api.app import create_app, main, psycopg_connection_info
+from kivra_memory.api.app import create_app, main
 from kivra_memory.config import Settings, get_settings
+from kivra_memory.storage.readiness import (
+    REQUIRED_EXTENSIONS,
+    DatabaseReadiness,
+    _extension_status,
+    _migration_status,
+    database_is_ready,
+    psycopg_connection_info,
+)
 from pydantic import PostgresDsn
 
 DATABASE_URL = PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory")
+
+
+class _Cursor:
+    def __init__(self, rows: list[tuple[object, ...]]) -> None:
+        self._rows = rows
+
+    async def fetchone(self) -> tuple[object, ...] | None:
+        return self._rows[0] if self._rows else None
+
+    async def fetchall(self) -> list[tuple[object, ...]]:
+        return self._rows
+
+
+class _ReadinessConnection:
+    def __init__(
+        self,
+        *,
+        version_table_exists: bool = True,
+        versions: tuple[str, ...] = ("0001_initial_domain",),
+        extensions: frozenset[str] = REQUIRED_EXTENSIONS,
+    ) -> None:
+        self._version_table_exists = version_table_exists
+        self._versions = versions
+        self._extensions = extensions
+
+    async def execute(
+        self,
+        query: str,
+        _parameters: object = None,
+    ) -> _Cursor:
+        if "to_regclass" in query:
+            table_name = "alembic_version" if self._version_table_exists else None
+            return _Cursor([(table_name,)])
+        if "FROM public.alembic_version" in query:
+            return _Cursor([(version,) for version in self._versions])
+        if "FROM pg_catalog.pg_extension" in query:
+            return _Cursor([(extension,) for extension in sorted(self._extensions)])
+        raise AssertionError(f"unexpected readiness query: {query}")
 
 
 def test_sqlalchemy_database_url_is_normalized_for_psycopg() -> None:
     database_url = PostgresDsn("postgresql+psycopg://memory-api:example@127.0.0.1/kivra_memory")
 
     assert psycopg_connection_info(database_url).startswith("postgresql://")
+
+
+async def test_migration_probe_requires_the_exact_expected_head() -> None:
+    assert await _migration_status(cast(Any, _ReadinessConnection())) == "ok"
+    assert (
+        await _migration_status(cast(Any, _ReadinessConnection(version_table_exists=False)))
+        == "incompatible"
+    )
+    assert (
+        await _migration_status(cast(Any, _ReadinessConnection(versions=("0000_foundation",))))
+        == "incompatible"
+    )
+
+
+async def test_extension_probe_requires_every_named_extension() -> None:
+    assert await _extension_status(cast(Any, _ReadinessConnection())) == "ok"
+    assert (
+        await _extension_status(
+            cast(Any, _ReadinessConnection(extensions=REQUIRED_EXTENSIONS - {"vector"}))
+        )
+        == "incomplete"
+    )
+
+
+async def test_database_probe_sanitizes_connection_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = "SENTINEL-CONNECTION-DETAIL-MUST-NOT-APPEAR"
+
+    async def fail_to_connect(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(sentinel)
+
+    monkeypatch.setattr(
+        "kivra_memory.storage.readiness.AsyncConnection.connect",
+        fail_to_connect,
+    )
+
+    result = await database_is_ready(DATABASE_URL, 1)
+
+    assert result == DatabaseReadiness.unavailable()
+    assert sentinel not in repr(result)
 
 
 async def test_liveness_is_available() -> None:
@@ -30,13 +119,17 @@ async def test_readiness_fails_closed_without_dependencies() -> None:
     assert response.status_code == 503
     assert response.json() == {
         "status": "not_ready",
-        "checks": {"database": "not_configured"},
+        "checks": {
+            "database": "not_configured",
+            "migrations": "unchecked",
+            "extensions": "unchecked",
+        },
     }
 
 
 async def test_readiness_reports_configured_database_state() -> None:
-    async def database_is_ready(*_args: object) -> bool:
-        return True
+    async def database_is_ready(*_args: object) -> DatabaseReadiness:
+        return DatabaseReadiness(database="ok", migrations="ok", extensions="ok")
 
     app = create_app(
         Settings(database_url=DATABASE_URL),
@@ -48,13 +141,13 @@ async def test_readiness_reports_configured_database_state() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ready",
-        "checks": {"database": "ok"},
+        "checks": {"database": "ok", "migrations": "ok", "extensions": "ok"},
     }
 
 
 async def test_readiness_hides_database_failure_details() -> None:
-    async def database_is_ready(*_args: object) -> bool:
-        return False
+    async def database_is_ready(*_args: object) -> DatabaseReadiness:
+        return DatabaseReadiness.unavailable()
 
     app = create_app(
         Settings(database_url=DATABASE_URL),
@@ -66,8 +159,62 @@ async def test_readiness_hides_database_failure_details() -> None:
     assert response.status_code == 503
     assert response.json() == {
         "status": "not_ready",
-        "checks": {"database": "unavailable"},
+        "checks": {
+            "database": "unavailable",
+            "migrations": "unchecked",
+            "extensions": "unchecked",
+        },
     }
+
+
+@pytest.mark.parametrize(
+    ("dependency_state", "expected_checks"),
+    [
+        (
+            DatabaseReadiness(database="ok", migrations="incompatible", extensions="ok"),
+            {"database": "ok", "migrations": "incompatible", "extensions": "ok"},
+        ),
+        (
+            DatabaseReadiness(database="ok", migrations="ok", extensions="incomplete"),
+            {"database": "ok", "migrations": "ok", "extensions": "incomplete"},
+        ),
+    ],
+)
+async def test_readiness_fails_closed_for_incompatible_database_dependencies(
+    dependency_state: DatabaseReadiness,
+    expected_checks: dict[str, str],
+) -> None:
+    async def database_is_ready(*_args: object) -> DatabaseReadiness:
+        return dependency_state
+
+    app = create_app(Settings(database_url=DATABASE_URL), database_probe=database_is_ready)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "checks": expected_checks}
+
+
+async def test_readiness_sanitizes_unexpected_probe_errors() -> None:
+    sentinel = "SENTINEL-DATABASE-DETAIL-MUST-NOT-APPEAR"
+
+    async def database_is_ready(*_args: object) -> DatabaseReadiness:
+        raise RuntimeError(sentinel)
+
+    app = create_app(Settings(database_url=DATABASE_URL), database_probe=database_is_ready)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "checks": {
+            "database": "unavailable",
+            "migrations": "unchecked",
+            "extensions": "unchecked",
+        },
+    }
+    assert sentinel not in response.text
 
 
 def test_startup_configuration_error_is_sanitized(

@@ -8,13 +8,17 @@ or a dependency-failed process ready.
 
 | Process | Default listener | Liveness | Readiness | Metrics |
 |---|---|---|---|---|
-| Memory API | `127.0.0.1:8080` | `GET /healthz` returns `200` with the version | `GET /readyz` returns `200` only when PostgreSQL is configured and reachable; otherwise `503` with `database` set to `not_configured` or `unavailable` | `GET /metrics` returns Prometheus text, or `404` when `KIVRA_MEMORY_METRICS_ENABLED=false` |
+| Memory API | `127.0.0.1:8080` | `GET /healthz` returns `200` with the version | `GET /readyz` returns `200` only when PostgreSQL is reachable, the database is at the exact compatible Alembic head, and `vector`, `pg_trgm`, `citext`, and `pgcrypto` are installed; otherwise it returns a sanitized `503` dependency state | `GET /metrics` returns Prometheus text, or `404` when `KIVRA_MEMORY_METRICS_ENABLED=false` |
 | Relay scaffold | `127.0.0.1:8090` | `GET /healthz` returns `200` | `GET /readyz` returns `503 not_ready` until the production relay is implemented | `GET /metrics` returns label-free Prometheus service information |
 | Node-agent scaffold | `127.0.0.1:8091` | `GET /healthz` returns `200` | `GET /readyz` returns `503 not_enrolled` until enrollment is implemented | `GET /metrics` returns label-free Prometheus service information |
 | Secure MCP Tunnel | `127.0.0.1:8081` | `GET /healthz` is owned by `tunnel-client` | `GET /readyz` is owned by `tunnel-client` and depends on tunnel control-plane and MCP initialization | Not owned by ScaleVault |
 
 The Memory API also mounts Streamable HTTP MCP at `/mcp`. Operator endpoints
 are not MCP tools. A future authenticated `/admin/status` is not implemented.
+The Memory API readiness body reports only fixed `database`, `migrations`, and
+`extensions` states. It never includes connection strings, migration error
+details, or database exception text. The Secure MCP Tunnel systemd unit waits
+for this complete API readiness result before it starts.
 
 Production configuration enforces a loopback-only Memory API listener and a
 local PostgreSQL destination. Do not set `KIVRA_MEMORY_HOST` to a private

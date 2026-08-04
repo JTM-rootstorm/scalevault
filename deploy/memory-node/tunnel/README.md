@@ -41,6 +41,7 @@ curl --fail --silent --show-error http://127.0.0.1:8081/readyz
 The admin UI remains loopback-only at `http://127.0.0.1:8081/ui`. This tunnel
 is for private developer-mode access and is not a public plugin endpoint.
 
-The systemd unit waits for the loopback Memory API health endpoint before
+The systemd unit waits for the loopback Memory API readiness endpoint before
 starting `tunnel-client`. This prevents the client's startup-only MCP probe from
-capturing a transient connection failure when both units start together.
+capturing a transient database or migration failure when both units start
+together.

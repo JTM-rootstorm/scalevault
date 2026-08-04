@@ -1,55 +1,30 @@
 """Memory Node application foundation."""
 
-import asyncio
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
-from psycopg import AsyncConnection
-from pydantic import PostgresDsn, ValidationError
+from pydantic import ValidationError
 from pydantic_settings import SettingsError
 
 from kivra_memory import __version__
 from kivra_memory.api.mcp_echo import create_echo_mcp
 from kivra_memory.config import Settings, get_settings
+from kivra_memory.storage.readiness import (
+    DatabaseProbe,
+    DatabaseReadiness,
+    database_is_ready,
+)
 
 HEALTH_REQUESTS = Counter(
     "kivra_memory_health_requests_total",
     "Health endpoint requests",
     labelnames=("endpoint", "result"),
 )
-
-DatabaseProbe = Callable[[PostgresDsn, int], Awaitable[bool]]
-
-
-def psycopg_connection_info(database_url: PostgresDsn) -> str:
-    """Convert an SQLAlchemy Psycopg URL into a libpq-compatible URL."""
-
-    return database_url.unicode_string().replace(
-        "postgresql+psycopg://",
-        "postgresql://",
-        1,
-    )
-
-
-async def database_is_ready(database_url: PostgresDsn, timeout_seconds: int) -> bool:
-    """Probe PostgreSQL without exposing connection details in the response."""
-
-    try:
-        async with asyncio.timeout(timeout_seconds):
-            connection = await AsyncConnection.connect(
-                psycopg_connection_info(database_url),
-                connect_timeout=timeout_seconds,
-            )
-            async with connection:
-                await connection.execute("SELECT 1")
-    except Exception:
-        return False
-    return True
 
 
 def create_app(
@@ -83,21 +58,35 @@ def create_app(
 
     @app.get("/readyz", tags=["operator"])
     async def readiness(response: Response) -> dict[str, Any]:
-        database_status = "not_configured"
-        ready = False
+        dependency_state = DatabaseReadiness.not_configured()
         if runtime_settings.database_url is not None:
-            ready = await database_probe(
-                runtime_settings.database_url,
-                runtime_settings.database_connect_timeout_seconds,
-            )
-            database_status = "ok" if ready else "unavailable"
-        result = "ready" if ready else "not_ready"
+            try:
+                probe_result = await database_probe(
+                    runtime_settings.database_url,
+                    runtime_settings.database_connect_timeout_seconds,
+                )
+            except Exception:
+                dependency_state = DatabaseReadiness.unavailable()
+            else:
+                if isinstance(probe_result, bool):
+                    dependency_state = (
+                        DatabaseReadiness(database="ok", migrations="ok", extensions="ok")
+                        if probe_result
+                        else DatabaseReadiness.unavailable()
+                    )
+                else:
+                    dependency_state = probe_result
+        result = "ready" if dependency_state.ready else "not_ready"
         HEALTH_REQUESTS.labels(endpoint="readyz", result=result).inc()
-        if not ready:
+        if not dependency_state.ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {
             "status": result,
-            "checks": {"database": database_status},
+            "checks": {
+                "database": dependency_state.database,
+                "migrations": dependency_state.migrations,
+                "extensions": dependency_state.extensions,
+            },
         }
 
     @app.get("/metrics", include_in_schema=False)
