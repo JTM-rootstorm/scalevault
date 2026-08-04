@@ -14,6 +14,7 @@ from kivra_memory.storage.models import (
     Client,
     Lineage,
     Persona,
+    Subject,
     Tenant,
     TransportBinding,
     TransportInstallation,
@@ -46,7 +47,7 @@ def test_seed_rows_are_deterministic_and_all_identifiers_are_uuid7() -> None:
     identifiers = _uuid_values(first)
     assert identifiers
     assert all(is_uuid7(identifier) for identifier in identifiers)
-    assert len(set(identifiers)) == 13
+    assert len(set(identifiers)) == 14
 
 
 def test_seed_rows_preserve_tenant_lineage_and_foreign_key_consistency() -> None:
@@ -65,12 +66,25 @@ def test_seed_rows_preserve_tenant_lineage_and_foreign_key_consistency() -> None
     persona = rows["personas"][0]
     lineage = rows["lineages"][0]
     branch = rows["branches"][0]
+    subject = rows["subjects"][0]
 
     assert persona["actor_id"] in actor_ids
     assert lineage["persona_id"] == persona["persona_id"]
     assert branch["lineage_id"] == lineage["lineage_id"]
     assert branch["parent_branch_id"] is None
     assert branch["fork_event_sequence"] is None
+    assert subject["lineage_id"] == lineage["lineage_id"]
+    assert subject["kind"] == "global"
+    assert all(
+        subject[field] is None
+        for field in (
+            "persona_id",
+            "relationship_actor_id",
+            "project_ref",
+            "episode_ref",
+            "origin_session_id",
+        )
+    )
 
     for binding in rows["transport_bindings"]:
         assert binding["actor_id"] in actor_ids
@@ -174,6 +188,7 @@ def test_insert_seed_rows_stages_models_in_dependency_order_without_io() -> None
             Persona,
             Lineage,
             Branch,
+            Subject,
             Client,
             Client,
             Client,

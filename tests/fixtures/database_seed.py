@@ -14,6 +14,7 @@ from kivra_memory.storage.models import (
     Client,
     Lineage,
     Persona,
+    Subject,
     Tenant,
     TransportBinding,
     TransportInstallation,
@@ -36,6 +37,7 @@ _MODEL_ORDER: tuple[tuple[str, type[Base]], ...] = (
     ("personas", Persona),
     ("lineages", Lineage),
     ("branches", Branch),
+    ("subjects", Subject),
     ("clients", Client),
     ("transport_installations", TransportInstallation),
     ("transport_bindings", TransportBinding),
@@ -62,6 +64,7 @@ def seed_rows() -> SeedRows:
     direct_binding_id = _seed_uuid(11)
     relay_binding_id = _seed_uuid(12)
     github_binding_id = _seed_uuid(13)
+    global_subject_id = _seed_uuid(14)
 
     all_operations = [operation.value for operation in EventOperation]
     relay_operations = [
@@ -142,6 +145,23 @@ def seed_rows() -> SeedRows:
                 "visibility_ceiling": "private_root",
                 "created_at": _CREATED_AT,
                 "sealed_at": None,
+            },
+        ),
+        "subjects": (
+            {
+                "subject_id": global_subject_id,
+                "tenant_id": tenant_id,
+                "lineage_id": lineage_id,
+                "kind": "global",
+                "canonical_key": "synthetic-global",
+                "display_name": "Synthetic Global Subject",
+                "persona_id": None,
+                "relationship_actor_id": None,
+                "project_ref": None,
+                "episode_ref": None,
+                "origin_session_id": None,
+                "metadata_": {"fixture_role": "global_subject"},
+                "created_at": _CREATED_AT,
             },
         ),
         "clients": (
