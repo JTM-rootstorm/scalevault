@@ -16,3 +16,8 @@ The API unit starts the Debian PostgreSQL 17 cluster dependency. The node-agent
 unit is installed but should remain disabled until relay enrollment is
 implemented. Worker, ingress, exporter, and timer units will be added with their
 runnable entry points so deployment never advertises an unimplemented service.
+
+The tunnel unit is installed separately and remains disabled until its Platform
+tunnel ID, restricted runtime credential, and ChatGPT workspace association are
+available. Its MCP target and health UI are both loopback-only; see
+`../tunnel/README.md` for the credential boundary and activation checks.

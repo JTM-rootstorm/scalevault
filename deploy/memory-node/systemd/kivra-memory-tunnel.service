@@ -1,0 +1,33 @@
+[Unit]
+Description=ScaleVault outbound OpenAI Secure MCP Tunnel
+After=network-online.target kivra-memory-api.service
+Wants=network-online.target
+Requires=kivra-memory-api.service
+RequiresMountsFor=/mnt/memory
+ConditionPathIsMountPoint=/mnt/memory
+
+[Service]
+Type=simple
+User=memory-tunnel
+Group=kivra-memory
+EnvironmentFile=/etc/kivra-memory/tunnel.env
+LoadCredential=control-plane-api-key:/etc/kivra-memory/tunnel-api-key
+ExecStart=/usr/local/bin/tunnel-client run --control-plane.tunnel-id=${CONTROL_PLANE_TUNNEL_ID} --control-plane.api-key=file:%d/control-plane-api-key --mcp.server-url=url=http://127.0.0.1:8080/mcp,channel=main --health.listen-addr=127.0.0.1:8081
+Restart=always
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
