@@ -18,7 +18,7 @@ be implemented incrementally.
 - `proto`: versioned relay protocol definitions.
 - `schemas`: JSON contracts shared across transports.
 - `plugins/continuity-archive`: reusable ChatGPT plugin and skill package.
-- `deploy`: systemd and reverse-proxy deployment examples.
+- `deploy`: systemd, external-proxy, and development deployment examples.
 
 ## Development
 

@@ -26,3 +26,9 @@ same domain command handlers.
 
 Run `make verify` before handing off changes. Keep generated artifacts
 deterministic and commit them with the source contract that produced them.
+
+## Commit attribution
+
+Commits created by Codex must include the following Git trailer:
+
+`Co-Authored-By: Codex <codex@openai.com>`

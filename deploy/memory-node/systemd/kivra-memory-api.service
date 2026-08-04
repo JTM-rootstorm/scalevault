@@ -1,15 +1,18 @@
 [Unit]
 Description=ScaleVault canonical Memory Node API
-After=network-online.target postgresql.service
+After=network-online.target postgresql@17-main.service
 Wants=network-online.target
-Requires=postgresql.service
+Requires=postgresql@17-main.service
+RequiresMountsFor=/mnt/memory
+ConditionPathIsMountPoint=/mnt/memory
 
 [Service]
 Type=simple
 User=memory-api
-Group=memory-api
+Group=kivra-memory
 WorkingDirectory=/opt/kivra-memory/app
-EnvironmentFile=-/etc/kivra-memory/memory-api.env
+Environment=KIVRA_MEMORY_ENVIRONMENT=production
+EnvironmentFile=/etc/kivra-memory/memory-api.env
 ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-api
 Restart=on-failure
 RestartSec=5s

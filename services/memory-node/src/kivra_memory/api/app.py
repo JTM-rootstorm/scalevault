@@ -1,12 +1,15 @@
 """Memory Node application foundation."""
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
+from psycopg import AsyncConnection
+from pydantic import PostgresDsn
 
 from kivra_memory import __version__
 from kivra_memory.config import Settings, get_settings
@@ -17,8 +20,39 @@ HEALTH_REQUESTS = Counter(
     labelnames=("endpoint", "result"),
 )
 
+DatabaseProbe = Callable[[PostgresDsn, int], Awaitable[bool]]
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+
+def psycopg_connection_info(database_url: PostgresDsn) -> str:
+    """Convert an SQLAlchemy Psycopg URL into a libpq-compatible URL."""
+
+    return database_url.unicode_string().replace(
+        "postgresql+psycopg://",
+        "postgresql://",
+        1,
+    )
+
+
+async def database_is_ready(database_url: PostgresDsn, timeout_seconds: int) -> bool:
+    """Probe PostgreSQL without exposing connection details in the response."""
+
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            connection = await AsyncConnection.connect(
+                psycopg_connection_info(database_url),
+                connect_timeout=timeout_seconds,
+            )
+            async with connection:
+                await connection.execute("SELECT 1")
+    except Exception:
+        return False
+    return True
+
+
+def create_app(
+    settings: Settings | None = None,
+    database_probe: DatabaseProbe = database_is_ready,
+) -> FastAPI:
     """Create an application without storing authoritative process-local state."""
 
     runtime_settings = settings or get_settings()
@@ -26,7 +60,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = runtime_settings
-        app.state.dependencies_ready = False
         yield
 
     app = FastAPI(
@@ -44,14 +77,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/readyz", tags=["operator"])
     async def readiness(response: Response) -> dict[str, Any]:
-        ready = bool(getattr(app.state, "dependencies_ready", False))
+        database_status = "not_configured"
+        ready = False
+        if runtime_settings.database_url is not None:
+            ready = await database_probe(
+                runtime_settings.database_url,
+                runtime_settings.database_connect_timeout_seconds,
+            )
+            database_status = "ok" if ready else "unavailable"
         result = "ready" if ready else "not_ready"
         HEALTH_REQUESTS.labels(endpoint="readyz", result=result).inc()
         if not ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {
             "status": result,
-            "checks": {"database": "not_configured"},
+            "checks": {"database": database_status},
         }
 
     @app.get("/metrics", include_in_schema=False)
