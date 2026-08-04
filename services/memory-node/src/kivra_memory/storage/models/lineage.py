@@ -166,6 +166,7 @@ class Branch(Base):
                     "lineage_id",
                     "parent_branch_id",
                     "fork_event_sequence",
+                    "visibility_ceiling",
                     "created_at",
                 ),
             }

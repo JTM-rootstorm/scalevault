@@ -230,6 +230,7 @@ def test_lineage_anchors_and_parent_fork_are_structural() -> None:
         "lineage_id",
         "parent_branch_id",
         "fork_event_sequence",
+        "visibility_ceiling",
         "created_at",
     )
     assert metadata.tables["subjects"].info["scalevault_immutable_fields"] == (
