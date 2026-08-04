@@ -16,7 +16,9 @@ EnvironmentFile=/etc/kivra-memory/memory-api.env
 ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-api
 Restart=on-failure
 RestartSec=5s
+UMask=0077
 NoNewPrivileges=true
+PrivateDevices=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
@@ -25,6 +27,8 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 
 [Install]
