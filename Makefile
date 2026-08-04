@@ -1,16 +1,18 @@
-.PHONY: bootstrap build build-go format lint test verify verify-python verify-go verify-go-build verify-schemas verify-plugin
+.PHONY: bootstrap build build-go format generate generate-protobuf lint test test-database verify verify-generated verify-go verify-go-build verify-locks verify-plugin verify-protobuf verify-python verify-schemas
 
 UV_CACHE_DIR ?= .cache/uv
 GOCACHE ?= $(CURDIR)/.cache/go-build
-PYTHON ?= UV_CACHE_DIR=$(UV_CACHE_DIR) uv run
+GOMODCACHE ?= $(CURDIR)/.cache/go-mod
+PYTHON ?= UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --locked
 PNPM ?= pnpm
 PLUGIN_DIR ?= plugins/continuity-archive
 BUILD_DIR ?= bin
 GO_BUILD_FLAGS ?= -trimpath -buildvcs=false -ldflags=-buildid=
 
 bootstrap:
-	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --all-groups
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --all-groups --locked
 	$(PNPM) install --frozen-lockfile
+	GOWORK=off GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go -C tools mod download
 
 build: build-go
 
@@ -23,15 +25,31 @@ format:
 	$(PYTHON) ruff format services/memory-node migrations tests scripts
 	$(PYTHON) ruff check --fix services/memory-node migrations tests scripts
 	gofmt -w gen/relay/v1 services/memory-relay services/memory-node-agent
+	$(PNPM) --dir $(PLUGIN_DIR) run format
+
+generate: generate-protobuf
+
+generate-protobuf:
+	./scripts/generate_protobuf.sh --write
 
 lint: verify-python verify-go verify-schemas verify-plugin
 
 test:
 	$(PYTHON) pytest
 	GOCACHE=$(GOCACHE) go test ./gen/relay/... ./services/memory-relay/... ./services/memory-node-agent/...
-	npm --prefix $(PLUGIN_DIR) test
+	$(PNPM) --dir $(PLUGIN_DIR) test
 
-verify: verify-python verify-go verify-go-build verify-schemas verify-plugin
+test-database:
+	$(PYTHON) pytest tests/integration/test_postgres_readiness.py
+
+verify: verify-locks verify-python verify-go verify-go-build verify-schemas verify-plugin
+
+verify-locks:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv lock --check
+	GOWORK=off GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go -C tools mod verify
+	go -C gen/relay mod verify
+	go -C services/memory-relay mod verify
+	go -C services/memory-node-agent mod verify
 
 verify-python:
 	$(PYTHON) ruff format --check services/memory-node migrations tests scripts
@@ -54,10 +72,15 @@ verify-go-build:
 	cmp "$$build_root/first/memory-relay" "$$build_root/second/memory-relay"; \
 	cmp "$$build_root/first/memory-node-agent" "$$build_root/second/memory-node-agent"
 
-verify-schemas:
+verify-generated: verify-protobuf
+
+verify-protobuf:
+	./scripts/generate_protobuf.sh --check
+
+verify-schemas: verify-protobuf
 	$(PYTHON) python scripts/validate_schemas.py
 	protoc --proto_path=proto --descriptor_set_out=/tmp/scalevault-relay.pb proto/relay-v1.proto
 
 verify-plugin:
-	npm --prefix $(PLUGIN_DIR) run check
-	npm --prefix $(PLUGIN_DIR) test
+	$(PNPM) --dir $(PLUGIN_DIR) run check
+	$(PNPM) --dir $(PLUGIN_DIR) test
