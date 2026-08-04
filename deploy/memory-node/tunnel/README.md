@@ -28,9 +28,9 @@ flags and the system journal, so it does not need mutable durable state. The NAS
 ACL must not be trusted as a secret boundary while broad modify access is
 enabled.
 
-Keep the service disabled until the tunnel is associated with the intended
-Platform organization and ChatGPT workspace. Before enabling it, validate the
-credential and tunnel with:
+Keep the service disabled at boot unless continuous private access is intended.
+After associating the tunnel with the intended Platform organization and
+ChatGPT workspace, validate the credential and tunnel with:
 
 ```sh
 systemctl start kivra-memory-tunnel.service
@@ -40,3 +40,7 @@ curl --fail --silent --show-error http://127.0.0.1:8081/readyz
 
 The admin UI remains loopback-only at `http://127.0.0.1:8081/ui`. This tunnel
 is for private developer-mode access and is not a public plugin endpoint.
+
+The systemd unit waits for the loopback Memory API health endpoint before
+starting `tunnel-client`. This prevents the client's startup-only MCP probe from
+capturing a transient connection failure when both units start together.
