@@ -200,16 +200,23 @@ def test_lineage_anchors_and_parent_fork_are_structural() -> None:
     assert "lineage_id" in subjects.c
     assert "lineage_id" in aliases.c
 
-    memory_subject_fk = next(
-        constraint
+    memory_subject_fks = {
+        constraint.name: constraint.column_keys
         for constraint in metadata.tables["memories"].foreign_key_constraints
         if constraint.referred_table.name == "subjects"
-    )
-    assert memory_subject_fk.column_keys == [
+    }
+    assert memory_subject_fks["subject"] == [
         "tenant_id",
         "lineage_id",
         "subject_id",
         "subject_kind",
+    ]
+    assert memory_subject_fks["subject_origin_session"] == [
+        "tenant_id",
+        "lineage_id",
+        "subject_id",
+        "subject_kind",
+        "origin_session_id",
     ]
 
     branch_fork_fk = next(

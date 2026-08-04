@@ -92,6 +92,24 @@ class Memory(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            [
+                "tenant_id",
+                "lineage_id",
+                "subject_id",
+                "subject_kind",
+                "origin_session_id",
+            ],
+            [
+                "subjects.tenant_id",
+                "subjects.lineage_id",
+                "subjects.subject_id",
+                "subjects.kind",
+                "subjects.origin_session_id",
+            ],
+            name="subject_origin_session",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["tenant_id", "origin_session_id", "lineage_id", "branch_id"],
             [
                 "sessions.tenant_id",
