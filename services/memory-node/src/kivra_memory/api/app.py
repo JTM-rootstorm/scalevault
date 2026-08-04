@@ -12,6 +12,7 @@ from psycopg import AsyncConnection
 from pydantic import PostgresDsn
 
 from kivra_memory import __version__
+from kivra_memory.api.mcp_echo import create_echo_mcp
 from kivra_memory.config import Settings, get_settings
 
 HEALTH_REQUESTS = Counter(
@@ -56,11 +57,14 @@ def create_app(
     """Create an application without storing authoritative process-local state."""
 
     runtime_settings = settings or get_settings()
+    mcp_server = create_echo_mcp()
+    mcp_application = mcp_server.streamable_http_app()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = runtime_settings
-        yield
+        async with mcp_server.session_manager.run():
+            yield
 
     app = FastAPI(
         title="ScaleVault Memory Node",
@@ -99,6 +103,8 @@ def create_app(
         if not runtime_settings.metrics_enabled:
             return Response(status_code=status.HTTP_404_NOT_FOUND)
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    app.mount("/", mcp_application)
 
     return app
 
