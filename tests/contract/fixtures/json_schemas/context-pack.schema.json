@@ -1,0 +1,23 @@
+{
+    "schema_version": 1,
+    "context_pack_id": "a23a5cc7-34d6-42a4-9c83-794e5b0ee3dd",
+    "persona": [
+        {
+            "memory_id": "6712806d-fef0-430f-ac77-1a1891f1b80d",
+            "revision": 2,
+            "statement": "Synthetic persona fixture.",
+            "scores": {
+                "relevance": 0.95
+            }
+        }
+    ],
+    "active_boundaries": [],
+    "user_preferences": [],
+    "relationship_patterns": [],
+    "project_context": [],
+    "episodic_anchors": [],
+    "open_questions": [],
+    "conflicts": [],
+    "excluded_scope_summary": {},
+    "provenance": []
+}

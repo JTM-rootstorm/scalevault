@@ -1,0 +1,16 @@
+{
+    "schema_version": 1,
+    "first_event_sequence": 1,
+    "last_event_sequence": 2,
+    "event_count": 2,
+    "previous_manifest_sha256": null,
+    "files": [
+        {
+            "path": "events/2026/08/03/000000000001-fixture.json",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+    ],
+    "exporter_version": "fixture-v1",
+    "exported_at": "2026-08-03T18:00:00Z",
+    "git_commit_sha": "0123456789abcdef0123456789abcdef01234567"
+}

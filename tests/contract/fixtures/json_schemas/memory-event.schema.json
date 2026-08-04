@@ -1,0 +1,22 @@
+{
+    "schema_version": 1,
+    "sequence": 1,
+    "event_id": "01936d5a-8c4e-7b12-ae6c-4a41a22835cc",
+    "tenant_id": "fb881b02-19a2-45cf-b41e-6011ad486c14",
+    "lineage_id": "5d75d735-2fb3-48fc-a60f-e52e7a66dbbf",
+    "branch_id": "166da3cd-5ec6-46d8-9f8c-b54f67d6a6a8",
+    "actor_id": "05d3dadc-97e9-4872-a429-1a452ef4fa3b",
+    "client_id": "ef1959e1-b502-424c-bf39-4232a4f7c651",
+    "session_id": "fc44f356-0569-4a78-a1fb-11c7b5e0847d",
+    "operation": "remembered",
+    "memory_id": "6712806d-fef0-430f-ac77-1a1891f1b80d",
+    "expected_revision": 1,
+    "causation_event_id": "8d437d94-477a-4dc8-94c9-133a4cc81132",
+    "correlation_id": "75d919fb-0035-4ae5-a97d-ff0b80e1fdfd",
+    "idempotency_key": "fixture:event:1",
+    "payload": {
+        "fixture": true
+    },
+    "payload_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "created_at": "2026-08-03T18:00:00Z"
+}

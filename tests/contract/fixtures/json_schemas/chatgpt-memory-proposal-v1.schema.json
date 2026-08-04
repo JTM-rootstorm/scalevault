@@ -1,0 +1,18 @@
+{
+    "schema_version": 1,
+    "proposal_id": "01936d5a-8c4e-7b12-ae6c-4a41a22835cc",
+    "installation_id": "31c32d85-9aa2-4b70-b3b7-8a9bfcbc3ec3",
+    "idempotency_key": "chatgpt-web:fixture:01936d5a-8c4e-7b12-ae6c-4a41a22835cc",
+    "operation": "remember",
+    "category": "interaction_convention",
+    "scope": "relationship",
+    "statement": "Use representative contract fixtures during schema verification.",
+    "reason_to_remember": "This fixture exercises the immutable ingress contract.",
+    "confidence": "explicit",
+    "ontology": "interaction_convention",
+    "interpretation_limits": [
+        "Synthetic contract-test data only."
+    ],
+    "evidence_summary": "A synthetic visible-conversation summary.",
+    "created_at": "2026-08-03T12:45:00-05:00"
+}
