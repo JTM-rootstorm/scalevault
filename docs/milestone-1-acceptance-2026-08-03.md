@@ -97,9 +97,8 @@ The node-agent remains disabled until relay enrollment exists. Worker, ingress,
 and exporter services are deferred until runnable entry points and their
 least-privilege service definitions are committed.
 
-The NFS export is mounted with `hard`, NFSv4.2, and `sec=sys`; its broad NAS ACL
-is not a secret or integrity boundary. Export scoping, ACL tightening,
-durability semantics, snapshots, and restore verification remain mandatory
-before storing real continuity data. This operational risk does not invalidate
-the empty foundation probe, but it must not be mistaken for production storage
-acceptance.
+The NFS export is mounted with `hard`, NFSv4.2, and `sec=sys`. The operator has
+accepted its permissions within the controlled hardware and service boundary,
+and encrypted backups are copied offsite. ADR 0007 records that durable storage
+decision. Runtime credentials and encryption/signing keys remain outside the
+NAS dataset.

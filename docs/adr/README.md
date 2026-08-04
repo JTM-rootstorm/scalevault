@@ -12,6 +12,9 @@ documentation and do not change these decisions implicitly.
 | [0004](0004-github-append-only-ingress.md) | Accepted | Treat GitHub.com ingress as an append-only transport, not an authority or archive. |
 | [0005](0005-memory-content-boundaries.md) | Accepted | Exclude raw transcripts by default and never store hidden reasoning. |
 | [0006](0006-external-reverse-proxy.md) | Accepted | Keep reverse-proxy ownership outside the canonical LXC and preserve loopback-only service defaults. |
+| [0007](0007-controlled-storage-and-encrypted-backups.md) | Accepted | Use operator-controlled persistent storage and encrypted offsite recovery copies. |
+| [0008](0008-versioned-memory-domain-contract.md) | Accepted | Freeze tenant isolation, ontology, provenance, and relational invariants for the v1 memory domain. |
+| [0009](0009-canonical-events-and-replay.md) | Accepted | Use UUIDv7 identifiers, transactional event ordering, RFC 8785 hashing, and deterministic replay. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries
