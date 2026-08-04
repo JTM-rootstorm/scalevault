@@ -22,13 +22,13 @@ build-go:
 format:
 	$(PYTHON) ruff format services/memory-node migrations tests scripts
 	$(PYTHON) ruff check --fix services/memory-node migrations tests scripts
-	gofmt -w services/memory-relay services/memory-node-agent
+	gofmt -w gen/relay/v1 services/memory-relay services/memory-node-agent
 
 lint: verify-python verify-go verify-schemas verify-plugin
 
 test:
 	$(PYTHON) pytest
-	GOCACHE=$(GOCACHE) go test ./services/memory-relay/... ./services/memory-node-agent/...
+	GOCACHE=$(GOCACHE) go test ./gen/relay/... ./services/memory-relay/... ./services/memory-node-agent/...
 	npm --prefix $(PLUGIN_DIR) test
 
 verify: verify-python verify-go verify-go-build verify-schemas verify-plugin
@@ -40,9 +40,9 @@ verify-python:
 	$(PYTHON) pytest
 
 verify-go:
-	@test -z "$$(gofmt -l services/memory-relay services/memory-node-agent)"
-	GOCACHE=$(GOCACHE) go vet ./services/memory-relay/... ./services/memory-node-agent/...
-	GOCACHE=$(GOCACHE) go test ./services/memory-relay/... ./services/memory-node-agent/...
+	@test -z "$$(gofmt -l gen/relay/v1 services/memory-relay services/memory-node-agent)"
+	GOCACHE=$(GOCACHE) go vet ./gen/relay/... ./services/memory-relay/... ./services/memory-node-agent/...
+	GOCACHE=$(GOCACHE) go test ./gen/relay/... ./services/memory-relay/... ./services/memory-node-agent/...
 
 verify-go-build:
 	@set -eu; build_root="$$(mktemp -d)"; trap 'rm -rf "$$build_root"' EXIT; \
