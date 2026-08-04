@@ -42,18 +42,29 @@ def uid(value: int) -> UUID:
     return new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=value)
 
 
-def memory_state(*, revision: int = 1, sensitivity: int = 0) -> MemoryState:
+def memory_state(
+    *,
+    revision: int = 1,
+    sensitivity: int = 0,
+    scope: MemoryScope = MemoryScope.GLOBAL,
+) -> MemoryState:
+    subject_kind = {
+        MemoryScope.GLOBAL: SubjectKind.GLOBAL,
+        MemoryScope.PROJECT: SubjectKind.PROJECT,
+        MemoryScope.SCENE_LOCAL: SubjectKind.SCENE,
+    }[scope]
+    scene_local = scope is MemoryScope.SCENE_LOCAL
     return MemoryState(
         memory_id=uid(10),
         tenant_id=uid(1),
         lineage_id=uid(2),
         branch_id=uid(3),
         subject_id=uid(11),
-        subject_kind=SubjectKind.GLOBAL,
+        subject_kind=subject_kind,
         revision=revision,
-        category=MemoryCategory.STABLE_FACT,
+        category=(MemoryCategory.EPISODIC_ANCHOR if scene_local else MemoryCategory.STABLE_FACT),
         ontological_status=OntologicalStatus.LITERAL_TECHNICAL_FACT,
-        scope=MemoryScope.GLOBAL,
+        scope=scope,
         visibility=MemoryVisibility.PRIVATE_ROOT,
         status=MemoryStatus.ACTIVE,
         statement="Synthetic event-store fixture.",
@@ -67,7 +78,7 @@ def memory_state(*, revision: int = 1, sensitivity: int = 0) -> MemoryState:
         valid_from=None,
         valid_to=None,
         observed_at=NOW,
-        origin_session_id=None,
+        origin_session_id=uid(20) if scene_local else None,
         publication_approved_at=None,
         publication_approved_by_actor_id=None,
         content_protection="plaintext",
@@ -86,9 +97,10 @@ def make_event(
     operation: EventOperation = EventOperation.REMEMBERED,
     ingress_id: UUID | None = None,
     sensitivity: int = 0,
+    scope: MemoryScope = MemoryScope.GLOBAL,
 ) -> MemoryEvent:
     revision = 2 if operation is EventOperation.REVISED else 1
-    memory = memory_state(revision=revision, sensitivity=sensitivity)
+    memory = memory_state(revision=revision, sensitivity=sensitivity, scope=scope)
     if operation is EventOperation.REVISED:
         payload: OperationPayload = MemoryTransitionPayload(previous_revision=1, memory=memory)
         expected_revision = 1
@@ -316,12 +328,38 @@ async def test_github_binding_accepts_observed_event_with_ingress_provenance() -
     await append_memory_event(
         session,
         lambda sequence: make_event(
-            sequence, operation=EventOperation.OBSERVED, ingress_id=uid(40)
+            sequence,
+            operation=EventOperation.OBSERVED,
+            ingress_id=uid(40),
+            scope=MemoryScope.PROJECT,
         ),
     )
 
     assert counter.next_sequence == 2
     raw.add.assert_called_once()
+
+
+@pytest.mark.parametrize("scope", [MemoryScope.GLOBAL, MemoryScope.SCENE_LOCAL])
+async def test_github_binding_rejects_forbidden_after_image_scope(
+    scope: MemoryScope,
+) -> None:
+    counter = MemoryEventCounter(counter_id=1, next_sequence=1)
+    github = binding(
+        kind=TransportKind.GITHUB_INGRESS,
+        operations=(EventOperation.REMEMBERED,),
+    )
+    session, raw = fake_session(counter, github)
+
+    with pytest.raises(EventStoreError) as caught:
+        await append_memory_event(
+            session,
+            lambda sequence: make_event(sequence, ingress_id=uid(40), scope=scope),
+        )
+
+    assert caught.value.code == "github_scope_forbidden"
+    assert "Synthetic event-store fixture" not in str(caught.value)
+    assert counter.next_sequence == 1
+    raw.add.assert_not_called()
 
 
 async def test_non_github_binding_forbids_ingress_provenance() -> None:

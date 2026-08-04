@@ -22,14 +22,16 @@ from sqlalchemy import and_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kivra_memory.domain.enums import EventOperation, TransportKind
-from kivra_memory.domain.errors import DomainError
+from kivra_memory.domain.constraints import MemoryConstraintContext, validate_memory_constraints
+from kivra_memory.domain.enums import AuthorityClass, EventOperation, TransportKind
+from kivra_memory.domain.errors import DomainConstraintError, DomainError
 from kivra_memory.domain.events import (
     ConflictOpenedPayload,
     ConflictResolvedPayload,
     EventContractError,
     MemoryCreatedPayload,
     MemoryEvent,
+    MemoryState,
     MemoryTransitionPayload,
     validate_event_envelope_shape,
 )
@@ -97,13 +99,51 @@ def _operation_is_authorized(binding: TransportBinding, operation: EventOperatio
     )
 
 
-def _after_image_sensitivities(event: MemoryEvent) -> tuple[int, ...]:
+def _after_images(event: MemoryEvent) -> tuple[MemoryState, ...]:
     payload = event.typed_payload()
     if isinstance(payload, (MemoryCreatedPayload, MemoryTransitionPayload)):
-        return (payload.memory.sensitivity,)
+        return (payload.memory,)
     if isinstance(payload, (ConflictOpenedPayload, ConflictResolvedPayload)):
-        return tuple(item.memory.sensitivity for item in payload.affected_memories)
+        return tuple(item.memory for item in payload.affected_memories)
     return ()
+
+
+def _validate_after_image_constraints(binding: TransportBinding, event: MemoryEvent) -> None:
+    try:
+        transport_kind = TransportKind(binding.transport_kind)
+    except ValueError:
+        raise EventStoreError("binding_invalid", "transport binding is unavailable") from None
+
+    for memory in _after_images(event):
+        # Subject anchors and branch ceilings require projection lookups outside this
+        # repository. Supplying their already-FK-protected shape here lets the shared
+        # validator enforce every after-image and transport rule decidable from the
+        # immutable event itself without inventing content-bearing diagnostics.
+        context = MemoryConstraintContext(
+            category=memory.category,
+            ontological_status=memory.ontological_status,
+            scope=memory.scope,
+            visibility=memory.visibility,
+            status=memory.status,
+            sensitivity=memory.sensitivity,
+            subject_kind=memory.subject_kind,
+            origin_session_id=memory.origin_session_id,
+            origin_session_matches=memory.origin_session_id is not None,
+            structural_anchor_matches=True,
+            imported_provenance=(memory.authority_class is AuthorityClass.IMPORTED_LEGACY_MEMORY),
+            publication_approved=(
+                memory.publication_approved_at is not None
+                and memory.publication_approved_by_actor_id is not None
+            ),
+            branch_allows_visibility=True,
+            transport_kind=transport_kind,
+        )
+        try:
+            validate_memory_constraints(context)
+        except DomainConstraintError as error:
+            raise EventStoreError(
+                error.code, "memory after-image violates accepted constraints"
+            ) from None
 
 
 def _validate_transport(binding: TransportBinding, event: MemoryEvent) -> None:
@@ -118,10 +158,7 @@ def _validate_transport(binding: TransportBinding, event: MemoryEvent) -> None:
     elif event.ingress_id is not None:
         _reject("ingress_forbidden", "non-GitHub event cannot contain ingress provenance")
 
-    if binding.transport_kind == TransportKind.RELAY.value and 4 in _after_image_sensitivities(
-        event
-    ):
-        _reject("relay_sensitivity_forbidden", "relay cannot carry sensitivity-four after-images")
+    _validate_after_image_constraints(binding, event)
 
 
 def _event_row(event: MemoryEvent) -> MemoryEventRow:
