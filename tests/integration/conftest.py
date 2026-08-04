@@ -10,15 +10,22 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import suppress
 from pathlib import Path
+from typing import Never
 
 import pytest
+
+
+def _database_unavailable(reason: str) -> Never:
+    if os.environ.get("SCALEVAULT_REQUIRE_DATABASE_TESTS") == "1":
+        pytest.fail(reason)
+    pytest.skip(reason)
 
 
 def _postgresql_binary(name: str) -> str:
     bindir = os.environ.get("SCALEVAULT_TEST_PG_BINDIR")
     candidate = str(Path(bindir) / name) if bindir else shutil.which(name)
     if candidate is None or not os.access(candidate, os.X_OK):
-        pytest.skip(
+        _database_unavailable(
             f"PostgreSQL test binary {name!r} is unavailable; install PostgreSQL 17+ "
             "or set SCALEVAULT_TEST_PG_BINDIR"
         )
@@ -60,7 +67,7 @@ def _require_supported_postgresql(initdb: str) -> None:
     if completed.returncode != 0 or match is None:
         raise RuntimeError("could not determine the selected PostgreSQL version")
     if int(match.group(1)) < 17:
-        pytest.skip("ScaleVault integration tests require PostgreSQL 17 or newer")
+        _database_unavailable("ScaleVault integration tests require PostgreSQL 17 or newer")
 
 
 def _stop_after_failed_start(pg_ctl: str, data_directory: Path) -> None:
