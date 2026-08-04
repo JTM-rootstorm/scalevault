@@ -1,7 +1,7 @@
 # Milestone 0 capability probe
 
 - Observation date: 2026-08-03 (America/Chicago)
-- Status: Partially complete; account-side ChatGPT association and connected-app scope remain
+- Status: Partially complete; ChatGPT web discovery and invocation remain
 
 This record separates documentation claims, observations from the installed
 environment, and checks that require account or repository configuration.
@@ -14,9 +14,9 @@ environment, and checks that require account or repository configuration.
 | Codex MCP policy controls | Verified | The installed CLI and current manual support bearer-token environment variables, required servers, timeouts, tool allow/deny lists, and per-tool approval modes. |
 | ChatGPT Pro custom MCP | Documented read/fetch only | Full custom MCP write/modify support is currently documented for Business, Enterprise, and Edu. Pro may connect MCPs with read/fetch permissions in developer mode. |
 | ChatGPT custom MCP on mobile | Unsupported | OpenAI documents MCP apps as web-only. |
-| Secure MCP Tunnel | Host foundation verified; account test pending | Official `tunnel-client` 0.0.10 is checksum-verified and installed with a disabled, loopback-only systemd unit. A tunnel ID, runtime API key, organization permissions, and ChatGPT association are still required. |
+| Secure MCP Tunnel | Runtime verified; ChatGPT test pending | Official `tunnel-client` 0.0.10 fetched tunnel metadata, started control-plane polling, initialized the private MCP server, and reports ready through a loopback-only systemd unit. |
 | Public plugin through Secure MCP Tunnel | Unsupported | OpenAI requires a stable publicly reachable HTTPS MCP endpoint for public submission. |
-| GitHub append-only proposal creation | API create/fetch verified; connected-app scope pending | The dedicated private repository returned `201 Created`, exact bytes on fetch, and `422` for a duplicate create without `sha`. The connected GitHub app still returns `404` until the new repository is added to its selected-repository scope. |
+| GitHub append-only proposal creation | Verified | The dedicated private repository returned `201 Created`, exact bytes on fetch, and `422` for a duplicate create without `sha`. The connected GitHub app also created a unique proposal that the pinned read-only client fetched byte-for-byte. |
 | Debian Memory Node foundation | Verified | Debian 13, PostgreSQL 17.10, pgvector 0.8.0, Python 3.13.5, Go 1.24.4, Node 20.19.2, pnpm 10.15.0, protobuf 3.21.12, and uv 0.11.25 were observed on the live node. |
 | Relay and node-agent streamed echo | Verified | An in-memory gRPC transport streamed two response chunks and propagated an explicit cancellation acknowledgement through the generated relay contract. |
 
@@ -93,10 +93,11 @@ SHA, then returned bytes matching the submitted object's SHA-256 digest. A
 second create at the same path, again without `sha`, returned `422` and made no
 change.
 
-The connected GitHub app could not see the newly created private repository and
-returned `404`. This is a distinct, unresolved permission check: the repository
-must be added to that app installation's selected repositories before the same
-create operation is retried through the app.
+The connected GitHub app initially returned `404` before the new repository was
+added to its selected-repository scope. After that permission was granted, the
+app created a second unique, schema-valid proposal. The pinned read-only client
+fetched all 764 bytes, validated the Git blob metadata, and produced the exact
+expected SHA-256 digest.
 
 ## Relay and node-agent observation
 
@@ -134,14 +135,28 @@ Primary sources:
 
 Official `tunnel-client` 0.0.10 was downloaded for Linux amd64, verified against
 the release's `SHA256SUMS.txt`, and installed at `/usr/local/bin/tunnel-client`.
-The native systemd verifier accepted `kivra-memory-tunnel.service`; the unit is
-installed, inactive, and disabled until account credentials exist.
+The native systemd verifier accepted `kivra-memory-tunnel.service`. With its
+tunnel identifier and restricted runtime credential staged, the unit fetched
+the correct tunnel metadata, started polling, and initialized the private MCP
+server using protocol version `2025-06-18`.
 
 The unit runs as `memory-tunnel`, forwards only to
 `http://127.0.0.1:8080/mcp`, and keeps its health and admin UI on
 `127.0.0.1:8081`. The runtime key is loaded as a systemd credential from a
 root-readable local file. It must not be stored on the NAS while that export's
 ACL grants broad modify access.
+
+The service is active but remains disabled during acceptance testing. Both the
+Memory API and tunnel health interface listen only on loopback. The tunnel
+reports `live` and `ready`, with zero service restarts observed.
+
+`tunnel-client doctor` 0.0.10 reports the absent OAuth metadata as a failure,
+even for its documented `sample_mcp_remote_no_auth` profile. The running
+client's readiness logic correctly treats the OAuth discovery failure as
+optional for this plain MCP server; MCP initialization and control-plane
+metadata retrieval provide the runtime evidence. This discrepancy is recorded
+as a client diagnostic false negative rather than hidden or worked around with
+fabricated OAuth metadata.
 
 Primary sources:
 
@@ -154,13 +169,6 @@ Milestone 0 remains open until the following external checks are complete:
 
 - confirm that the target Pro account exposes developer mode and custom-app
   creation;
-- confirm tunnel Read, Manage, and Use permissions in the intended Platform
-  organization;
-- create and associate a tunnel, securely stage its runtime key, then discover
-  and invoke `echo` in a fresh ChatGPT web conversation;
-- verify that a mutation tool is unavailable or rejected for the Pro account;
-- confirm the expected native-mobile absence;
-- add the dedicated private ingress repository to the connected GitHub app's
-  selected-repository scope; and
-- repeat one harmless unique create through that app and fetch it through the
-  read-only ingress client.
+- discover and invoke `echo` through the associated tunnel in a fresh ChatGPT
+  web conversation;
+- verify that no mutation tool is available to the Pro account.
