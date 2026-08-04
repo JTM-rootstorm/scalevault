@@ -43,6 +43,7 @@ def test_production_rejects_non_loopback_api_bind(host: str) -> None:
         "postgresql://memory-api:example@127.0.0.1/kivra_memory?host=database.example",
         "postgresql://memory-api:example@127.0.0.1/kivra_memory?hostaddr=192.0.2.10",
         "postgresql://memory-api:example@127.0.0.1/kivra_memory?service=remote",
+        "postgresql://memory-api:example@%2Fvar%2Frun%2Fpostgresql-shadow/kivra_memory",
     ],
 )
 def test_production_rejects_non_local_database_destination(database_url: str) -> None:

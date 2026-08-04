@@ -9,7 +9,7 @@ from urllib.parse import unquote
 from pydantic import Field, PostgresDsn, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_LOCAL_DATABASE_SOCKET_PREFIXES = ("/run/postgresql", "/var/run/postgresql")
+_LOCAL_DATABASE_SOCKET_DIRECTORIES = {"/run/postgresql", "/var/run/postgresql"}
 _DATABASE_DESTINATION_QUERY_PARAMETERS = {"host", "hostaddr", "service", "servicefile"}
 
 
@@ -70,7 +70,7 @@ def _is_local_database_url(database_url: PostgresDsn) -> bool:
         if raw_host is None:
             return False
         decoded_host = unquote(raw_host).removeprefix("[").removesuffix("]")
-        if decoded_host.startswith(_LOCAL_DATABASE_SOCKET_PREFIXES):
+        if decoded_host in _LOCAL_DATABASE_SOCKET_DIRECTORIES:
             continue
         if not _is_loopback_host(decoded_host):
             return False
