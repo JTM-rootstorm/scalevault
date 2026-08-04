@@ -1,7 +1,7 @@
 # Milestone 0 capability probe
 
 - Observation date: 2026-08-03 (America/Chicago)
-- Status: Partially complete; ChatGPT web discovery and invocation remain
+- Status: Complete
 
 This record separates documentation claims, observations from the installed
 environment, and checks that require account or repository configuration.
@@ -12,9 +12,9 @@ environment, and checks that require account or repository configuration.
 |---|---|---|
 | Codex Streamable HTTP MCP | Verified | Codex CLI 0.146.0 initialized the private echo endpoint and called its `echo` tool through a temporary SSH forward. |
 | Codex MCP policy controls | Verified | The installed CLI and current manual support bearer-token environment variables, required servers, timeouts, tool allow/deny lists, and per-tool approval modes. |
-| ChatGPT Pro custom MCP | Documented read/fetch only | Full custom MCP write/modify support is currently documented for Business, Enterprise, and Edu. Pro may connect MCPs with read/fetch permissions in developer mode. |
+| ChatGPT Pro custom MCP | Read-only echo verified | After developer mode was enabled, a private custom app discovered and invoked the tunneled `echo` tool in ChatGPT web. The operator observed the exact result `chatgpt tunnel echo verified`. |
 | ChatGPT custom MCP on mobile | Unsupported | OpenAI documents MCP apps as web-only. |
-| Secure MCP Tunnel | Runtime verified; ChatGPT test pending | Official `tunnel-client` 0.0.10 fetched tunnel metadata, started control-plane polling, initialized the private MCP server, and reports ready through a loopback-only systemd unit. |
+| Secure MCP Tunnel | End-to-end verified | Official `tunnel-client` 0.0.10 fetched tunnel metadata, started control-plane polling, initialized the private MCP server, and carried the successful ChatGPT web `echo` invocation through its loopback-only systemd unit. |
 | Public plugin through Secure MCP Tunnel | Unsupported | OpenAI requires a stable publicly reachable HTTPS MCP endpoint for public submission. |
 | GitHub append-only proposal creation | Verified | The dedicated private repository returned `201 Created`, exact bytes on fetch, and `422` for a duplicate create without `sha`. The connected GitHub app also created a unique proposal that the pinned read-only client fetched byte-for-byte. |
 | Debian Memory Node foundation | Verified | Debian 13, PostgreSQL 17.10, pgvector 0.8.0, Python 3.13.5, Go 1.24.4, Node 20.19.2, pnpm 10.15.0, protobuf 3.21.12, and uv 0.11.25 were observed on the live node. |
@@ -54,6 +54,14 @@ Current OpenAI documentation establishes these boundaries:
 - Secure MCP Tunnel keeps the private server off the public internet and can
   forward Streamable HTTP and server-sent events.
 - Secure MCP Tunnel cannot be the endpoint for a public plugin submission.
+
+The target Pro account initially showed no custom-app creation control because
+developer mode was disabled. After the operator enabled developer mode, they
+created the private app and invoked the tunnel-backed, non-mutating `echo` tool
+from ChatGPT web. The operator observed the exact result
+`chatgpt tunnel echo verified`. This is account-side acceptance evidence; the
+Codex-run host checks below independently establish the tunnel runtime and MCP
+server behavior.
 
 Primary sources:
 
@@ -163,12 +171,12 @@ Primary sources:
 - [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 - [Official tunnel-client releases](https://github.com/openai/tunnel-client/releases/latest)
 
-## Pending account and repository checks
+## Milestone conclusion
 
-Milestone 0 remains open until the following external checks are complete:
-
-- confirm that the target Pro account exposes developer mode and custom-app
-  creation;
-- discover and invoke `echo` through the associated tunnel in a fresh ChatGPT
-  web conversation;
-- verify that no mutation tool is available to the Pro account.
+Milestone 0 is complete. Codex and ChatGPT web both invoked the private
+non-mutating echo server through their intended paths, the relay/node-agent
+probe preserved streaming and cancellation, the GitHub ingress path enforced
+create-only behavior, and the live Debian package and service assumptions were
+verified. The ChatGPT test server exposed only `echo`; it did not offer a
+mutation tool or test direct custom-MCP writes. The connected GitHub app
+separately demonstrated the planned append-only proposal-write fallback.
