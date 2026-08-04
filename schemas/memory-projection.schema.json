@@ -11,6 +11,8 @@
         "lineage_id",
         "branch_id",
         "subject_id",
+        "subject_kind",
+        "origin_session_id",
         "revision",
         "category",
         "ontological_status",
@@ -25,56 +27,196 @@
         "durability",
         "sensitivity",
         "authority_class",
+        "valid_from",
+        "valid_to",
+        "observed_at",
         "created_at",
         "updated_at",
         "normalized_fingerprint",
+        "fingerprint_version",
+        "publication_approved_at",
+        "publication_approved_by_actor_id",
+        "content_protection",
+        "content_key_id",
         "metadata"
     ],
     "properties": {
         "schema_version": { "const": 1 },
-        "memory_id": { "$ref": "#/$defs/uuid" },
-        "tenant_id": { "$ref": "#/$defs/uuid" },
-        "lineage_id": { "$ref": "#/$defs/uuid" },
-        "branch_id": { "$ref": "#/$defs/uuid" },
-        "subject_id": { "$ref": "#/$defs/uuid" },
-        "revision": { "type": "integer", "minimum": 1 },
+        "memory_id": { "$ref": "#/$defs/uuidv7" },
+        "tenant_id": { "$ref": "#/$defs/uuidv7" },
+        "lineage_id": { "$ref": "#/$defs/uuidv7" },
+        "branch_id": { "$ref": "#/$defs/uuidv7" },
+        "subject_id": { "$ref": "#/$defs/uuidv7" },
+        "subject_kind": { "$ref": "#/$defs/subject_kind" },
+        "origin_session_id": { "$ref": "#/$defs/nullable_uuidv7" },
+        "revision": { "$ref": "#/$defs/safe_positive_integer" },
         "category": { "$ref": "#/$defs/category" },
         "ontological_status": { "$ref": "#/$defs/ontology" },
-        "scope": { "enum": ["global", "persona", "relationship", "project", "episodic", "scene_local"] },
-        "visibility": { "enum": ["private_root", "restricted", "shareable", "public_seed"] },
-        "status": { "enum": ["candidate", "active", "disputed", "superseded", "retired", "tombstoned"] },
-        "statement": { "type": "string", "minLength": 1, "maxLength": 8192 },
-        "reason_to_remember": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "scope": { "$ref": "#/$defs/scope" },
+        "visibility": { "$ref": "#/$defs/visibility" },
+        "status": { "$ref": "#/$defs/status" },
+        "statement": { "type": ["string", "null"], "minLength": 1, "maxLength": 8192 },
+        "reason_to_remember": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
         "interpretation_limits": {
             "type": "array",
             "items": { "type": "string", "minLength": 1, "maxLength": 1024 },
-            "maxItems": 32
+            "maxItems": 32,
+            "uniqueItems": true
         },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-        "salience": { "type": "number", "minimum": 0, "maximum": 1 },
-        "durability": { "type": "number", "minimum": 0, "maximum": 1 },
+        "confidence": { "$ref": "#/$defs/score" },
+        "salience": { "$ref": "#/$defs/score" },
+        "durability": { "$ref": "#/$defs/score" },
         "sensitivity": { "type": "integer", "minimum": 0, "maximum": 4 },
-        "authority_class": {
-            "enum": [
-                "explicit_user_correction",
-                "explicit_user_statement",
-                "verified_project_source",
-                "assistant_observation",
-                "assistant_interpretation",
-                "external_source",
-                "imported_legacy_memory"
+        "authority_class": { "$ref": "#/$defs/authority_class" },
+        "valid_from": { "$ref": "#/$defs/nullable_canonical_date_time" },
+        "valid_to": { "$ref": "#/$defs/nullable_canonical_date_time" },
+        "observed_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
+        "created_at": { "$ref": "#/$defs/canonical_date_time" },
+        "updated_at": { "$ref": "#/$defs/canonical_date_time" },
+        "normalized_fingerprint": {
+            "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "fingerprint_version": { "$ref": "#/$defs/safe_positive_integer" },
+        "publication_approved_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
+        "publication_approved_by_actor_id": { "$ref": "#/$defs/nullable_uuidv7" },
+        "content_protection": {
+            "enum": ["plaintext", "envelope_encrypted", "cryptographically_erased"]
+        },
+        "content_key_id": { "$ref": "#/$defs/nullable_uuidv7" },
+        "metadata": { "type": "object", "maxProperties": 128 }
+    },
+    "allOf": [
+        {
+            "if": { "properties": { "scope": { "const": "scene_local" } }, "required": ["scope"] },
+            "then": {
+                "properties": {
+                    "origin_session_id": { "$ref": "#/$defs/uuidv7" },
+                    "visibility": { "enum": ["private_root", "restricted"] }
+                }
+            }
+        },
+        {
+            "oneOf": [
+                { "properties": { "scope": { "const": "global" }, "subject_kind": { "const": "global" } } },
+                { "properties": { "scope": { "const": "persona" }, "subject_kind": { "const": "persona" } } },
+                { "properties": { "scope": { "const": "relationship" }, "subject_kind": { "const": "relationship" } } },
+                { "properties": { "scope": { "const": "project" }, "subject_kind": { "const": "project" } } },
+                { "properties": { "scope": { "const": "episodic" }, "subject_kind": { "const": "episode" } } },
+                { "properties": { "scope": { "const": "scene_local" }, "subject_kind": { "const": "scene" } } }
             ]
         },
-        "valid_from": { "type": ["string", "null"], "format": "date-time" },
-        "valid_to": { "type": ["string", "null"], "format": "date-time" },
-        "observed_at": { "type": ["string", "null"], "format": "date-time" },
-        "created_at": { "type": "string", "format": "date-time" },
-        "updated_at": { "type": "string", "format": "date-time" },
-        "normalized_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "metadata": { "type": "object" }
-    },
+        {
+            "if": { "properties": { "scope": { "const": "global" } }, "required": ["scope"] },
+            "then": {
+                "properties": {
+                    "ontological_status": { "not": { "const": "fictional_or_roleplayed_scene" } }
+                }
+            }
+        },
+        {
+            "if": {
+                "allOf": [
+                    { "properties": { "scope": { "const": "episodic" } }, "required": ["scope"] },
+                    {
+                        "not": {
+                            "properties": {
+                                "authority_class": { "const": "imported_legacy_memory" }
+                            },
+                            "required": ["authority_class"]
+                        }
+                    }
+                ]
+            },
+            "then": { "properties": { "origin_session_id": { "$ref": "#/$defs/uuidv7" } } }
+        },
+        {
+            "if": { "properties": { "visibility": { "const": "shareable" } }, "required": ["visibility"] },
+            "then": { "properties": { "sensitivity": { "maximum": 1 } } }
+        },
+        {
+            "if": { "properties": { "visibility": { "const": "public_seed" } }, "required": ["visibility"] },
+            "then": {
+                "properties": {
+                    "status": { "const": "active" },
+                    "sensitivity": { "const": 0 },
+                    "publication_approved_at": { "$ref": "#/$defs/canonical_date_time" },
+                    "publication_approved_by_actor_id": { "$ref": "#/$defs/uuidv7" }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": { "publication_approved_at": { "type": "null" } },
+                "required": ["publication_approved_at"]
+            },
+            "then": { "properties": { "publication_approved_by_actor_id": { "type": "null" } } },
+            "else": { "properties": { "publication_approved_by_actor_id": { "$ref": "#/$defs/uuidv7" } } }
+        },
+        {
+            "if": { "properties": { "content_protection": { "const": "plaintext" } }, "required": ["content_protection"] },
+            "then": { "properties": { "content_key_id": { "type": "null" } } },
+            "else": { "properties": { "content_key_id": { "$ref": "#/$defs/uuidv7" } } }
+        },
+        {
+            "if": {
+                "properties": { "content_protection": { "const": "cryptographically_erased" } },
+                "required": ["content_protection"]
+            },
+            "then": { "properties": { "status": { "const": "tombstoned" } } }
+        },
+        {
+            "if": { "properties": { "status": { "const": "tombstoned" } }, "required": ["status"] },
+            "then": {
+                "properties": {
+                    "statement": { "type": "null" },
+                    "reason_to_remember": { "type": "null" },
+                    "interpretation_limits": { "maxItems": 0 },
+                    "normalized_fingerprint": { "type": "null" }
+                }
+            },
+            "else": {
+                "properties": {
+                    "statement": { "type": "string", "minLength": 1 },
+                    "reason_to_remember": { "type": "string", "minLength": 1 },
+                    "normalized_fingerprint": { "$ref": "#/$defs/sha256" }
+                }
+            }
+        },
+        {
+            "oneOf": [
+                { "$ref": "#/$defs/stable_fact_pair" },
+                { "$ref": "#/$defs/user_preference_pair" },
+                { "$ref": "#/$defs/assistant_preference_pair" },
+                { "$ref": "#/$defs/boundary_pair" },
+                { "$ref": "#/$defs/interaction_pair" },
+                { "$ref": "#/$defs/relationship_pair" },
+                { "$ref": "#/$defs/emergent_pair" },
+                { "$ref": "#/$defs/episodic_pair" },
+                { "$ref": "#/$defs/project_pair" },
+                { "$ref": "#/$defs/procedure_pair" },
+                { "$ref": "#/$defs/question_pair" },
+                { "$ref": "#/$defs/external_pair" }
+            ]
+        }
+    ],
     "$defs": {
-        "uuid": { "type": "string", "format": "uuid" },
+        "uuidv7": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "nullable_uuidv7": { "oneOf": [{ "$ref": "#/$defs/uuidv7" }, { "type": "null" }] },
+        "safe_positive_integer": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "canonical_date_time": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+        },
+        "nullable_canonical_date_time": {
+            "oneOf": [{ "$ref": "#/$defs/canonical_date_time" }, { "type": "null" }]
+        },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "score": { "type": "number", "minimum": 0, "maximum": 1, "multipleOf": 0.000001 },
         "category": {
             "enum": [
                 "stable_fact",
@@ -104,6 +246,115 @@
                 "hypothesis",
                 "uncertain"
             ]
+        },
+        "scope": { "enum": ["global", "persona", "relationship", "project", "episodic", "scene_local"] },
+        "subject_kind": { "enum": ["global", "persona", "relationship", "project", "episode", "scene", "concept"] },
+        "visibility": { "enum": ["private_root", "restricted", "shareable", "public_seed"] },
+        "status": { "enum": ["candidate", "active", "disputed", "superseded", "retired", "tombstoned"] },
+        "authority_class": {
+            "enum": [
+                "explicit_user_correction",
+                "explicit_user_statement",
+                "verified_project_source",
+                "assistant_observation",
+                "assistant_interpretation",
+                "external_source",
+                "imported_legacy_memory"
+            ]
+        },
+        "stable_fact_pair": {
+            "properties": {
+                "category": { "const": "stable_fact" },
+                "ontological_status": { "enum": ["literal_user_fact", "literal_technical_fact"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "user_preference_pair": {
+            "properties": {
+                "category": { "const": "user_preference" },
+                "ontological_status": { "enum": ["literal_user_fact", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "assistant_preference_pair": {
+            "properties": {
+                "category": { "const": "assistant_preference_like_pattern" },
+                "ontological_status": { "enum": ["assistant_self_description", "observed_assistant_behavior", "hypothesis", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "boundary_pair": {
+            "properties": {
+                "category": { "const": "boundary_or_permission" },
+                "ontological_status": { "enum": ["literal_user_fact", "interaction_convention", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "interaction_pair": {
+            "properties": {
+                "category": { "const": "interaction_convention" },
+                "ontological_status": { "enum": ["interaction_convention", "literal_user_fact", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "relationship_pair": {
+            "properties": {
+                "category": { "const": "relationship_pattern" },
+                "ontological_status": { "enum": ["observed_assistant_behavior", "interaction_convention", "hypothesis", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "emergent_pair": {
+            "properties": {
+                "category": { "const": "emergent_tendency" },
+                "ontological_status": { "enum": ["assistant_self_description", "observed_assistant_behavior", "hypothesis", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "episodic_pair": {
+            "properties": {
+                "category": { "const": "episodic_anchor" },
+                "ontological_status": {
+                    "enum": [
+                        "literal_user_fact",
+                        "literal_technical_fact",
+                        "assistant_self_description",
+                        "observed_assistant_behavior",
+                        "interaction_convention",
+                        "fictional_or_roleplayed_scene",
+                        "uncertain"
+                    ]
+                }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "project_pair": {
+            "properties": {
+                "category": { "enum": ["project_decision", "project_state"] },
+                "ontological_status": { "enum": ["literal_technical_fact", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "procedure_pair": {
+            "properties": {
+                "category": { "const": "procedure" },
+                "ontological_status": { "enum": ["literal_technical_fact", "interaction_convention", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "question_pair": {
+            "properties": {
+                "category": { "enum": ["open_question", "interpretation"] },
+                "ontological_status": { "enum": ["hypothesis", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
+        },
+        "external_pair": {
+            "properties": {
+                "category": { "const": "external_fact" },
+                "ontological_status": { "enum": ["literal_technical_fact", "hypothesis", "uncertain"] }
+            },
+            "required": ["category", "ontological_status"]
         }
     }
 }

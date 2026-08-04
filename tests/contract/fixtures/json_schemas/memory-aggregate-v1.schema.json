@@ -1,0 +1,145 @@
+{
+    "schema_version": 1,
+    "memory": {
+        "schema_version": 1,
+        "memory_id": "01936d5a-8c4e-7001-8000-000000000001",
+        "tenant_id": "01936d5a-8c4e-7002-8000-000000000002",
+        "lineage_id": "01936d5a-8c4e-7003-8000-000000000003",
+        "branch_id": "01936d5a-8c4e-7004-8000-000000000004",
+        "subject_id": "01936d5a-8c4e-7005-8000-000000000005",
+        "subject_kind": "project",
+        "origin_session_id": null,
+        "revision": 1,
+        "category": "project_decision",
+        "ontological_status": "literal_technical_fact",
+        "scope": "project",
+        "visibility": "restricted",
+        "status": "active",
+        "statement": "Contract fixtures are validated with local reference resolution.",
+        "reason_to_remember": "This synthetic record exercises the aggregate contract.",
+        "interpretation_limits": ["Synthetic contract-test data only."],
+        "confidence": 1,
+        "salience": 0.8,
+        "durability": 0.9,
+        "sensitivity": 1,
+        "authority_class": "verified_project_source",
+        "valid_from": "2026-08-03T18:00:00.000000Z",
+        "valid_to": null,
+        "observed_at": "2026-08-03T18:00:00.000000Z",
+        "created_at": "2026-08-03T18:00:00.000000Z",
+        "updated_at": "2026-08-03T18:00:00.000000Z",
+        "normalized_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "fingerprint_version": 1,
+        "publication_approved_at": null,
+        "publication_approved_by_actor_id": null,
+        "content_protection": "plaintext",
+        "content_key_id": null,
+        "metadata": { "fixture": true }
+    },
+    "evidence": [
+        {
+            "evidence_id": "01936d5a-8c4e-7101-8000-000000000101",
+            "tenant_id": "01936d5a-8c4e-7002-8000-000000000002",
+            "lineage_id": "01936d5a-8c4e-7003-8000-000000000003",
+            "branch_id": "01936d5a-8c4e-7004-8000-000000000004",
+            "memory_id": "01936d5a-8c4e-7001-8000-000000000001",
+            "source_type": "project_file",
+            "source_reference": { "path": "docs/shared-contracts.md" },
+            "excerpt": "Synthetic evidence excerpt.",
+            "occurred_at": "2026-08-03T17:59:00.000000Z",
+            "content_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "trust_classification": "verified_project_source",
+            "status": "active",
+            "created_at": "2026-08-03T18:00:00.000000Z",
+            "metadata": {}
+        },
+        {
+            "evidence_id": "01936d5a-8c4e-7102-8000-000000000102",
+            "tenant_id": "01936d5a-8c4e-7002-8000-000000000002",
+            "lineage_id": "01936d5a-8c4e-7003-8000-000000000003",
+            "branch_id": "01936d5a-8c4e-7004-8000-000000000004",
+            "memory_id": "01936d5a-8c4e-7001-8000-000000000001",
+            "source_type": "conversation_summary",
+            "source_reference": {},
+            "excerpt": null,
+            "occurred_at": null,
+            "content_sha256": null,
+            "trust_classification": "explicit_user_statement",
+            "status": "active",
+            "created_at": "2026-08-03T18:00:01.000000Z",
+            "metadata": {}
+        }
+    ],
+    "links": [
+        {
+            "link_id": "01936d5a-8c4e-7201-8000-000000000201",
+            "tenant_id": "01936d5a-8c4e-7002-8000-000000000002",
+            "lineage_id": "01936d5a-8c4e-7003-8000-000000000003",
+            "branch_id": "01936d5a-8c4e-7004-8000-000000000004",
+            "source_memory_id": "01936d5a-8c4e-7001-8000-000000000001",
+            "target_memory_id": "01936d5a-8c4e-7401-8000-000000000401",
+            "link_type": "associated_with",
+            "status": "active",
+            "created_at": "2026-08-03T18:01:00.000000Z",
+            "unlinked_at": null,
+            "metadata": {}
+        },
+        {
+            "link_id": "01936d5a-8c4e-7202-8000-000000000202",
+            "tenant_id": "01936d5a-8c4e-7002-8000-000000000002",
+            "lineage_id": "01936d5a-8c4e-7003-8000-000000000003",
+            "branch_id": "01936d5a-8c4e-7004-8000-000000000004",
+            "source_memory_id": "01936d5a-8c4e-7001-8000-000000000001",
+            "target_memory_id": "01936d5a-8c4e-7402-8000-000000000402",
+            "link_type": "supports",
+            "status": "unlinked",
+            "created_at": "2026-08-03T18:02:00.000000Z",
+            "unlinked_at": "2026-08-03T18:03:00.000000Z",
+            "metadata": {}
+        }
+    ],
+    "conflicts": [
+        {
+            "conflict_id": "01936d5a-8c4e-7301-8000-000000000301",
+            "tenant_id": "01936d5a-8c4e-7002-8000-000000000002",
+            "lineage_id": "01936d5a-8c4e-7003-8000-000000000003",
+            "branch_id": "01936d5a-8c4e-7004-8000-000000000004",
+            "subject_id": "01936d5a-8c4e-7005-8000-000000000005",
+            "status": "open",
+            "reason": "Synthetic contradictory claims.",
+            "resolution_kind": null,
+            "resolution_rationale": null,
+            "opened_at": "2026-08-03T18:04:00.000000Z",
+            "resolved_at": null,
+            "metadata": {}
+        },
+        {
+            "conflict_id": "01936d5a-8c4e-7302-8000-000000000302",
+            "tenant_id": "01936d5a-8c4e-7002-8000-000000000002",
+            "lineage_id": "01936d5a-8c4e-7003-8000-000000000003",
+            "branch_id": "01936d5a-8c4e-7004-8000-000000000004",
+            "subject_id": "01936d5a-8c4e-7005-8000-000000000005",
+            "status": "resolved",
+            "reason": "Synthetic stale project state.",
+            "resolution_kind": "superseded",
+            "resolution_rationale": "A newer verified decision resolved the conflict.",
+            "opened_at": "2026-08-03T18:05:00.000000Z",
+            "resolved_at": "2026-08-03T18:06:00.000000Z",
+            "metadata": {}
+        }
+    ],
+    "conflict_members": [
+        {
+            "conflict_id": "01936d5a-8c4e-7301-8000-000000000301",
+            "memory_id": "01936d5a-8c4e-7001-8000-000000000001",
+            "disposition": "disputed",
+            "joined_at": "2026-08-03T18:04:00.000000Z"
+        },
+        {
+            "conflict_id": "01936d5a-8c4e-7301-8000-000000000301",
+            "memory_id": "01936d5a-8c4e-7401-8000-000000000401",
+            "disposition": "disputed",
+            "joined_at": "2026-08-03T18:04:00.000000Z"
+        }
+    ]
+}

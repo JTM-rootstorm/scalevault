@@ -1,0 +1,392 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/memory-aggregate-v1.schema.json",
+    "title": "ScaleVault canonical memory aggregate v1",
+    "description": "Canonical replay comparison aggregate. The boundary schema version is not a reducer-state field.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schema_version", "memory", "evidence", "links", "conflicts", "conflict_members"],
+    "properties": {
+        "schema_version": { "const": 1 },
+        "memory": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json" },
+        "evidence": {
+            "description": "Sorted by evidence_id.",
+            "type": "array",
+            "items": { "$ref": "#/$defs/evidence_state" },
+            "maxItems": 4096,
+            "uniqueItems": true
+        },
+        "links": {
+            "description": "Sorted by relationship, source_memory_id, target_memory_id, then link_id.",
+            "type": "array",
+            "items": { "$ref": "#/$defs/link_state" },
+            "maxItems": 4096,
+            "uniqueItems": true
+        },
+        "conflicts": {
+            "description": "Sorted by conflict_id.",
+            "type": "array",
+            "items": { "$ref": "#/$defs/conflict_state" },
+            "maxItems": 4096,
+            "uniqueItems": true
+        },
+        "conflict_members": {
+            "description": "Sorted by conflict_id then memory_id.",
+            "type": "array",
+            "items": { "$ref": "#/$defs/conflict_member_state" },
+            "maxItems": 16384,
+            "uniqueItems": true
+        }
+    },
+    "$defs": {
+        "uuidv7": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "nullable_uuidv7": { "oneOf": [{ "$ref": "#/$defs/uuidv7" }, { "type": "null" }] },
+        "safe_positive_integer": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "canonical_date_time": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+        },
+        "nullable_canonical_date_time": {
+            "oneOf": [{ "$ref": "#/$defs/canonical_date_time" }, { "type": "null" }]
+        },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "nullable_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "score": { "type": "number", "minimum": 0, "maximum": 1, "multipleOf": 0.000001 },
+        "memory_state": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "memory_id",
+                "tenant_id",
+                "lineage_id",
+                "branch_id",
+                "subject_id",
+                "subject_kind",
+                "revision",
+                "category",
+                "ontological_status",
+                "scope",
+                "visibility",
+                "status",
+                "statement",
+                "reason_to_remember",
+                "interpretation_limits",
+                "confidence",
+                "salience",
+                "durability",
+                "sensitivity",
+                "authority_class",
+                "valid_from",
+                "valid_to",
+                "observed_at",
+                "origin_session_id",
+                "publication_approved_at",
+                "publication_approved_by_actor_id",
+                "content_protection",
+                "content_key_id",
+                "created_at",
+                "updated_at",
+                "fingerprint_version",
+                "normalized_fingerprint",
+                "metadata"
+            ],
+            "properties": {
+                "memory_id": { "$ref": "#/$defs/uuidv7" },
+                "tenant_id": { "$ref": "#/$defs/uuidv7" },
+                "lineage_id": { "$ref": "#/$defs/uuidv7" },
+                "branch_id": { "$ref": "#/$defs/uuidv7" },
+                "subject_id": { "$ref": "#/$defs/uuidv7" },
+                "subject_kind": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/subject_kind" },
+                "revision": { "$ref": "#/$defs/safe_positive_integer" },
+                "category": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/category" },
+                "ontological_status": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/ontology" },
+                "scope": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/scope" },
+                "visibility": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/visibility" },
+                "status": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/status" },
+                "statement": { "type": ["string", "null"], "minLength": 1, "maxLength": 8192 },
+                "reason_to_remember": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
+                "interpretation_limits": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "maxItems": 32,
+                    "uniqueItems": true
+                },
+                "confidence": { "$ref": "#/$defs/score" },
+                "salience": { "$ref": "#/$defs/score" },
+                "durability": { "$ref": "#/$defs/score" },
+                "sensitivity": { "type": "integer", "minimum": 0, "maximum": 4 },
+                "authority_class": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/authority_class" },
+                "valid_from": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "valid_to": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "observed_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "origin_session_id": { "$ref": "#/$defs/nullable_uuidv7" },
+                "publication_approved_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "publication_approved_by_actor_id": { "$ref": "#/$defs/nullable_uuidv7" },
+                "content_protection": {
+                    "enum": ["plaintext", "envelope_encrypted", "cryptographically_erased"]
+                },
+                "content_key_id": { "$ref": "#/$defs/nullable_uuidv7" },
+                "created_at": { "$ref": "#/$defs/canonical_date_time" },
+                "updated_at": { "$ref": "#/$defs/canonical_date_time" },
+                "fingerprint_version": { "$ref": "#/$defs/safe_positive_integer" },
+                "normalized_fingerprint": { "$ref": "#/$defs/nullable_sha256" },
+                "metadata": { "type": "object", "maxProperties": 128 }
+            },
+            "allOf": [
+                {
+                    "if": { "properties": { "scope": { "const": "scene_local" } }, "required": ["scope"] },
+                    "then": {
+                        "properties": {
+                            "origin_session_id": { "$ref": "#/$defs/uuidv7" },
+                            "visibility": { "enum": ["private_root", "restricted"] }
+                        }
+                    }
+                },
+                {
+                    "oneOf": [
+                        { "properties": { "scope": { "const": "global" }, "subject_kind": { "const": "global" } } },
+                        { "properties": { "scope": { "const": "persona" }, "subject_kind": { "const": "persona" } } },
+                        { "properties": { "scope": { "const": "relationship" }, "subject_kind": { "const": "relationship" } } },
+                        { "properties": { "scope": { "const": "project" }, "subject_kind": { "const": "project" } } },
+                        { "properties": { "scope": { "const": "episodic" }, "subject_kind": { "const": "episode" } } },
+                        { "properties": { "scope": { "const": "scene_local" }, "subject_kind": { "const": "scene" } } }
+                    ]
+                },
+                {
+                    "if": { "properties": { "scope": { "const": "global" } }, "required": ["scope"] },
+                    "then": {
+                        "properties": {
+                            "ontological_status": { "not": { "const": "fictional_or_roleplayed_scene" } }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "allOf": [
+                            { "properties": { "scope": { "const": "episodic" } }, "required": ["scope"] },
+                            {
+                                "not": {
+                                    "properties": {
+                                        "authority_class": { "const": "imported_legacy_memory" }
+                                    },
+                                    "required": ["authority_class"]
+                                }
+                            }
+                        ]
+                    },
+                    "then": { "properties": { "origin_session_id": { "$ref": "#/$defs/uuidv7" } } }
+                },
+                {
+                    "if": { "properties": { "visibility": { "const": "shareable" } }, "required": ["visibility"] },
+                    "then": { "properties": { "sensitivity": { "maximum": 1 } } }
+                },
+                {
+                    "if": { "properties": { "visibility": { "const": "public_seed" } }, "required": ["visibility"] },
+                    "then": {
+                        "properties": {
+                            "status": { "const": "active" },
+                            "sensitivity": { "const": 0 },
+                            "publication_approved_at": { "$ref": "#/$defs/canonical_date_time" },
+                            "publication_approved_by_actor_id": { "$ref": "#/$defs/uuidv7" }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": { "publication_approved_at": { "type": "null" } },
+                        "required": ["publication_approved_at"]
+                    },
+                    "then": { "properties": { "publication_approved_by_actor_id": { "type": "null" } } },
+                    "else": { "properties": { "publication_approved_by_actor_id": { "$ref": "#/$defs/uuidv7" } } }
+                },
+                {
+                    "if": { "properties": { "content_protection": { "const": "plaintext" } }, "required": ["content_protection"] },
+                    "then": { "properties": { "content_key_id": { "type": "null" } } },
+                    "else": { "properties": { "content_key_id": { "$ref": "#/$defs/uuidv7" } } }
+                },
+                {
+                    "if": {
+                        "properties": { "content_protection": { "const": "cryptographically_erased" } },
+                        "required": ["content_protection"]
+                    },
+                    "then": { "properties": { "status": { "const": "tombstoned" } } }
+                },
+                {
+                    "if": { "properties": { "status": { "const": "tombstoned" } }, "required": ["status"] },
+                    "then": {
+                        "properties": {
+                            "statement": { "type": "null" },
+                            "reason_to_remember": { "type": "null" },
+                            "interpretation_limits": { "maxItems": 0 },
+                            "normalized_fingerprint": { "type": "null" }
+                        }
+                    },
+                    "else": {
+                        "properties": {
+                            "statement": { "type": "string", "minLength": 1 },
+                            "reason_to_remember": { "type": "string", "minLength": 1 },
+                            "normalized_fingerprint": { "$ref": "#/$defs/sha256" }
+                        }
+                    }
+                },
+                {
+                    "oneOf": [
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/stable_fact_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/user_preference_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/assistant_preference_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/boundary_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/interaction_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/relationship_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/emergent_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/episodic_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/project_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/procedure_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/question_pair" },
+                        { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/external_pair" }
+                    ]
+                }
+            ]
+        },
+        "evidence_state": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "evidence_id",
+                "tenant_id",
+                "lineage_id",
+                "branch_id",
+                "memory_id",
+                "source_type",
+                "source_reference",
+                "excerpt",
+                "occurred_at",
+                "content_sha256",
+                "trust_classification",
+                "status",
+                "created_at",
+                "metadata"
+            ],
+            "properties": {
+                "evidence_id": { "$ref": "#/$defs/uuidv7" },
+                "tenant_id": { "$ref": "#/$defs/uuidv7" },
+                "lineage_id": { "$ref": "#/$defs/uuidv7" },
+                "branch_id": { "$ref": "#/$defs/uuidv7" },
+                "memory_id": { "$ref": "#/$defs/uuidv7" },
+                "source_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "source_reference": { "type": "object", "maxProperties": 64 },
+                "excerpt": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
+                "occurred_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "content_sha256": { "$ref": "#/$defs/nullable_sha256" },
+                "trust_classification": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "status": { "const": "active" },
+                "created_at": { "$ref": "#/$defs/canonical_date_time" },
+                "metadata": { "type": "object", "maxProperties": 128 }
+            }
+        },
+        "link_state": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "link_id",
+                "tenant_id",
+                "lineage_id",
+                "branch_id",
+                "source_memory_id",
+                "target_memory_id",
+                "link_type",
+                "status",
+                "created_at",
+                "unlinked_at",
+                "metadata"
+            ],
+            "properties": {
+                "link_id": { "$ref": "#/$defs/uuidv7" },
+                "tenant_id": { "$ref": "#/$defs/uuidv7" },
+                "lineage_id": { "$ref": "#/$defs/uuidv7" },
+                "branch_id": { "$ref": "#/$defs/uuidv7" },
+                "source_memory_id": { "$ref": "#/$defs/uuidv7" },
+                "target_memory_id": { "$ref": "#/$defs/uuidv7" },
+                "link_type": {
+                    "enum": ["supports", "contradicts", "refines", "caused_by", "associated_with", "supersedes", "part_of", "forked_from"]
+                },
+                "status": { "enum": ["active", "unlinked"] },
+                "created_at": { "$ref": "#/$defs/canonical_date_time" },
+                "unlinked_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "metadata": { "type": "object", "maxProperties": 128 }
+            },
+            "allOf": [
+                {
+                    "if": { "properties": { "status": { "const": "unlinked" } }, "required": ["status"] },
+                    "then": { "properties": { "unlinked_at": { "$ref": "#/$defs/canonical_date_time" } } },
+                    "else": { "properties": { "unlinked_at": { "type": "null" } } }
+                }
+            ]
+        },
+        "conflict_member_state": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["conflict_id", "memory_id", "disposition", "joined_at"],
+            "properties": {
+                "conflict_id": { "$ref": "#/$defs/uuidv7" },
+                "memory_id": { "$ref": "#/$defs/uuidv7" },
+                "disposition": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "joined_at": { "$ref": "#/$defs/canonical_date_time" }
+            }
+        },
+        "conflict_state": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "conflict_id",
+                "tenant_id",
+                "lineage_id",
+                "branch_id",
+                "subject_id",
+                "status",
+                "reason",
+                "resolution_kind",
+                "resolution_rationale",
+                "opened_at",
+                "resolved_at",
+                "metadata"
+            ],
+            "properties": {
+                "conflict_id": { "$ref": "#/$defs/uuidv7" },
+                "tenant_id": { "$ref": "#/$defs/uuidv7" },
+                "lineage_id": { "$ref": "#/$defs/uuidv7" },
+                "branch_id": { "$ref": "#/$defs/uuidv7" },
+                "subject_id": { "$ref": "#/$defs/uuidv7" },
+                "status": { "enum": ["open", "resolved"] },
+                "reason": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                "resolution_kind": { "type": ["string", "null"], "minLength": 1, "maxLength": 64 },
+                "resolution_rationale": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
+                "opened_at": { "$ref": "#/$defs/canonical_date_time" },
+                "resolved_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "metadata": { "type": "object", "maxProperties": 128 }
+            },
+            "allOf": [
+                {
+                    "if": { "properties": { "status": { "const": "resolved" } }, "required": ["status"] },
+                    "then": {
+                        "properties": {
+                            "resolution_kind": { "type": "string", "minLength": 1 },
+                            "resolved_at": { "$ref": "#/$defs/canonical_date_time" }
+                        }
+                    },
+                    "else": {
+                        "properties": {
+                            "resolution_kind": { "type": "null" },
+                            "resolution_rationale": { "type": "null" },
+                            "resolved_at": { "type": "null" }
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}

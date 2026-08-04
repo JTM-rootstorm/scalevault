@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import re
 from collections.abc import Iterator
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +47,8 @@ def is_rfc3339_date_time(value: object) -> bool:
 
 def load_schema(path: Path) -> Schema:
     with path.open(encoding="utf-8") as source:
-        value = json.load(source)
+        # Decimal preserves JSON number semantics for exact multipleOf checks.
+        value = json.load(source, parse_float=Decimal)
     if not isinstance(value, dict):
         raise TypeError(f"{path}: root must be an object")
     return value
@@ -125,6 +130,32 @@ def validate_representative_instances(
             first = errors[0]
             location = "/".join(str(part) for part in first.absolute_path) or "<root>"
             raise ValueError(f"{fixture_path}: {location}: {first.message}")
+
+        if path.name == "memory-event.schema.json":
+            validate_event_payload_identity(instance, fixture_path)
+
+
+def validate_event_payload_identity(instance: Schema, fixture_path: Path) -> None:
+    """Verify the representative event's recorded bytes and payload digest."""
+
+    encoded = instance["payload_canonical"]
+    if not isinstance(encoded, str):
+        raise TypeError(f"{fixture_path}: payload_canonical must be a string")
+    try:
+        canonical = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError(f"{fixture_path}: payload_canonical is not valid base64") from error
+
+    try:
+        decoded = json.loads(canonical, parse_float=Decimal)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{fixture_path}: payload_canonical is not JSON") from error
+    if decoded != instance["payload"]:
+        raise ValueError(f"{fixture_path}: payload_canonical does not decode to payload")
+
+    digest = hashlib.sha256(canonical).hexdigest()
+    if digest != instance["payload_sha256"]:
+        raise ValueError(f"{fixture_path}: payload_sha256 does not match payload_canonical")
 
 
 def validate_repository() -> int:
