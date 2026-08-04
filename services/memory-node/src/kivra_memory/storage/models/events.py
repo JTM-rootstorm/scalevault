@@ -245,6 +245,10 @@ class MemoryEvent(Base):
         ),
         json_object_check("payload", name="payload_object"),
         sha256_check("payload_sha256", name="payload_sha256_length"),
+        CheckConstraint(
+            "payload_sha256 = digest(payload_canonical, 'sha256')",
+            name="payload_sha256_matches_canonical",
+        ),
         sha256_check("command_sha256", name="command_sha256_length"),
         uuid_v7_check("event_id", name="event_id_uuid_v7"),
         uuid_v7_check("correlation_id", name="correlation_id_uuid_v7"),

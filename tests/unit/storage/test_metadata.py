@@ -125,6 +125,15 @@ def test_event_envelope_and_transactional_counter_are_explicit() -> None:
     assert "operation IN ('observed', 'remembered', 'evidence_attached'" in checks
     assert "'payload_purge_completed'" in checks
     assert "'conflict_resolved'" in checks
+    payload_hash_constraint = next(
+        constraint
+        for constraint in event.constraints
+        if isinstance(constraint, CheckConstraint)
+        and str(constraint.name).endswith("payload_sha256_matches_canonical")
+    )
+    assert str(payload_hash_constraint.sqltext) == (
+        "payload_sha256 = digest(payload_canonical, 'sha256')"
+    )
     counter = metadata.tables["memory_event_counter"]
     assert set(counter.c.keys()) == {"counter_id", "next_sequence"}
 
