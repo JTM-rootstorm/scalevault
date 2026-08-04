@@ -1,4 +1,4 @@
-.PHONY: bootstrap build build-go format generate generate-protobuf lint test test-database verify verify-generated verify-go verify-go-build verify-locks verify-plugin verify-protobuf verify-python verify-schemas
+.PHONY: bootstrap build build-go format generate generate-protobuf lint test test-database test-database-required verify verify-generated verify-go verify-go-build verify-locks verify-plugin verify-protobuf verify-python verify-schemas
 
 UV_CACHE_DIR ?= .cache/uv
 GOCACHE ?= $(CURDIR)/.cache/go-build
@@ -40,7 +40,10 @@ test:
 	$(PNPM) --dir $(PLUGIN_DIR) test
 
 test-database:
-	$(PYTHON) pytest tests/integration/test_postgres_readiness.py
+	$(PYTHON) pytest tests/integration
+
+test-database-required:
+	SCALEVAULT_REQUIRE_DATABASE_TESTS=1 $(PYTHON) pytest tests/integration
 
 verify: verify-locks verify-python verify-go verify-go-build verify-schemas verify-plugin
 

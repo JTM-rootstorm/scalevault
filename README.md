@@ -36,7 +36,9 @@ make verify
 
 `make verify` is the non-destructive common gate. With PostgreSQL 17-or-newer
 server binaries on `PATH`, `make test-database` runs the real-database lane in
-an isolated temporary cluster and removes it afterward.
+an isolated temporary cluster and removes it afterward. Release acceptance uses
+`make test-database-required`, which fails instead of skipping when PostgreSQL
+or any required extension is unavailable.
 
 For interactive development, start the checked-in PostgreSQL service and then
 run the Memory API:
