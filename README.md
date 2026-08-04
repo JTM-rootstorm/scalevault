@@ -18,20 +18,66 @@ be implemented incrementally.
 - `proto`: versioned relay protocol definitions.
 - `schemas`: JSON contracts shared across transports.
 - `plugins/continuity-archive`: reusable ChatGPT plugin and skill package.
-- `deploy`: systemd, external-proxy, and development deployment examples.
+- `deploy`: systemd and development examples plus external-proxy boundary docs.
 
 ## Development
 
 Required toolchains are Python 3.13 or newer, `uv`, Go 1.24 or newer, Node.js,
-and pnpm.
+pnpm 10.15.0, and Docker with Compose support. Contract generation additionally
+requires Protocol Buffers compiler 31.1; its pinned Go generators use the Go
+1.25 toolchain through Go's isolated tool module. The versions observed on the
+Debian 13 Memory Node are recorded in the [dated capability
+probe](docs/capability-probe-2026-08-03.md).
 
 ```bash
 make bootstrap
 make verify
 ```
 
-Copy `.env.example` to `.env` for local service configuration. Never commit
-tokens, credentials, private network coordinates, or memory data.
+`make verify` is the non-destructive common gate. With PostgreSQL 17-or-newer
+server binaries on `PATH`, `make test-database` runs the real-database lane in
+an isolated temporary cluster and removes it afterward.
+
+For interactive development, start the checked-in PostgreSQL service and then
+run the Memory API:
+
+```bash
+cp .env.example .env
+docker compose -f deploy/development/compose.yaml up -d --wait
+uv run --locked kivra-memory-api
+```
+
+The checked-in `.env.example` and Compose service share this loopback-only
+development credential:
+
+```text
+postgresql+psycopg://kivra_memory:change-me@127.0.0.1/kivra_memory
+```
+
+In another shell, check the operator endpoints:
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:8080/healthz
+curl --fail --silent --show-error http://127.0.0.1:8080/readyz
+curl --fail --silent --show-error http://127.0.0.1:8080/metrics
+```
+
+Stop the API with `Ctrl-C`, then stop PostgreSQL while preserving its development
+volume:
+
+```bash
+docker compose -f deploy/development/compose.yaml down
+```
+
+Use `docker compose -f deploy/development/compose.yaml down --volumes` only when
+you intentionally want to delete the disposable development database. Never
+commit `.env`, tokens, credentials, private network coordinates, or memory data.
+The [development PostgreSQL guide](deploy/development/README.md) describes the
+persistent interactive volume and isolated test-cluster boundary.
+
+See [Operations](docs/operations.md) for endpoint semantics and
+[Shared contract workflow](docs/shared-contracts.md) before changing protobuf or
+JSON contracts.
 
 ## Current boundary
 
@@ -39,6 +85,9 @@ The scaffold exposes liveness, readiness, and metrics endpoints. Readiness is
 dependency-aware and reports unavailable until a database check is configured
 and succeeds. MCP memory tools, persistence, relay forwarding, enrollment, and
 OAuth are deliberately not represented as complete.
+
+Milestone status is tracked in the
+[dated Milestone 1 acceptance checklist](docs/milestone-1-acceptance-2026-08-03.md).
 
 ScaleVault is licensed under the GNU Affero General Public License v3.0.
 
