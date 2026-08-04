@@ -21,6 +21,7 @@ from kivra_memory.domain.events import (
     MemoryCreatedPayload,
     MemoryEvent,
     MemoryState,
+    MemoryTransitionPayload,
     OperationPayload,
     event_hash_fields,
 )
@@ -101,13 +102,13 @@ def make_event(
     payload: OperationPayload,
     memory_id: UUID | None,
     expected_revision: int | None = None,
+    tenant_id: UUID = DEFAULT_TENANT_ID,
+    lineage_id: UUID = DEFAULT_LINEAGE_ID,
     branch_id: UUID = DEFAULT_BRANCH_ID,
     created_at: datetime = NOW,
     session_id: UUID | None = None,
     correlation_id: UUID = DEFAULT_CORRELATION_ID,
 ) -> MemoryEvent:
-    tenant_id = uid(1)
-    lineage_id = uid(2)
     payload_value, payload_canonical, payload_sha256, command_sha256 = event_hash_fields(
         operation=operation,
         payload=payload,
@@ -182,6 +183,72 @@ def test_event_rejects_payload_for_another_operation() -> None:
             payload=BranchCreatedPayload(branch=branch),
             memory_id=uid(10),
         )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"memory_id": None}, "invalid envelope target shape"),
+        ({"expected_revision": 1}, "invalid envelope target shape"),
+    ],
+)
+def test_create_event_construction_rejects_invalid_target_shape(
+    changes: dict[str, object], message: str
+) -> None:
+    memory = memory_state()
+    event = make_event(
+        sequence=1,
+        operation=EventOperation.REMEMBERED,
+        payload=MemoryCreatedPayload(memory=memory),
+        memory_id=memory.memory_id,
+    )
+    document = event.model_dump(mode="python")
+    document.update(changes)
+
+    with pytest.raises(ValidationError, match=message):
+        MemoryEvent.model_validate(document)
+
+
+def test_transition_and_aggregate_construction_reject_invalid_target_shapes() -> None:
+    memory = memory_state()
+    revised_document = memory.model_dump(mode="python")
+    revised_document.update(revision=2, updated_at=NOW)
+    revised = MemoryState.model_validate(revised_document)
+    transition = make_event(
+        sequence=1,
+        operation=EventOperation.REVISED,
+        payload=MemoryTransitionPayload(previous_revision=1, memory=revised),
+        memory_id=memory.memory_id,
+        expected_revision=1,
+    )
+    transition_document = transition.model_dump(mode="python")
+    transition_document["expected_revision"] = None
+
+    with pytest.raises(ValidationError, match="invalid envelope target shape"):
+        MemoryEvent.model_validate(transition_document)
+
+    branch = BranchState(
+        branch_id=uid(3),
+        tenant_id=uid(1),
+        lineage_id=uid(2),
+        parent_branch_id=None,
+        fork_event_sequence=None,
+        name="root",
+        visibility_ceiling=MemoryVisibility.PRIVATE_ROOT,
+        created_at=NOW,
+        sealed_at=None,
+    )
+    aggregate = make_event(
+        sequence=1,
+        operation=EventOperation.BRANCH_CREATED,
+        payload=BranchCreatedPayload(branch=branch),
+        memory_id=None,
+    )
+    aggregate_document = aggregate.model_dump(mode="python")
+    aggregate_document["memory_id"] = memory.memory_id
+
+    with pytest.raises(ValidationError, match="invalid envelope target shape"):
+        MemoryEvent.model_validate(aggregate_document)
 
 
 @pytest.mark.parametrize("field", ["payload_sha256", "command_sha256"])

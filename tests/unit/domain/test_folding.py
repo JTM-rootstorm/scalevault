@@ -32,9 +32,12 @@ from kivra_memory.domain.events import (
 from kivra_memory.domain.folding import (
     FoldError,
     ProjectionState,
+    TenantReplayState,
     canonical_aggregate_bytes,
     fold_event,
+    fold_tenant_event,
     rebuild,
+    rebuild_tenant,
 )
 
 from .test_events import NOW, make_event, memory_state, uid
@@ -48,23 +51,35 @@ def changed_memory(memory: MemoryState, **changes: object) -> MemoryState:
     return MemoryState.model_validate(document)
 
 
-def branch_event() -> MemoryEvent:
+def branch_event(
+    *,
+    sequence: int = 1,
+    tenant_id: UUID | None = None,
+    lineage_id: UUID | None = None,
+    branch_id: UUID | None = None,
+) -> MemoryEvent:
+    resolved_tenant_id = uid(1) if tenant_id is None else tenant_id
+    resolved_lineage_id = uid(2) if lineage_id is None else lineage_id
+    resolved_branch_id = uid(3) if branch_id is None else branch_id
     branch = BranchState(
-        branch_id=uid(3),
-        tenant_id=uid(1),
-        lineage_id=uid(2),
+        branch_id=resolved_branch_id,
+        tenant_id=resolved_tenant_id,
+        lineage_id=resolved_lineage_id,
         parent_branch_id=None,
         fork_event_sequence=None,
         name="root",
-        visibility_ceiling=memory_state().visibility,
+        visibility_ceiling=MemoryVisibility.PRIVATE_ROOT,
         created_at=NOW,
         sealed_at=None,
     )
     return make_event(
-        sequence=1,
+        sequence=sequence,
         operation=EventOperation.BRANCH_CREATED,
         payload=BranchCreatedPayload(branch=branch),
         memory_id=None,
+        branch_id=resolved_branch_id,
+        tenant_id=resolved_tenant_id,
+        lineage_id=resolved_lineage_id,
     )
 
 
@@ -74,6 +89,9 @@ def remembered_event(memory: MemoryState, *, sequence: int = 2) -> MemoryEvent:
         operation=EventOperation.REMEMBERED,
         payload=MemoryCreatedPayload(memory=memory),
         memory_id=memory.memory_id,
+        branch_id=memory.branch_id,
+        tenant_id=memory.tenant_id,
+        lineage_id=memory.lineage_id,
     )
 
 
@@ -152,6 +170,64 @@ def test_fold_rejects_sequence_gap_and_stale_revision() -> None:
     )
     with pytest.raises(FoldError, match="stale_event_revision"):
         fold_event(state, stale)
+
+
+def test_fold_reuses_event_envelope_validation_for_unvalidated_copies() -> None:
+    state = fold_event(ProjectionState(), branch_event())
+    remembered = remembered_event(memory_state())
+    invalid = remembered.model_copy(update={"expected_revision": 1})
+
+    with pytest.raises(FoldError, match="invalid_envelope"):
+        fold_event(state, invalid)
+
+
+def test_tenant_replay_accepts_interleaved_global_gaps_without_weakening_global_fold() -> None:
+    tenant_a = uid(1)
+    tenant_b = uid(201)
+    tenant_a_branch = branch_event(sequence=1, tenant_id=tenant_a)
+    tenant_b_branch = branch_event(
+        sequence=2,
+        tenant_id=tenant_b,
+        lineage_id=uid(202),
+        branch_id=uid(203),
+    )
+    tenant_a_memory = memory_state(tenant_id=tenant_a)
+    tenant_a_remembered = remembered_event(tenant_a_memory, sequence=3)
+
+    global_state = rebuild([tenant_a_branch, tenant_b_branch, tenant_a_remembered])
+    assert global_state.sequence == 3
+
+    tenant_a_state = rebuild_tenant(tenant_a, [tenant_a_branch, tenant_a_remembered])
+    tenant_b_state = rebuild_tenant(tenant_b, [tenant_b_branch])
+    assert tenant_a_state.projection.sequence == 3
+    assert tenant_a_memory.memory_id in tenant_a_state.projection.memories
+    assert tenant_b_state.projection.sequence == 2
+    assert all(scope[0] == tenant_a for scope in tenant_a_state.projection.event_scopes.values())
+
+    with pytest.raises(FoldError, match="sequence_gap"):
+        rebuild([tenant_a_branch, tenant_a_remembered])
+
+
+def test_tenant_replay_rejects_scope_drift_and_non_increasing_global_sequence() -> None:
+    tenant_a = uid(1)
+    tenant_b_event = branch_event(
+        sequence=2,
+        tenant_id=uid(201),
+        lineage_id=uid(202),
+        branch_id=uid(203),
+    )
+    empty = TenantReplayState(tenant_id=tenant_a)
+
+    with pytest.raises(FoldError, match="tenant_scope_mismatch"):
+        fold_tenant_event(empty, tenant_b_event)
+
+    tenant_a_branch = branch_event(sequence=1, tenant_id=tenant_a)
+    tenant_a_memory = memory_state(tenant_id=tenant_a)
+    tenant_a_remembered = remembered_event(tenant_a_memory, sequence=3)
+    replayed = rebuild_tenant(tenant_a, [tenant_a_branch, tenant_a_remembered])
+
+    with pytest.raises(FoldError, match="sequence_not_increasing"):
+        fold_tenant_event(replayed, tenant_a_branch)
 
 
 def test_child_branch_fork_must_reference_parent_branch_event() -> None:

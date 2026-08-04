@@ -17,6 +17,7 @@ from kivra_memory.domain.events import (
     ConflictOpenedPayload,
     ConflictResolvedPayload,
     ConflictState,
+    EventContractError,
     EvidenceAttachedPayload,
     EvidenceRedactedPayload,
     EvidenceState,
@@ -30,7 +31,9 @@ from kivra_memory.domain.events import (
     SupersededPayload,
     TombstonedPayload,
     UnlinkedPayload,
+    validate_event_envelope_shape,
 )
+from kivra_memory.domain.identifiers import require_uuid7
 
 
 class FoldError(ValueError):
@@ -76,48 +79,36 @@ class ProjectionState:
             object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
 
 
+@dataclass(frozen=True, slots=True)
+class TenantReplayState:
+    """Projection plus the immutable tenant boundary for filtered global replay."""
+
+    tenant_id: UUID
+    projection: ProjectionState = field(default_factory=ProjectionState)
+
+    def __post_init__(self) -> None:
+        require_uuid7(self.tenant_id, field_name="tenant_id")
+        has_foreign_row = (
+            any(row.tenant_id != self.tenant_id for row in self.projection.memories.values())
+            or any(row.tenant_id != self.tenant_id for row in self.projection.evidence.values())
+            or any(row.tenant_id != self.tenant_id for row in self.projection.links.values())
+            or any(row.tenant_id != self.tenant_id for row in self.projection.conflicts.values())
+            or any(row.tenant_id != self.tenant_id for row in self.projection.branches.values())
+        )
+        if has_foreign_row:
+            raise ValueError("tenant replay projection contains another tenant")
+        if any(scope[0] != self.tenant_id for scope in self.projection.event_scopes.values()):
+            raise ValueError("tenant replay event history contains another tenant")
+        if any(scope[0] != self.tenant_id for scope in self.projection.sequence_scopes.values()):
+            raise ValueError("tenant replay sequence history contains another tenant")
+
+
 def _fail(event: MemoryEvent, code: str, detail: str) -> FoldError:
     return FoldError(code, event.sequence, detail)
 
 
 def _scope(event: MemoryEvent) -> ScopeKey:
     return event.tenant_id, event.lineage_id, event.branch_id
-
-
-def _validate_envelope_shape(event: MemoryEvent) -> None:
-    create_operations = {EventOperation.OBSERVED, EventOperation.REMEMBERED}
-    transition_operations = {
-        EventOperation.REVISED,
-        EventOperation.SUPERSEDED,
-        EventOperation.RETIRED,
-        EventOperation.TOMBSTONED,
-        EventOperation.VISIBILITY_CHANGED,
-        EventOperation.PAYLOAD_PURGE_COMPLETED,
-    }
-    evidence_operations = {
-        EventOperation.EVIDENCE_ATTACHED,
-        EventOperation.EVIDENCE_REDACTED,
-    }
-    aggregate_operations = {
-        EventOperation.LINKED,
-        EventOperation.UNLINKED,
-        EventOperation.CONFLICT_OPENED,
-        EventOperation.CONFLICT_RESOLVED,
-        EventOperation.BRANCH_CREATED,
-    }
-    if event.operation in create_operations:
-        if event.memory_id is None or event.expected_revision is not None:
-            raise _fail(event, "invalid_envelope", "create operation target shape is invalid")
-    elif event.operation in transition_operations:
-        if event.memory_id is None or event.expected_revision is None:
-            raise _fail(event, "invalid_envelope", "transition target shape is invalid")
-    elif event.operation in evidence_operations:
-        if event.memory_id is None or event.expected_revision is not None:
-            raise _fail(event, "invalid_envelope", "evidence operation target shape is invalid")
-    elif event.operation in aggregate_operations and (
-        event.memory_id is not None or event.expected_revision is not None
-    ):
-        raise _fail(event, "invalid_envelope", "aggregate operation cannot target one revision")
 
 
 _BRANCH_VISIBILITIES: dict[MemoryVisibility, frozenset[MemoryVisibility]] = {
@@ -499,13 +490,20 @@ def _create_branch(
     branches[branch.branch_id] = branch
 
 
-def fold_event(state: ProjectionState, event: MemoryEvent) -> ProjectionState:
-    """Verify and apply one event without mutating the supplied state."""
+def _fold_event(
+    state: ProjectionState, event: MemoryEvent, *, require_contiguous_sequence: bool
+) -> ProjectionState:
+    """Verify and apply one event using the selected global-sequence policy."""
 
-    if event.sequence != state.sequence + 1:
+    if require_contiguous_sequence and event.sequence != state.sequence + 1:
         raise _fail(event, "sequence_gap", f"expected sequence {state.sequence + 1}")
+    if not require_contiguous_sequence and event.sequence <= state.sequence:
+        raise _fail(event, "sequence_not_increasing", "tenant replay sequence must increase")
+    try:
+        validate_event_envelope_shape(event)
+    except EventContractError as error:
+        raise _fail(event, "invalid_envelope", str(error)) from error
     event.verify_hashes()
-    _validate_envelope_shape(event)
     if event.event_id in state.event_scopes:
         raise _fail(event, "duplicate_event", "event ID already exists")
     if event.operation != EventOperation.BRANCH_CREATED:
@@ -650,12 +648,40 @@ def fold_event(state: ProjectionState, event: MemoryEvent) -> ProjectionState:
     )
 
 
+def fold_event(state: ProjectionState, event: MemoryEvent) -> ProjectionState:
+    """Apply one event from the complete, contiguous global event stream."""
+
+    return _fold_event(state, event, require_contiguous_sequence=True)
+
+
+def fold_tenant_event(state: TenantReplayState, event: MemoryEvent) -> TenantReplayState:
+    """Apply one tenant-filtered event with a strictly increasing global sequence."""
+
+    if event.tenant_id != state.tenant_id:
+        raise _fail(event, "tenant_scope_mismatch", "event is outside tenant replay scope")
+    projection = _fold_event(
+        state.projection,
+        event,
+        require_contiguous_sequence=False,
+    )
+    return TenantReplayState(tenant_id=state.tenant_id, projection=projection)
+
+
 def rebuild(events: Iterable[MemoryEvent]) -> ProjectionState:
     """Fold an accepted event stream from an empty semantic projection."""
 
     state = ProjectionState()
     for event in events:
         state = fold_event(state, event)
+    return state
+
+
+def rebuild_tenant(tenant_id: UUID, events: Iterable[MemoryEvent]) -> TenantReplayState:
+    """Rebuild one tenant from its ordered subset of the global event stream."""
+
+    state = TenantReplayState(tenant_id=tenant_id)
+    for event in events:
+        state = fold_tenant_event(state, event)
     return state
 
 

@@ -513,6 +513,50 @@ PAYLOAD_MODELS: dict[EventOperation, type[ContractModel]] = {
 }
 
 
+_CREATE_OPERATIONS = frozenset({EventOperation.OBSERVED, EventOperation.REMEMBERED})
+_TRANSITION_OPERATIONS = frozenset(
+    {
+        EventOperation.REVISED,
+        EventOperation.SUPERSEDED,
+        EventOperation.RETIRED,
+        EventOperation.TOMBSTONED,
+        EventOperation.VISIBILITY_CHANGED,
+        EventOperation.PAYLOAD_PURGE_COMPLETED,
+    }
+)
+_EVIDENCE_OPERATIONS = frozenset(
+    {EventOperation.EVIDENCE_ATTACHED, EventOperation.EVIDENCE_REDACTED}
+)
+_AGGREGATE_OPERATIONS = frozenset(
+    {
+        EventOperation.LINKED,
+        EventOperation.UNLINKED,
+        EventOperation.CONFLICT_OPENED,
+        EventOperation.CONFLICT_RESOLVED,
+        EventOperation.BRANCH_CREATED,
+    }
+)
+
+
+def validate_event_envelope_shape(event: MemoryEvent) -> None:
+    """Validate the operation-specific target/revision shape of an event envelope."""
+
+    if event.operation in _CREATE_OPERATIONS:
+        valid = event.memory_id is not None and event.expected_revision is None
+    elif event.operation in _TRANSITION_OPERATIONS:
+        valid = event.memory_id is not None and event.expected_revision is not None
+    elif event.operation in _EVIDENCE_OPERATIONS:
+        valid = event.memory_id is not None and event.expected_revision is None
+    elif event.operation in _AGGREGATE_OPERATIONS:
+        valid = event.memory_id is None and event.expected_revision is None
+    else:
+        valid = False
+    if not valid:
+        raise EventContractError(
+            f"invalid envelope target shape for operation {event.operation.value}"
+        )
+
+
 class MemoryEvent(ContractModel):
     """Immutable accepted event envelope with verified canonical payload bytes."""
 
@@ -570,6 +614,7 @@ class MemoryEvent(ContractModel):
 
     @model_validator(mode="after")
     def validate_canonical_contract(self) -> MemoryEvent:
+        validate_event_envelope_shape(self)
         self.typed_payload()
         self.verify_hashes()
         return self
