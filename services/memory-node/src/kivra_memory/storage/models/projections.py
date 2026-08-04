@@ -71,7 +71,9 @@ class Memory(Base):
     __tablename__ = "memories"
     __table_args__ = (
         UniqueConstraint("tenant_id", "memory_id", name="tenant_memory"),
-        UniqueConstraint("tenant_id", "lineage_id", "memory_id", name="tenant_lineage_memory"),
+        UniqueConstraint(
+            "tenant_id", "lineage_id", "memory_id", name="memories_tenant_lineage_memory"
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "lineage_id", "branch_id"],
             ["branches.tenant_id", "branches.lineage_id", "branches.branch_id"],
@@ -543,7 +545,12 @@ class MemoryContentKey(Base):
         UniqueConstraint(
             "tenant_id", "lineage_id", "content_key_id", name="tenant_lineage_content_key"
         ),
-        UniqueConstraint("tenant_id", "lineage_id", "memory_id", name="tenant_lineage_memory"),
+        UniqueConstraint(
+            "tenant_id",
+            "lineage_id",
+            "memory_id",
+            name="memory_content_keys_tenant_lineage_memory",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "lineage_id", "memory_id"],
             ["memories.tenant_id", "memories.lineage_id", "memories.memory_id"],

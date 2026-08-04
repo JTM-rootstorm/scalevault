@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kivra_memory.storage import TENANT_TABLE_NAMES, Database, metadata
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Numeric
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.sqltypes import Enum
 
@@ -74,6 +74,18 @@ def test_check_constraints_are_named_and_vocabularies_are_bounded_text() -> None
         assert all(not isinstance(column.type, Enum) for column in table.columns)
 
 
+def test_schema_wide_unique_and_index_names_do_not_collide() -> None:
+    names: list[str] = []
+    for table in metadata.tables.values():
+        names.extend(
+            str(constraint.name)
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint)
+        )
+        names.extend(str(index.name) for index in table.indexes)
+    assert len(names) == len(set(names))
+
+
 def test_event_envelope_and_transactional_counter_are_explicit() -> None:
     event = metadata.tables["memory_events"]
     assert set(event.c.keys()) >= {
@@ -105,6 +117,14 @@ def test_event_envelope_and_transactional_counter_are_explicit() -> None:
     }
     assert event.c.sequence.autoincrement is False
     assert event.info["scalevault_immutable"] is True
+    checks = " ".join(
+        str(constraint.sqltext)
+        for constraint in event.constraints
+        if isinstance(constraint, CheckConstraint)
+    )
+    assert "operation IN ('observed', 'remembered', 'evidence_attached'" in checks
+    assert "'payload_purge_completed'" in checks
+    assert "'conflict_resolved'" in checks
     counter = metadata.tables["memory_event_counter"]
     assert set(counter.c.keys()) == {"counter_id", "next_sequence"}
 
@@ -205,6 +225,25 @@ def test_lineage_anchors_and_parent_fork_are_structural() -> None:
     ]
 
     assert metadata.tables["transport_bindings"].info["scalevault_immutable"] is True
+    assert metadata.tables["branches"].info["scalevault_immutable_fields"] == (
+        "tenant_id",
+        "lineage_id",
+        "parent_branch_id",
+        "fork_event_sequence",
+        "created_at",
+    )
+    assert metadata.tables["subjects"].info["scalevault_immutable_fields"] == (
+        "tenant_id",
+        "lineage_id",
+        "kind",
+        "canonical_key",
+        "persona_id",
+        "relationship_actor_id",
+        "project_ref",
+        "episode_ref",
+        "origin_session_id",
+        "created_at",
+    )
 
 
 async def test_database_hides_bound_parameters() -> None:

@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from kivra_memory.storage.base import Base
+from kivra_memory.storage.base import TENANT_OWNED_INFO_KEY, Base
 from kivra_memory.storage.models._shared import (
     MEMORY_VISIBILITIES,
     TENANT_TABLE_ARGS,
@@ -50,7 +50,7 @@ class Persona(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "persona_id", name="tenant_persona"),
         UniqueConstraint("tenant_id", "slug", name="tenant_slug"),
-        UniqueConstraint("tenant_id", "actor_id", name="tenant_actor"),
+        UniqueConstraint("tenant_id", "actor_id", name="personas_tenant_actor"),
         ForeignKeyConstraint(
             ["tenant_id", "actor_id"],
             ["actors.tenant_id", "actors.actor_id"],
@@ -158,7 +158,18 @@ class Branch(Base):
             postgresql_where=text("parent_branch_id IS NULL"),
         ),
         Index("ix_branches_parent", "tenant_id", "lineage_id", "parent_branch_id"),
-        TENANT_TABLE_ARGS,
+        {
+            "info": {
+                TENANT_OWNED_INFO_KEY: True,
+                "scalevault_immutable_fields": (
+                    "tenant_id",
+                    "lineage_id",
+                    "parent_branch_id",
+                    "fork_event_sequence",
+                    "created_at",
+                ),
+            }
+        },
     )
 
     branch_id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -182,6 +193,13 @@ class LogicalSession(Base):
             "tenant_id", "session_id", "actor_id", "client_id", name="tenant_session_actor_client"
         ),
         UniqueConstraint("tenant_id", "session_id", "lineage_id", name="tenant_session_lineage"),
+        UniqueConstraint(
+            "tenant_id",
+            "session_id",
+            "lineage_id",
+            "branch_id",
+            name="sessions_tenant_session_lineage_branch",
+        ),
         UniqueConstraint(
             "tenant_id",
             "session_id",
@@ -304,7 +322,23 @@ class Subject(Base):
         CheckConstraint(_SUBJECT_KIND_ANCHOR_CHECK, name="kind_anchor_shape"),
         json_object_check("metadata", name="metadata_object"),
         uuid_v7_check("subject_id", name="subject_id_uuid_v7"),
-        TENANT_TABLE_ARGS,
+        {
+            "info": {
+                TENANT_OWNED_INFO_KEY: True,
+                "scalevault_immutable_fields": (
+                    "tenant_id",
+                    "lineage_id",
+                    "kind",
+                    "canonical_key",
+                    "persona_id",
+                    "relationship_actor_id",
+                    "project_ref",
+                    "episode_ref",
+                    "origin_session_id",
+                    "created_at",
+                ),
+            }
+        },
     )
 
     subject_id: Mapped[UUID] = mapped_column(primary_key=True)

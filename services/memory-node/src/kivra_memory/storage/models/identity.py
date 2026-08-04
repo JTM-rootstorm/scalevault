@@ -61,7 +61,7 @@ class Tenant(Base):
 class Actor(Base):
     __tablename__ = "actors"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "actor_id", name="tenant_actor"),
+        UniqueConstraint("tenant_id", "actor_id", name="actors_tenant_actor"),
         UniqueConstraint("tenant_id", "handle", name="tenant_handle"),
         ForeignKeyConstraint(
             ["tenant_id"], ["tenants.tenant_id"], name="tenant", ondelete="RESTRICT"

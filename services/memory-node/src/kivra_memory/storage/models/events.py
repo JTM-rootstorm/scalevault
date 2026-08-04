@@ -158,7 +158,10 @@ class MemoryEvent(Base):
             name="tenant_lineage_branch_sequence",
         ),
         UniqueConstraint(
-            "tenant_id", "client_id", "idempotency_key", name="tenant_client_idempotency"
+            "tenant_id",
+            "client_id",
+            "idempotency_key",
+            name="memory_events_tenant_client_idempotency",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "lineage_id", "branch_id"],
@@ -219,6 +222,16 @@ class MemoryEvent(Base):
             ondelete="RESTRICT",
         ),
         values_check("operation", MEMORY_OPERATIONS, name="operation_values"),
+        CheckConstraint(
+            "(operation IN ('observed', 'remembered', 'evidence_attached', "
+            "'evidence_redacted') AND memory_id IS NOT NULL AND expected_revision IS NULL) OR "
+            "(operation IN ('revised', 'retired', 'visibility_changed', 'superseded', "
+            "'tombstoned', 'payload_purge_completed') AND memory_id IS NOT NULL AND "
+            "expected_revision IS NOT NULL) OR "
+            "(operation IN ('branch_created', 'linked', 'unlinked', 'conflict_opened', "
+            "'conflict_resolved') AND memory_id IS NULL AND expected_revision IS NULL)",
+            name="operation_envelope_shape",
+        ),
         CheckConstraint("schema_version >= 1 AND payload_version >= 1", name="versions_positive"),
         CheckConstraint("sequence >= 1", name="sequence_positive"),
         CheckConstraint(
@@ -277,7 +290,10 @@ class CommandReceipt(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "receipt_id", name="tenant_receipt"),
         UniqueConstraint(
-            "tenant_id", "client_id", "idempotency_key", name="tenant_client_idempotency"
+            "tenant_id",
+            "client_id",
+            "idempotency_key",
+            name="command_receipts_tenant_client_idempotency",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "client_id"],
