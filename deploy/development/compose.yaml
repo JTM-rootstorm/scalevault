@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: kivra_memory
       POSTGRES_USER: kivra_memory
-      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_PASSWORD: change-me
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
