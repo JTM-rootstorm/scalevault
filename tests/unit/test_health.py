@@ -1,6 +1,7 @@
+import pytest
 from httpx import ASGITransport, AsyncClient
-from kivra_memory.api.app import create_app, psycopg_connection_info
-from kivra_memory.config import Settings
+from kivra_memory.api.app import create_app, main, psycopg_connection_info
+from kivra_memory.config import Settings, get_settings
 from pydantic import PostgresDsn
 
 DATABASE_URL = PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory")
@@ -67,3 +68,25 @@ async def test_readiness_hides_database_failure_details() -> None:
         "status": "not_ready",
         "checks": {"database": "unavailable"},
     }
+
+
+def test_startup_configuration_error_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sentinel = "SENTINEL-PASSWORD-MUST-NOT-APPEAR"
+    monkeypatch.setenv("KIVRA_MEMORY_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "KIVRA_MEMORY_DATABASE_URL",
+        f"postgresql://memory-api:{sentinel}@database.example/kivra_memory",
+    )
+    get_settings.cache_clear()
+
+    with pytest.raises(SystemExit) as caught:
+        main()
+
+    captured = capsys.readouterr()
+    assert caught.value.code == 2
+    assert captured.out == ""
+    assert captured.err == "ScaleVault configuration is invalid\n"
+    assert sentinel not in captured.err
+    get_settings.cache_clear()

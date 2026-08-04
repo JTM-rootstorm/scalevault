@@ -1,6 +1,7 @@
 """Memory Node application foundation."""
 
 import asyncio
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -9,7 +10,8 @@ import uvicorn
 from fastapi import FastAPI, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 from psycopg import AsyncConnection
-from pydantic import PostgresDsn
+from pydantic import PostgresDsn, ValidationError
+from pydantic_settings import SettingsError
 
 from kivra_memory import __version__
 from kivra_memory.api.mcp_echo import create_echo_mcp
@@ -109,15 +111,16 @@ def create_app(
     return app
 
 
-app = create_app()
-
-
 def main() -> None:
-    """Run the development ASGI server."""
+    """Run the ASGI server with sanitized startup configuration failures."""
 
-    settings = get_settings()
+    try:
+        settings = get_settings()
+    except (SettingsError, ValidationError):
+        print("ScaleVault configuration is invalid", file=sys.stderr)
+        raise SystemExit(2) from None
     uvicorn.run(
-        "kivra_memory.api.app:app",
+        create_app(settings),
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level.lower(),
