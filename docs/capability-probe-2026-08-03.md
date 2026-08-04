@@ -1,7 +1,7 @@
 # Milestone 0 capability probe
 
 - Observation date: 2026-08-03 (America/Chicago)
-- Status: Partially complete; account-side ChatGPT and GitHub ingress checks remain
+- Status: Partially complete; account-side ChatGPT association and connected-app scope remain
 
 This record separates documentation claims, observations from the installed
 environment, and checks that require account or repository configuration.
@@ -14,9 +14,9 @@ environment, and checks that require account or repository configuration.
 | Codex MCP policy controls | Verified | The installed CLI and current manual support bearer-token environment variables, required servers, timeouts, tool allow/deny lists, and per-tool approval modes. |
 | ChatGPT Pro custom MCP | Documented read/fetch only | Full custom MCP write/modify support is currently documented for Business, Enterprise, and Edu. Pro may connect MCPs with read/fetch permissions in developer mode. |
 | ChatGPT custom MCP on mobile | Unsupported | OpenAI documents MCP apps as web-only. |
-| Secure MCP Tunnel | Documented; account test pending | The outbound-only tunnel supports private MCP connectivity and developer-mode testing. A tunnel ID, runtime API key, organization permissions, and ChatGPT association are required. |
+| Secure MCP Tunnel | Host foundation verified; account test pending | Official `tunnel-client` 0.0.10 is checksum-verified and installed with a disabled, loopback-only systemd unit. A tunnel ID, runtime API key, organization permissions, and ChatGPT association are still required. |
 | Public plugin through Secure MCP Tunnel | Unsupported | OpenAI requires a stable publicly reachable HTTPS MCP endpoint for public submission. |
-| GitHub append-only proposal creation | API contract verified; repository pending | The Contents API can create a unique path with `Contents: write`; the deployment has no dedicated private ingress repository yet. |
+| GitHub append-only proposal creation | API create/fetch verified; connected-app scope pending | The dedicated private repository returned `201 Created`, exact bytes on fetch, and `422` for a duplicate create without `sha`. The connected GitHub app still returns `404` until the new repository is added to its selected-repository scope. |
 | Debian Memory Node foundation | Verified | Debian 13, PostgreSQL 17.10, pgvector 0.8.0, Python 3.13.5, Go 1.24.4, Node 20.19.2, pnpm 10.15.0, protobuf 3.21.12, and uv 0.11.25 were observed on the live node. |
 | Relay and node-agent streamed echo | Verified | An in-memory gRPC transport streamed two response chunks and propagated an explicit cancellation acknowledgement through the generated relay contract. |
 
@@ -65,8 +65,11 @@ Primary sources:
 
 ## GitHub ingress observation
 
-No dedicated private ingress repository was found. A future repository should
-be isolated from the public source repository and the private Forgejo archive.
+The dedicated private repository is `JTM-rootstorm/scalevault-memory-ingress`,
+numeric repository ID `1322346959`, with default branch `main`. It is isolated
+from the public source repository and the private Forgejo archive. Its README
+defines the privacy boundary and its schema file is byte-identical to the
+locked project schema.
 
 The proposal client will:
 
@@ -82,6 +85,18 @@ therefore depends on an isolated repository, unique paths, least-privilege app
 access, client behavior, and audit history.
 
 Primary source: [GitHub repository contents API](https://docs.github.com/en/rest/repos/contents?apiVersion=2022-11-28#create-or-update-file-contents).
+
+The dated acceptance object was created at a unique path through the Contents
+API with no `sha`; GitHub returned `201 Created`. A read-only client pinned the
+repository ID, owner/name, `main`, installation root, decoded size, and Git blob
+SHA, then returned bytes matching the submitted object's SHA-256 digest. A
+second create at the same path, again without `sha`, returned `422` and made no
+change.
+
+The connected GitHub app could not see the newly created private repository and
+returned `404`. This is a distinct, unresolved permission check: the repository
+must be added to that app installation's selected repositories before the same
+create operation is retried through the app.
 
 ## Relay and node-agent observation
 
@@ -115,6 +130,24 @@ Primary sources:
 - [Debian Go package](https://packages.debian.org/trixie/golang-go)
 - [Debian Python package](https://packages.debian.org/trixie/python3.13)
 
+## Secure MCP Tunnel host observation
+
+Official `tunnel-client` 0.0.10 was downloaded for Linux amd64, verified against
+the release's `SHA256SUMS.txt`, and installed at `/usr/local/bin/tunnel-client`.
+The native systemd verifier accepted `kivra-memory-tunnel.service`; the unit is
+installed, inactive, and disabled until account credentials exist.
+
+The unit runs as `memory-tunnel`, forwards only to
+`http://127.0.0.1:8080/mcp`, and keeps its health and admin UI on
+`127.0.0.1:8081`. The runtime key is loaded as a systemd credential from a
+root-readable local file. It must not be stored on the NAS while that export's
+ACL grants broad modify access.
+
+Primary sources:
+
+- [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+- [Official tunnel-client releases](https://github.com/openai/tunnel-client/releases/latest)
+
 ## Pending account and repository checks
 
 Milestone 0 remains open until the following external checks are complete:
@@ -123,11 +156,11 @@ Milestone 0 remains open until the following external checks are complete:
   creation;
 - confirm tunnel Read, Manage, and Use permissions in the intended Platform
   organization;
-- create and associate a tunnel, then discover and invoke `echo` in a fresh
-  ChatGPT web conversation;
+- create and associate a tunnel, securely stage its runtime key, then discover
+  and invoke `echo` in a fresh ChatGPT web conversation;
 - verify that a mutation tool is unavailable or rejected for the Pro account;
 - confirm the expected native-mobile absence;
-- select and create the dedicated private GitHub ingress repository;
-- grant the connected GitHub app access and create one harmless immutable test
-  proposal; and
-- fetch and validate that proposal through the minimal ingress probe.
+- add the dedicated private ingress repository to the connected GitHub app's
+  selected-repository scope; and
+- repeat one harmless unique create through that app and fetch it through the
+  read-only ingress client.
