@@ -4,10 +4,14 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "check": "tsc --noEmit",
+        "format": "biome format --write .",
+        "format:check": "biome format .",
+        "lint": "biome lint .",
+        "check": "biome format . && biome lint . && tsc --noEmit",
         "test": "node --test test/*.test.mjs"
     },
     "devDependencies": {
+        "@biomejs/biome": "2.5.6",
         "typescript": "^5.9.2"
     }
 }

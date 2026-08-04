@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27,<2"]
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -24,6 +24,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "hatchling==1.31.0",
     "httpx>=0.28,<1",
     "hypothesis>=6.136,<7",
     "jsonschema>=4.25,<5",

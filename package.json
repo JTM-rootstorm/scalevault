@@ -6,6 +6,9 @@
         "plugins/*"
     ],
     "scripts": {
+        "format": "pnpm --recursive format",
+        "format:check": "pnpm --recursive format:check",
+        "lint": "pnpm --recursive lint",
         "check": "pnpm --recursive check",
         "test": "pnpm --recursive test"
     }
