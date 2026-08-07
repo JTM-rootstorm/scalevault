@@ -1,4 +1,4 @@
-.PHONY: bootstrap build build-go format generate generate-protobuf lint test test-database test-database-required verify verify-generated verify-go verify-go-build verify-locks verify-plugin verify-protobuf verify-python verify-schemas
+.PHONY: bootstrap build build-go format generate generate-protobuf lint migrate-database test test-database test-database-required verify verify-generated verify-go verify-go-build verify-locks verify-plugin verify-protobuf verify-python verify-schemas
 
 UV_CACHE_DIR ?= .cache/uv
 GOCACHE ?= $(CURDIR)/.cache/go-build
@@ -33,6 +33,9 @@ generate-protobuf:
 	./scripts/generate_protobuf.sh --write
 
 lint: verify-python verify-go verify-schemas verify-plugin
+
+migrate-database:
+	$(PYTHON) python scripts/migrate_database.py upgrade head
 
 test:
 	$(PYTHON) pytest
