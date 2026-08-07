@@ -26,7 +26,11 @@ _REPOSITORY_ROOT = str(Path(__file__).resolve().parents[3])
 if _REPOSITORY_ROOT not in sys.path:
     sys.path.insert(0, _REPOSITORY_ROOT)
 
-from tests.fixtures.database_seed import insert_seed_rows, seed_rows  # noqa: E402
+from tests.fixtures.database_seed import (  # noqa: E402
+    insert_seed_rows,
+    seed_model_layers,
+    seed_rows,
+)
 
 
 def _uuid_values(value: object) -> list[UUID]:
@@ -200,6 +204,20 @@ def test_insert_seed_rows_stages_models_in_dependency_order_without_io() -> None
         assert set(session.new) == set(instances)
     finally:
         session.close()
+
+
+def test_seed_model_layers_preserve_foreign_key_dependency_order() -> None:
+    assert tuple(tuple(type(instance) for instance in layer) for layer in seed_model_layers()) == (
+        (Tenant,),
+        (Actor, Actor),
+        (Persona,),
+        (Lineage,),
+        (Branch,),
+        (Subject,),
+        (Client, Client, Client),
+        (TransportInstallation,),
+        (TransportBinding, TransportBinding, TransportBinding),
+    )
 
 
 async def test_insert_seed_rows_accepts_async_session_without_database_io() -> None:

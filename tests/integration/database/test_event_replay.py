@@ -37,7 +37,7 @@ from kivra_memory.storage.projector import (
 )
 from sqlalchemy import func, select
 
-from tests.fixtures.database_seed import insert_seed_rows, seed_rows
+from tests.fixtures.database_seed import seed_model_layers, seed_rows
 
 _EVENT_TIME = datetime(2026, 8, 3, 20, 0, 0, 123456, tzinfo=UTC)
 _EVENT_TIMESTAMP_MS = 1_785_785_600_000
@@ -188,8 +188,9 @@ async def test_committed_events_are_gap_free_and_rebuild_byte_equivalent(
 
     try:
         async with database.tenant_session(tenant_id) as session:
-            insert_seed_rows(session)
-            await session.flush()
+            for layer in seed_model_layers():
+                session.add_all(layer)
+                await session.flush()
             branch = await append_memory_event(session, _branch_event)
             assert branch.sequence == 1
 

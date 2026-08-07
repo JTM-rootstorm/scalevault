@@ -259,9 +259,15 @@ def seed_rows() -> SeedRows:
 def insert_seed_rows(session: Session | AsyncSession) -> tuple[Base, ...]:
     """Stage synthetic rows in dependency order without flushing or committing the session."""
 
-    rows = seed_rows()
-    instances = tuple(
-        model(**row) for table_name, model in _MODEL_ORDER for row in rows[table_name]
-    )
+    instances = tuple(instance for layer in seed_model_layers() for instance in layer)
     session.add_all(instances)
     return instances
+
+
+def seed_model_layers() -> tuple[tuple[Base, ...], ...]:
+    """Build fresh ORM rows grouped into foreign-key dependency layers."""
+
+    rows = seed_rows()
+    return tuple(
+        tuple(model(**row) for row in rows[table_name]) for table_name, model in _MODEL_ORDER
+    )

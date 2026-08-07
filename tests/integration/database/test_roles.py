@@ -16,7 +16,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from tests.fixtures.database_seed import insert_seed_rows, seed_rows
+from tests.fixtures.database_seed import seed_model_layers, seed_rows
 
 from .conftest import (
     AlembicRunner,
@@ -525,7 +525,9 @@ def test_ingress_validation_trigger_and_api_processing_dml(
     result_memory_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=104)
 
     with Session(role_secured_database.engine) as session:
-        insert_seed_rows(session)
+        for layer in seed_model_layers():
+            session.add_all(layer)
+            session.flush()
         session.commit()
 
     with role_secured_database.engine.begin() as connection:
