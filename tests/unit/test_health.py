@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
@@ -5,9 +6,10 @@ from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app, main
 from kivra_memory.config import Settings, get_settings
 from kivra_memory.storage.readiness import (
-    REQUIRED_EXTENSIONS,
+    MINIMUM_EXTENSION_VERSIONS,
     DatabaseReadiness,
     _extension_status,
+    _extension_version_is_supported,
     _migration_status,
     database_is_ready,
     psycopg_connection_info,
@@ -34,7 +36,7 @@ class _ReadinessConnection:
         *,
         version_table_exists: bool = True,
         versions: tuple[str, ...] = ("0001_initial_domain",),
-        extensions: frozenset[str] = REQUIRED_EXTENSIONS,
+        extensions: Mapping[str, str] = MINIMUM_EXTENSION_VERSIONS,
     ) -> None:
         self._version_table_exists = version_table_exists
         self._versions = versions
@@ -51,7 +53,7 @@ class _ReadinessConnection:
         if "FROM public.alembic_version" in query:
             return _Cursor([(version,) for version in self._versions])
         if "FROM pg_catalog.pg_extension" in query:
-            return _Cursor([(extension,) for extension in sorted(self._extensions)])
+            return _Cursor(sorted(self._extensions.items()))
         raise AssertionError(f"unexpected readiness query: {query}")
 
 
@@ -77,10 +79,79 @@ async def test_extension_probe_requires_every_named_extension() -> None:
     assert await _extension_status(cast(Any, _ReadinessConnection())) == "ok"
     assert (
         await _extension_status(
-            cast(Any, _ReadinessConnection(extensions=REQUIRED_EXTENSIONS - {"vector"}))
+            cast(
+                Any,
+                _ReadinessConnection(
+                    extensions={
+                        name: version
+                        for name, version in MINIMUM_EXTENSION_VERSIONS.items()
+                        if name != "vector"
+                    }
+                ),
+            )
         )
         == "incomplete"
     )
+
+
+def test_extension_probe_locks_approved_minimum_versions() -> None:
+    assert MINIMUM_EXTENSION_VERSIONS == {
+        "citext": "1.6",
+        "pg_trgm": "1.6",
+        "pgcrypto": "1.3",
+        "vector": "0.8.0",
+    }
+
+
+@pytest.mark.parametrize(
+    ("name", "version"),
+    [
+        ("citext", "1.5.9"),
+        ("pg_trgm", "1.5.9"),
+        ("pgcrypto", "1.2.9"),
+        ("vector", "0.7.4"),
+    ],
+)
+async def test_extension_probe_rejects_versions_below_each_minimum(
+    name: str,
+    version: str,
+) -> None:
+    extensions = dict(MINIMUM_EXTENSION_VERSIONS)
+    extensions[name] = version
+
+    assert (
+        await _extension_status(cast(Any, _ReadinessConnection(extensions=extensions)))
+        == "incomplete"
+    )
+
+
+@pytest.mark.parametrize("version", ["0.7.4", "", "0.8.x", "0..8", "-1.8.0"])
+async def test_extension_probe_rejects_unsupported_or_malformed_versions(version: str) -> None:
+    extensions = dict(MINIMUM_EXTENSION_VERSIONS)
+    extensions["vector"] = version
+
+    assert (
+        await _extension_status(cast(Any, _ReadinessConnection(extensions=extensions)))
+        == "incomplete"
+    )
+
+
+@pytest.mark.parametrize(
+    ("installed", "minimum", "supported"),
+    [
+        ("0.8.0", "0.8.0", True),
+        ("0.8.1", "0.8.0", True),
+        ("1.6", "1.6.0", True),
+        ("1.5.9", "1.6", False),
+        ("1.6-dev", "1.6", False),
+    ],
+)
+def test_extension_version_comparison(
+    installed: str,
+    minimum: str,
+    supported: bool,
+) -> None:
+    assert _extension_version_is_supported(installed, minimum) is supported
 
 
 async def test_database_probe_sanitizes_connection_errors(

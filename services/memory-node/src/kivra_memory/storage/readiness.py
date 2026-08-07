@@ -9,7 +9,13 @@ from psycopg import AsyncConnection
 from pydantic import PostgresDsn
 
 EXPECTED_ALEMBIC_HEAD = "0001_initial_domain"
-REQUIRED_EXTENSIONS = frozenset({"vector", "pg_trgm", "citext", "pgcrypto"})
+MINIMUM_EXTENSION_VERSIONS = {
+    "citext": "1.6",
+    "pg_trgm": "1.6",
+    "pgcrypto": "1.3",
+    "vector": "0.8.0",
+}
+REQUIRED_EXTENSIONS = frozenset(MINIMUM_EXTENSION_VERSIONS)
 
 DatabaseStatus = Literal["ok", "not_configured", "unavailable"]
 MigrationStatus = Literal["ok", "incompatible", "unavailable", "unchecked"]
@@ -109,15 +115,43 @@ async def _migration_status(connection: AsyncConnection[tuple[object, ...]]) -> 
 
 
 async def _extension_status(connection: AsyncConnection[tuple[object, ...]]) -> ExtensionStatus:
-    """Return whether every required PostgreSQL extension is installed."""
+    """Return whether every required extension meets its minimum version."""
 
     try:
         cursor = await connection.execute(
-            "SELECT extname FROM pg_catalog.pg_extension WHERE extname = ANY(%s)",
+            "SELECT extname, extversion FROM pg_catalog.pg_extension WHERE extname = ANY(%s)",
             (sorted(REQUIRED_EXTENSIONS),),
         )
-        installed = {str(row[0]) for row in await cursor.fetchall()}
+        installed = {str(row[0]): str(row[1]) for row in await cursor.fetchall()}
     except Exception:
         return "unavailable"
 
-    return "ok" if installed == REQUIRED_EXTENSIONS else "incomplete"
+    if installed.keys() != REQUIRED_EXTENSIONS:
+        return "incomplete"
+    if any(
+        not _extension_version_is_supported(installed[name], minimum)
+        for name, minimum in MINIMUM_EXTENSION_VERSIONS.items()
+    ):
+        return "incomplete"
+    return "ok"
+
+
+def _extension_version_is_supported(installed: str, minimum: str) -> bool:
+    """Compare numeric dotted versions, rejecting every other representation."""
+
+    installed_parts = _version_parts(installed)
+    minimum_parts = _version_parts(minimum)
+    if installed_parts is None or minimum_parts is None:
+        return False
+
+    width = max(len(installed_parts), len(minimum_parts))
+    padded_installed = installed_parts + (0,) * (width - len(installed_parts))
+    padded_minimum = minimum_parts + (0,) * (width - len(minimum_parts))
+    return padded_installed >= padded_minimum
+
+
+def _version_parts(version: str) -> tuple[int, ...] | None:
+    parts = version.split(".")
+    if not parts or any(not part.isascii() or not part.isdecimal() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)

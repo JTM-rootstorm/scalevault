@@ -6,6 +6,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app
 from kivra_memory.config import Settings
+from kivra_memory.storage.readiness import (
+    MINIMUM_EXTENSION_VERSIONS,
+    _extension_version_is_supported,
+)
 from psycopg import AsyncConnection
 from pydantic import PostgresDsn
 from sqlalchemy import create_engine
@@ -53,7 +57,10 @@ async def test_disposable_postgresql_supports_required_extensions(
         )
         installed = {str(row[0]): str(row[1]) for row in await extension_cursor.fetchall()}
         assert installed.keys() == REQUIRED_EXTENSIONS
-        assert all(installed.values())
+        assert all(
+            _extension_version_is_supported(installed[name], minimum)
+            for name, minimum in MINIMUM_EXTENSION_VERSIONS.items()
+        )
 
 
 async def test_memory_node_readiness_tracks_real_postgresql(
