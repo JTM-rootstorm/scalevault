@@ -29,8 +29,8 @@ from kivra_memory.domain.events import (
 )
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.event_store import EventStoreError, append_memory_event
+from kivra_memory.storage.models.events import IngressItem, MemoryEventCounter
 from kivra_memory.storage.models.events import MemoryEvent as MemoryEventRow
-from kivra_memory.storage.models.events import MemoryEventCounter
 from kivra_memory.storage.models.identity import TransportBinding
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -162,11 +162,53 @@ def binding(
         client_id=uid(5),
         transport_kind=kind.value,
         disclosure_boundary="private_node",
-        installation_id=uid(7) if kind is TransportKind.RELAY else None,
+        installation_id=(
+            uid(7) if kind in {TransportKind.RELAY, TransportKind.GITHUB_INGRESS} else None
+        ),
         authorized_operations={"operations": [operation.value for operation in operations]},
         created_at=NOW,
         valid_until=valid_until or NOW + timedelta(days=3650),
     )
+
+
+def ingress_item(
+    *,
+    state: str = "validated",
+    validated_at: datetime | None = NOW,
+    result_event_id: UUID | None = None,
+    result_memory_id: UUID | None = None,
+    error_code: str | None = None,
+    safe_diagnostic: str | None = None,
+    processed_at: datetime | None = None,
+    **overrides: object,
+) -> IngressItem:
+    values: dict[str, object] = {
+        "ingress_id": uid(40),
+        "tenant_id": uid(1),
+        "transport_binding_id": uid(6),
+        "installation_id": uid(7),
+        "actor_id": uid(4),
+        "client_id": uid(5),
+        "provider": "github",
+        "repository_external_id": "synthetic/repository",
+        "branch_name": "main",
+        "immutable_path": "proposals/synthetic.json",
+        "external_object_id": "synthetic-object",
+        "commit_id": "synthetic-commit",
+        "blob_id": "synthetic-blob",
+        "declared_idempotency_key": "event-store:1",
+        "payload_sha256": bytes(32),
+        "state": state,
+        "result_event_id": result_event_id,
+        "result_memory_id": result_memory_id,
+        "error_code": error_code,
+        "safe_diagnostic": safe_diagnostic,
+        "discovered_at": NOW - timedelta(minutes=1),
+        "validated_at": validated_at,
+        "processed_at": processed_at,
+    }
+    values.update(overrides)
+    return IngressItem(**values)
 
 
 class ScalarResult:
@@ -193,6 +235,7 @@ def fake_session(
     client_revoked_at: datetime | None = None,
     installation_present: bool = True,
     installation_revoked_at: datetime | None = None,
+    ingress: IngressItem | None = None,
 ) -> tuple[AsyncSession, Mock]:
     raw = Mock(spec=AsyncSession)
     binding_row = (
@@ -206,7 +249,12 @@ def fake_session(
             installation_revoked_at,
         )
     )
-    raw.execute = AsyncMock(side_effect=[ScalarResult(counter), RowResult(binding_row)])
+    results: list[object] = [ScalarResult(counter), RowResult(binding_row)]
+    if transport_binding is not None and (
+        transport_binding.transport_kind == TransportKind.GITHUB_INGRESS.value
+    ):
+        results.append(ScalarResult(ingress))
+    raw.execute = AsyncMock(side_effect=results)
     raw.add = Mock()
     raw.flush = AsyncMock()
     return cast(AsyncSession, raw), raw
@@ -323,7 +371,14 @@ async def test_github_binding_accepts_observed_event_with_ingress_provenance() -
         kind=TransportKind.GITHUB_INGRESS,
         operations=(EventOperation.OBSERVED,),
     )
-    session, raw = fake_session(counter, github)
+    ingress = ingress_item()
+    session, raw = fake_session(counter, github, ingress=ingress)
+    flush_states: list[str] = []
+
+    async def capture_ingress_state() -> None:
+        flush_states.append(ingress.state)
+
+    raw.flush.side_effect = capture_ingress_state
 
     await append_memory_event(
         session,
@@ -337,6 +392,125 @@ async def test_github_binding_accepts_observed_event_with_ingress_provenance() -
 
     assert counter.next_sequence == 2
     raw.add.assert_called_once()
+    assert raw.flush.await_count == 2
+    assert flush_states == ["validated", "accepted"]
+    assert ingress.state == "accepted"
+    assert ingress.result_event_id == uid(101)
+    assert ingress.result_memory_id == uid(10)
+    assert ingress.processed_at is not None
+    raw.commit.assert_not_called()
+    raw.rollback.assert_not_called()
+
+    ingress_statement = raw.execute.await_args_list[2].args[0]
+    assert "FOR UPDATE" in str(ingress_statement)
+
+
+async def test_github_acceptance_flush_failure_remains_caller_rollback_owned() -> None:
+    counter = MemoryEventCounter(counter_id=1, next_sequence=1)
+    github = binding(
+        kind=TransportKind.GITHUB_INGRESS,
+        operations=(EventOperation.REMEMBERED,),
+    )
+    ingress = ingress_item()
+    session, raw = fake_session(counter, github, ingress=ingress)
+    raw.flush = AsyncMock(
+        side_effect=[None, SQLAlchemyError("database diagnostic contains private details")]
+    )
+
+    with pytest.raises(EventStoreError) as caught:
+        await append_memory_event(
+            session,
+            lambda sequence: make_event(
+                sequence,
+                ingress_id=uid(40),
+                scope=MemoryScope.PROJECT,
+            ),
+        )
+
+    assert caught.value.code == "event_store_unavailable"
+    assert "private details" not in str(caught.value)
+    assert raw.flush.await_count == 2
+    raw.commit.assert_not_called()
+    raw.rollback.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "ingress",
+    [
+        None,
+        ingress_item(state="discovered", validated_at=None),
+        ingress_item(
+            state="accepted",
+            result_event_id=uid(101),
+            result_memory_id=uid(10),
+            processed_at=NOW,
+        ),
+        ingress_item(state="validated", error_code="synthetic_error"),
+    ],
+)
+async def test_github_binding_rejects_non_claimable_ingress(
+    ingress: IngressItem | None,
+) -> None:
+    counter = MemoryEventCounter(counter_id=1, next_sequence=1)
+    github = binding(
+        kind=TransportKind.GITHUB_INGRESS,
+        operations=(EventOperation.REMEMBERED,),
+    )
+    session, raw = fake_session(counter, github, ingress=ingress)
+
+    with pytest.raises(EventStoreError) as caught:
+        await append_memory_event(
+            session,
+            lambda sequence: make_event(
+                sequence,
+                ingress_id=uid(40),
+                scope=MemoryScope.PROJECT,
+            ),
+        )
+
+    assert caught.value.code == "github_ingress_unavailable"
+    assert counter.next_sequence == 1
+    raw.add.assert_not_called()
+    raw.flush.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tenant_id", uid(91)),
+        ("transport_binding_id", uid(92)),
+        ("installation_id", uid(93)),
+        ("actor_id", uid(94)),
+        ("client_id", uid(95)),
+        ("provider", "unsupported"),
+        ("declared_idempotency_key", "different-key"),
+    ],
+)
+async def test_github_binding_rejects_mismatched_ingress_provenance(
+    field: str, value: object
+) -> None:
+    counter = MemoryEventCounter(counter_id=1, next_sequence=1)
+    github = binding(
+        kind=TransportKind.GITHUB_INGRESS,
+        operations=(EventOperation.REMEMBERED,),
+    )
+    mismatched_ingress = ingress_item()
+    setattr(mismatched_ingress, field, value)
+    session, raw = fake_session(counter, github, ingress=mismatched_ingress)
+
+    with pytest.raises(EventStoreError) as caught:
+        await append_memory_event(
+            session,
+            lambda sequence: make_event(
+                sequence,
+                ingress_id=uid(40),
+                scope=MemoryScope.PROJECT,
+            ),
+        )
+
+    assert caught.value.code == "github_ingress_unavailable"
+    assert counter.next_sequence == 1
+    raw.add.assert_not_called()
 
 
 @pytest.mark.parametrize("scope", [MemoryScope.GLOBAL, MemoryScope.SCENE_LOCAL])

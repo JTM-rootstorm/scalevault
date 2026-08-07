@@ -24,7 +24,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from kivra_memory.storage.base import TENANT_OWNED_INFO_KEY, Base
 from kivra_memory.storage.models._shared import (
     MEMORY_OPERATIONS,
-    TENANT_TABLE_ARGS,
     json_object_check,
     sha256_check,
     uuid_v7_check,
@@ -96,7 +95,29 @@ class IngressItem(Base):
         ),
         uuid_v7_check("ingress_id", name="ingress_id_uuid_v7"),
         Index("ix_ingress_items_claim", "tenant_id", "state", "discovered_at"),
-        TENANT_TABLE_ARGS,
+        {
+            "info": {
+                TENANT_OWNED_INFO_KEY: True,
+                "scalevault_immutable_fields": (
+                    "ingress_id",
+                    "tenant_id",
+                    "transport_binding_id",
+                    "installation_id",
+                    "actor_id",
+                    "client_id",
+                    "provider",
+                    "repository_external_id",
+                    "branch_name",
+                    "immutable_path",
+                    "external_object_id",
+                    "commit_id",
+                    "blob_id",
+                    "declared_idempotency_key",
+                    "payload_sha256",
+                    "discovered_at",
+                ),
+            }
+        },
     )
 
     ingress_id: Mapped[UUID] = mapped_column(primary_key=True)

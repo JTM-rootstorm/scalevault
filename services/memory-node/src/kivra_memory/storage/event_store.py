@@ -36,9 +36,12 @@ from kivra_memory.domain.events import (
     validate_event_envelope_shape,
 )
 from kivra_memory.storage.models.events import (
+    IngressItem,
+    MemoryEventCounter,
+)
+from kivra_memory.storage.models.events import (
     MemoryEvent as MemoryEventRow,
 )
-from kivra_memory.storage.models.events import MemoryEventCounter
 from kivra_memory.storage.models.identity import (
     Actor,
     Client,
@@ -161,6 +164,62 @@ def _validate_transport(binding: TransportBinding, event: MemoryEvent) -> None:
     _validate_after_image_constraints(binding, event)
 
 
+def _reject_ingress() -> Never:
+    _reject("github_ingress_unavailable", "GitHub ingress item is unavailable")
+
+
+def _validate_ingress_item(
+    ingress: IngressItem,
+    binding: TransportBinding,
+    event: MemoryEvent,
+) -> None:
+    if (
+        ingress.state != "validated"
+        or ingress.validated_at is None
+        or ingress.result_event_id is not None
+        or ingress.result_memory_id is not None
+        or ingress.error_code is not None
+        or ingress.safe_diagnostic is not None
+        or ingress.processed_at is not None
+    ):
+        _reject_ingress()
+
+    if (
+        ingress.ingress_id != event.ingress_id
+        or ingress.tenant_id != event.tenant_id
+        or ingress.transport_binding_id != event.transport_binding_id
+        or ingress.installation_id != binding.installation_id
+        or ingress.actor_id != event.actor_id
+        or ingress.client_id != event.client_id
+        or ingress.provider != "github"
+        or ingress.declared_idempotency_key != event.idempotency_key
+    ):
+        _reject_ingress()
+
+
+async def _lock_github_ingress(
+    session: AsyncSession,
+    binding: TransportBinding,
+    event: MemoryEvent,
+) -> IngressItem | None:
+    if binding.transport_kind != TransportKind.GITHUB_INGRESS.value:
+        return None
+
+    ingress_result = await session.execute(
+        select(IngressItem)
+        .where(
+            IngressItem.tenant_id == event.tenant_id,
+            IngressItem.ingress_id == event.ingress_id,
+        )
+        .with_for_update()
+    )
+    ingress = ingress_result.scalar_one_or_none()
+    if ingress is None:
+        _reject_ingress()
+    _validate_ingress_item(ingress, binding, event)
+    return ingress
+
+
 def _event_row(event: MemoryEvent) -> MemoryEventRow:
     return MemoryEventRow(
         sequence=event.sequence,
@@ -267,11 +326,18 @@ async def _append_memory_event(session: AsyncSession, builder: EventBuilder) -> 
         _reject("binding_installation_unavailable", "transport binding is unavailable")
 
     _validate_transport(binding, event)
+    ingress = await _lock_github_ingress(session, binding, event)
 
     row = _event_row(event)
     session.add(row)
     counter.next_sequence += 1
     await session.flush()
+    if ingress is not None:
+        ingress.state = "accepted"
+        ingress.result_event_id = event.event_id
+        ingress.result_memory_id = event.memory_id
+        ingress.processed_at = now
+        await session.flush()
     return event
 
 

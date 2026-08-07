@@ -138,6 +138,28 @@ def test_event_envelope_and_transactional_counter_are_explicit() -> None:
     assert set(counter.c.keys()) == {"counter_id", "next_sequence"}
 
 
+def test_ingress_provenance_is_immutable() -> None:
+    ingress = metadata.tables["ingress_items"]
+    assert ingress.info["scalevault_immutable_fields"] == (
+        "ingress_id",
+        "tenant_id",
+        "transport_binding_id",
+        "installation_id",
+        "actor_id",
+        "client_id",
+        "provider",
+        "repository_external_id",
+        "branch_name",
+        "immutable_path",
+        "external_object_id",
+        "commit_id",
+        "blob_id",
+        "declared_idempotency_key",
+        "payload_sha256",
+        "discovered_at",
+    )
+
+
 def test_projection_scores_use_exact_numeric_storage() -> None:
     memory = metadata.tables["memories"]
     for column_name in ("confidence", "salience", "durability"):
