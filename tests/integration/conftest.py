@@ -38,10 +38,6 @@ def _available_loopback_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _postgresql_setting(value: str) -> str:
-    return value.replace("'", "''")
-
-
 def _run(command: list[str], *, timeout: int = 120) -> None:
     completed = subprocess.run(
         command,
@@ -136,10 +132,8 @@ def postgresql_server() -> Iterator[PostgreSQLTestServer]:
     with tempfile.TemporaryDirectory(prefix="scalevault-postgres-") as temporary_directory:
         root = Path(temporary_directory)
         data_directory = root / "data"
-        socket_directory = root / "socket"
         password_file = root / "password"
         log_file = root / "postgres.log"
-        socket_directory.mkdir(mode=0o700)
         password_file.write_text(password, encoding="utf-8")
         password_file.chmod(0o600)
 
@@ -170,7 +164,7 @@ def postgresql_server() -> Iterator[PostgreSQLTestServer]:
                     (
                         "listen_addresses = '127.0.0.1'",
                         f"port = {port}",
-                        f"unix_socket_directories = '{_postgresql_setting(str(socket_directory))}'",
+                        "unix_socket_directories = ''",
                         "fsync = off",
                         "synchronous_commit = off",
                         "full_page_writes = off",
