@@ -128,6 +128,25 @@ def test_identity_and_ancestry_fields_have_targeted_immutable_triggers(
         for table in metadata.tables.values()
         if table.info.get("scalevault_immutable_fields")
     }
+    ingress_immutable_fields = (
+        "ingress_id",
+        "tenant_id",
+        "transport_binding_id",
+        "installation_id",
+        "actor_id",
+        "client_id",
+        "provider",
+        "repository_external_id",
+        "branch_name",
+        "immutable_path",
+        "external_object_id",
+        "commit_id",
+        "blob_id",
+        "declared_idempotency_key",
+        "payload_sha256",
+        "discovered_at",
+    )
+    assert expected["ingress_items"] == ingress_immutable_fields
     with migrated_database.connect() as connection:
         definitions = connection.execute(
             text(
@@ -167,3 +186,99 @@ def test_memories_has_branch_visibility_trigger(migrated_database: AlembicRunner
 
     normalized = " ".join(str(trigger).upper().split())
     assert "BEFORE INSERT OR UPDATE" in normalized
+
+
+def test_memory_events_has_fail_closed_ingress_provenance_trigger(
+    migrated_database: AlembicRunner,
+) -> None:
+    with migrated_database.connect() as connection:
+        trigger, function = connection.execute(
+            text(
+                "SELECT pg_get_triggerdef(t.oid), pg_get_functiondef(p.oid) "
+                "FROM pg_trigger AS t "
+                "JOIN pg_class AS c ON c.oid = t.tgrelid "
+                "JOIN pg_namespace AS n ON n.oid = c.relnamespace "
+                "JOIN pg_proc AS p ON p.oid = t.tgfoid "
+                "WHERE n.nspname = 'public' "
+                "AND c.relname = 'memory_events' "
+                "AND t.tgname = 'trg_memory_events_ingress_provenance' "
+                "AND NOT t.tgisinternal"
+            )
+        ).one()
+
+    normalized_trigger = " ".join(str(trigger).upper().split())
+    normalized_function = " ".join(str(function).lower().split())
+    assert "BEFORE INSERT" in normalized_trigger
+    assert "github_ingress" in normalized_function
+    assert "ingress_provider is distinct from 'github'" in normalized_function
+    assert "ingress_installation_id is distinct from binding_installation_id" in normalized_function
+    assert "binding_authorized_operations" in normalized_function
+    assert "binding_valid_until" in normalized_function
+    assert "ingress_state is distinct from 'validated'" in normalized_function
+
+
+def test_event_payload_and_ingress_lifecycle_have_database_barriers(
+    migrated_database: AlembicRunner,
+) -> None:
+    with migrated_database.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT c.relname, t.tgname, t.tgdeferrable, t.tginitdeferred, "
+                "pg_get_triggerdef(t.oid), p.proname "
+                "FROM pg_trigger AS t "
+                "JOIN pg_class AS c ON c.oid = t.tgrelid "
+                "JOIN pg_namespace AS n ON n.oid = c.relnamespace "
+                "JOIN pg_proc AS p ON p.oid = t.tgfoid "
+                "WHERE n.nspname = 'public' "
+                "AND t.tgname = ANY(:trigger_names) "
+                "AND NOT t.tgisinternal"
+            ),
+            {
+                "trigger_names": [
+                    "trg_memory_events_payload_integrity",
+                    "trg_ingress_items_lifecycle",
+                    "trg_memory_events_ingress_reciprocity",
+                    "trg_ingress_items_result_reciprocity",
+                ]
+            },
+        ).all()
+
+    by_name = {str(row[1]): row for row in rows}
+    assert set(by_name) == {
+        "trg_memory_events_payload_integrity",
+        "trg_ingress_items_lifecycle",
+        "trg_memory_events_ingress_reciprocity",
+        "trg_ingress_items_result_reciprocity",
+    }
+    assert str(by_name["trg_memory_events_payload_integrity"][0]) == "memory_events"
+    assert str(by_name["trg_ingress_items_lifecycle"][0]) == "ingress_items"
+    for trigger_name in (
+        "trg_memory_events_ingress_reciprocity",
+        "trg_ingress_items_result_reciprocity",
+    ):
+        assert bool(by_name[trigger_name][2]) is True
+        assert bool(by_name[trigger_name][3]) is True
+        assert "DEFERRABLE INITIALLY DEFERRED" in " ".join(
+            str(by_name[trigger_name][4]).upper().split()
+        )
+
+
+def test_scene_memory_origin_session_is_bound_to_subject_session(
+    migrated_database: AlembicRunner,
+) -> None:
+    with migrated_database.connect() as connection:
+        definition = connection.execute(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conrelid = 'public.memories'::regclass "
+                "AND conname = 'subject_origin_session'"
+            )
+        ).scalar_one()
+
+    normalized = " ".join(str(definition).lower().split()).replace("public.", "")
+    assert "foreign key (tenant_id, lineage_id, subject_id, subject_kind, origin_session_id)" in (
+        normalized
+    )
+    assert "references subjects(tenant_id, lineage_id, subject_id, kind, origin_session_id)" in (
+        normalized
+    )

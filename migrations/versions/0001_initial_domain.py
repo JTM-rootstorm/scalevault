@@ -20,6 +20,12 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 REQUIRED_EXTENSIONS = frozenset({"citext", "pg_trgm", "pgcrypto", "vector"})
+MINIMUM_EXTENSION_VERSIONS = {
+    "citext": "1.6",
+    "pg_trgm": "1.6",
+    "pgcrypto": "1.3",
+    "vector": "0.8.0",
+}
 TENANT_TABLES = (
     "actors",
     "archive_export_checkpoints",
@@ -61,6 +67,27 @@ IMMUTABLE_FIELD_TABLES = (
         ),
     ),
     (
+        "ingress_items",
+        (
+            "ingress_id",
+            "tenant_id",
+            "transport_binding_id",
+            "installation_id",
+            "actor_id",
+            "client_id",
+            "provider",
+            "repository_external_id",
+            "branch_name",
+            "immutable_path",
+            "external_object_id",
+            "commit_id",
+            "blob_id",
+            "declared_idempotency_key",
+            "payload_sha256",
+            "discovered_at",
+        ),
+    ),
+    (
         "subjects",
         (
             "tenant_id",
@@ -78,21 +105,48 @@ IMMUTABLE_FIELD_TABLES = (
 )
 
 
+def _version_parts(version: str) -> tuple[int, ...]:
+    try:
+        parts = tuple(int(part) for part in version.split("."))
+    except ValueError as error:
+        raise RuntimeError(
+            f"unsupported PostgreSQL extension version format: {version!r}"
+        ) from error
+    if not parts or any(part < 0 for part in parts):
+        raise RuntimeError(f"unsupported PostgreSQL extension version format: {version!r}")
+    return parts
+
+
+def _extension_version_is_supported(installed: str, minimum: str) -> bool:
+    installed_parts = _version_parts(installed)
+    minimum_parts = _version_parts(minimum)
+    width = max(len(installed_parts), len(minimum_parts))
+    padded_installed = installed_parts + (0,) * (width - len(installed_parts))
+    padded_minimum = minimum_parts + (0,) * (width - len(minimum_parts))
+    return padded_installed >= padded_minimum
+
+
 def _require_extensions() -> None:
-    installed = set(
-        op.get_bind()
-        .execute(
-            sa.text(
-                "SELECT extname FROM pg_extension "
-                "WHERE extname IN ('citext', 'pg_trgm', 'pgcrypto', 'vector')"
-            )
+    rows = op.get_bind().execute(
+        sa.text(
+            "SELECT extname, extversion FROM pg_extension "
+            "WHERE extname IN ('citext', 'pg_trgm', 'pgcrypto', 'vector')"
         )
-        .scalars()
     )
-    missing = sorted(REQUIRED_EXTENSIONS - installed)
+    installed = {str(name): str(version) for name, version in rows}
+    missing = sorted(REQUIRED_EXTENSIONS - installed.keys())
     if missing:
         raise RuntimeError(
             "required PostgreSQL extensions are not installed: " + ", ".join(missing)
+        )
+    unsupported = sorted(
+        f"{name} {installed[name]} (requires >= {minimum})"
+        for name, minimum in MINIMUM_EXTENSION_VERSIONS.items()
+        if not _extension_version_is_supported(str(installed[name]), minimum)
+    )
+    if unsupported:
+        raise RuntimeError(
+            "required PostgreSQL extension versions are unsupported: " + ", ".join(unsupported)
         )
 
 
@@ -225,6 +279,331 @@ def _create_branch_visibility_barrier() -> None:
         ON public.memories
         FOR EACH ROW
         EXECUTE FUNCTION public.scalevault_enforce_branch_visibility()
+    """)
+    )
+
+
+def _create_event_ingress_provenance_barrier() -> None:
+    op.execute(
+        sa.text("""
+        CREATE FUNCTION public.scalevault_enforce_event_payload_integrity()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SET search_path = pg_catalog
+        AS $function$
+        DECLARE
+            decoded_payload jsonb;
+        BEGIN
+            BEGIN
+                decoded_payload := pg_catalog.convert_from(NEW.payload_canonical, 'UTF8')::jsonb;
+            EXCEPTION WHEN OTHERS THEN
+                RAISE EXCEPTION 'event canonical payload is invalid'
+                    USING ERRCODE = '23514';
+            END;
+
+            IF decoded_payload IS DISTINCT FROM NEW.payload THEN
+                RAISE EXCEPTION 'event canonical payload does not match payload'
+                    USING ERRCODE = '23514';
+            END IF;
+
+            RETURN NEW;
+        END
+        $function$
+    """)
+    )
+    op.execute(
+        sa.text("""
+        CREATE TRIGGER trg_memory_events_payload_integrity
+        BEFORE INSERT ON public.memory_events
+        FOR EACH ROW
+        EXECUTE FUNCTION public.scalevault_enforce_event_payload_integrity()
+    """)
+    )
+    op.execute(
+        sa.text("""
+        CREATE FUNCTION public.scalevault_enforce_event_ingress_provenance()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SET search_path = pg_catalog
+        AS $function$
+        DECLARE
+            binding_transport_kind text;
+            binding_installation_id uuid;
+            binding_authorized_operations jsonb;
+            binding_valid_until timestamptz;
+            binding_actor_revoked_at timestamptz;
+            binding_client_revoked_at timestamptz;
+            binding_installation_revoked_at timestamptz;
+            ingress_transport_binding_id uuid;
+            ingress_actor_id uuid;
+            ingress_client_id uuid;
+            ingress_installation_id uuid;
+            ingress_provider text;
+            ingress_declared_idempotency_key text;
+            ingress_state text;
+        BEGIN
+            SELECT binding.transport_kind, binding.installation_id,
+                binding.authorized_operations, binding.valid_until,
+                actor.revoked_at, client.revoked_at, installation.revoked_at
+            INTO binding_transport_kind, binding_installation_id,
+                binding_authorized_operations, binding_valid_until,
+                binding_actor_revoked_at, binding_client_revoked_at,
+                binding_installation_revoked_at
+            FROM public.transport_bindings AS binding
+            JOIN public.actors AS actor
+              ON actor.tenant_id = binding.tenant_id
+             AND actor.actor_id = binding.actor_id
+            JOIN public.clients AS client
+              ON client.tenant_id = binding.tenant_id
+             AND client.client_id = binding.client_id
+             AND client.transport_kind = binding.transport_kind
+            LEFT JOIN public.transport_installations AS installation
+              ON installation.tenant_id = binding.tenant_id
+             AND installation.installation_id = binding.installation_id
+            WHERE binding.tenant_id = NEW.tenant_id
+              AND binding.transport_binding_id = NEW.transport_binding_id
+              AND binding.actor_id = NEW.actor_id
+              AND binding.client_id = NEW.client_id;
+
+            IF NOT FOUND
+                OR binding_actor_revoked_at IS NOT NULL
+                OR binding_client_revoked_at IS NOT NULL
+                OR (binding_valid_until IS NOT NULL
+                    AND binding_valid_until <= pg_catalog.transaction_timestamp())
+                OR (binding_installation_id IS NOT NULL
+                    AND binding_installation_revoked_at IS NOT NULL)
+                OR pg_catalog.jsonb_typeof(binding_authorized_operations -> 'operations')
+                    IS DISTINCT FROM 'array'
+                OR binding_authorized_operations IS DISTINCT FROM pg_catalog.jsonb_build_object(
+                    'operations', binding_authorized_operations -> 'operations'
+                )
+                OR NOT (binding_authorized_operations -> 'operations' ? NEW.operation) THEN
+                RAISE EXCEPTION 'event transport binding provenance is invalid'
+                    USING ERRCODE = '23514';
+            END IF;
+
+            IF binding_transport_kind = 'github_ingress' THEN
+                IF binding_installation_id IS NULL
+                    OR binding_installation_revoked_at IS NOT NULL
+                    OR NEW.operation NOT IN ('observed', 'remembered')
+                    OR NEW.ingress_id IS NULL THEN
+                    RAISE EXCEPTION 'GitHub ingress events require ingress provenance'
+                        USING ERRCODE = '23514';
+                END IF;
+
+                SELECT transport_binding_id, actor_id, client_id, installation_id, provider,
+                    declared_idempotency_key, state
+                INTO ingress_transport_binding_id, ingress_actor_id, ingress_client_id,
+                    ingress_installation_id, ingress_provider,
+                    ingress_declared_idempotency_key, ingress_state
+                FROM public.ingress_items
+                WHERE tenant_id = NEW.tenant_id
+                  AND ingress_id = NEW.ingress_id;
+
+                IF NOT FOUND
+                    OR ingress_provider IS DISTINCT FROM 'github'
+                    OR ingress_transport_binding_id IS DISTINCT FROM NEW.transport_binding_id
+                    OR ingress_actor_id IS DISTINCT FROM NEW.actor_id
+                    OR ingress_client_id IS DISTINCT FROM NEW.client_id
+                    OR ingress_installation_id IS DISTINCT FROM binding_installation_id
+                    OR ingress_declared_idempotency_key IS DISTINCT FROM NEW.idempotency_key
+                    OR ingress_state IS DISTINCT FROM 'validated' THEN
+                    RAISE EXCEPTION 'GitHub ingress provenance does not match event transport'
+                        USING ERRCODE = '23514';
+                END IF;
+            ELSIF NEW.ingress_id IS NOT NULL THEN
+                RAISE EXCEPTION 'non-GitHub events cannot carry ingress provenance'
+                    USING ERRCODE = '23514';
+            END IF;
+
+            RETURN NEW;
+        END
+        $function$
+    """)
+    )
+    op.execute(
+        sa.text("""
+        CREATE TRIGGER trg_memory_events_ingress_provenance
+        BEFORE INSERT ON public.memory_events
+        FOR EACH ROW
+        EXECUTE FUNCTION public.scalevault_enforce_event_ingress_provenance()
+    """)
+    )
+
+
+def _create_ingress_lifecycle_barriers() -> None:
+    op.execute(
+        sa.text("""
+        CREATE FUNCTION public.scalevault_enforce_ingress_lifecycle()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SET search_path = pg_catalog
+        AS $function$
+        BEGIN
+            IF TG_OP = 'INSERT' THEN
+                IF NEW.state IS DISTINCT FROM 'discovered'
+                    OR NEW.validated_at IS NOT NULL
+                    OR NEW.processed_at IS NOT NULL
+                    OR NEW.result_event_id IS NOT NULL
+                    OR NEW.result_memory_id IS NOT NULL
+                    OR NEW.error_code IS NOT NULL
+                    OR NEW.safe_diagnostic IS NOT NULL THEN
+                    RAISE EXCEPTION 'ingress item must begin in discovered state'
+                        USING ERRCODE = '23514';
+                END IF;
+                RETURN NEW;
+            END IF;
+
+            IF NEW.state IS NOT DISTINCT FROM OLD.state
+                OR NOT (
+                    (OLD.state = 'discovered'
+                        AND NEW.state IN ('validated', 'rejected', 'quarantined'))
+                    OR (OLD.state = 'validated'
+                        AND NEW.state IN (
+                            'accepted', 'duplicate', 'conflict', 'rejected', 'quarantined'
+                        ))
+                ) THEN
+                RAISE EXCEPTION 'ingress state transition is invalid'
+                    USING ERRCODE = '23514';
+            END IF;
+
+            IF NEW.state = 'validated' AND NOT (
+                NEW.validated_at IS NOT NULL
+                AND NEW.processed_at IS NULL
+                AND NEW.result_event_id IS NULL
+                AND NEW.result_memory_id IS NULL
+                AND NEW.error_code IS NULL
+                AND NEW.safe_diagnostic IS NULL
+            ) THEN
+                RAISE EXCEPTION 'validated ingress result shape is invalid'
+                    USING ERRCODE = '23514';
+            ELSIF NEW.state IN ('accepted', 'duplicate') AND NOT (
+                NEW.validated_at IS NOT NULL
+                AND NEW.processed_at IS NOT NULL
+                AND NEW.processed_at >= NEW.validated_at
+                AND NEW.result_event_id IS NOT NULL
+                AND NEW.result_memory_id IS NOT NULL
+                AND NEW.error_code IS NULL
+                AND NEW.safe_diagnostic IS NULL
+            ) THEN
+                RAISE EXCEPTION 'successful ingress result shape is invalid'
+                    USING ERRCODE = '23514';
+            ELSIF NEW.state = 'conflict' AND NOT (
+                NEW.validated_at IS NOT NULL
+                AND NEW.processed_at IS NOT NULL
+                AND NEW.processed_at >= NEW.validated_at
+                AND NEW.result_event_id IS NULL
+                AND NEW.result_memory_id IS NULL
+                AND NEW.error_code IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION 'conflicted ingress result shape is invalid'
+                    USING ERRCODE = '23514';
+            ELSIF NEW.state IN ('rejected', 'quarantined') AND NOT (
+                NEW.processed_at IS NOT NULL
+                AND (NEW.validated_at IS NULL OR NEW.processed_at >= NEW.validated_at)
+                AND NEW.result_event_id IS NULL
+                AND NEW.result_memory_id IS NULL
+                AND NEW.error_code IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION 'failed ingress result shape is invalid'
+                    USING ERRCODE = '23514';
+            END IF;
+
+            RETURN NEW;
+        END
+        $function$
+    """)
+    )
+    op.execute(
+        sa.text("""
+        CREATE TRIGGER trg_ingress_items_lifecycle
+        BEFORE INSERT OR UPDATE ON public.ingress_items
+        FOR EACH ROW
+        EXECUTE FUNCTION public.scalevault_enforce_ingress_lifecycle()
+    """)
+    )
+
+    op.execute(
+        sa.text("""
+        CREATE FUNCTION public.scalevault_enforce_event_ingress_reciprocity()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SET search_path = pg_catalog
+        AS $function$
+        BEGIN
+            IF NEW.ingress_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1
+                FROM public.ingress_items AS ingress
+                WHERE ingress.tenant_id = NEW.tenant_id
+                  AND ingress.ingress_id = NEW.ingress_id
+                  AND ingress.state = 'accepted'
+                  AND ingress.result_event_id = NEW.event_id
+                  AND ingress.result_memory_id = NEW.memory_id
+            ) THEN
+                RAISE EXCEPTION 'event ingress result is not reciprocal'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NULL;
+        END
+        $function$
+    """)
+    )
+    op.execute(
+        sa.text("""
+        CREATE CONSTRAINT TRIGGER trg_memory_events_ingress_reciprocity
+        AFTER INSERT ON public.memory_events
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW
+        EXECUTE FUNCTION public.scalevault_enforce_event_ingress_reciprocity()
+    """)
+    )
+
+    op.execute(
+        sa.text("""
+        CREATE FUNCTION public.scalevault_enforce_ingress_result_reciprocity()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SET search_path = pg_catalog
+        AS $function$
+        BEGIN
+            IF NEW.state = 'accepted' AND NOT EXISTS (
+                SELECT 1
+                FROM public.memory_events AS event
+                WHERE event.tenant_id = NEW.tenant_id
+                  AND event.event_id = NEW.result_event_id
+                  AND event.ingress_id = NEW.ingress_id
+                  AND event.memory_id = NEW.result_memory_id
+                  AND event.transport_binding_id = NEW.transport_binding_id
+                  AND event.actor_id = NEW.actor_id
+                  AND event.client_id = NEW.client_id
+                  AND event.idempotency_key = NEW.declared_idempotency_key
+                  AND event.operation IN ('observed', 'remembered')
+            ) THEN
+                RAISE EXCEPTION 'accepted ingress result is not reciprocal'
+                    USING ERRCODE = '23514';
+            ELSIF NEW.state = 'duplicate' AND NOT EXISTS (
+                SELECT 1
+                FROM public.memory_events AS event
+                WHERE event.tenant_id = NEW.tenant_id
+                  AND event.event_id = NEW.result_event_id
+                  AND event.memory_id = NEW.result_memory_id
+                  AND event.operation IN ('observed', 'remembered')
+            ) THEN
+                RAISE EXCEPTION 'duplicate ingress result is invalid'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NULL;
+        END
+        $function$
+    """)
+    )
+    op.execute(
+        sa.text("""
+        CREATE CONSTRAINT TRIGGER trg_ingress_items_result_reciprocity
+        AFTER INSERT OR UPDATE ON public.ingress_items
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW
+        EXECUTE FUNCTION public.scalevault_enforce_ingress_result_reciprocity()
     """)
     )
 
@@ -730,6 +1109,10 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "octet_length(payload_sha256) = 32", name=op.f("ck_memory_events_payload_sha256_length")
+        ),
+        sa.CheckConstraint(
+            "payload_sha256 = digest(payload_canonical, 'sha256')",
+            name=op.f("ck_memory_events_payload_sha256_matches_canonical"),
         ),
         sa.CheckConstraint(
             "policy_version >= 1", name=op.f("ck_memory_events_policy_version_positive")
@@ -1961,6 +2344,14 @@ def upgrade() -> None:
         ondelete="RESTRICT",
     )
     op.create_foreign_key(
+        "subject_origin_session",
+        "memories",
+        "subjects",
+        ["tenant_id", "lineage_id", "subject_id", "subject_kind", "origin_session_id"],
+        ["tenant_id", "lineage_id", "subject_id", "kind", "origin_session_id"],
+        ondelete="RESTRICT",
+    )
+    op.create_foreign_key(
         "publication_actor",
         "memories",
         "actors",
@@ -2354,6 +2745,8 @@ def upgrade() -> None:
     )
     _create_immutability_barriers()
     _create_branch_visibility_barrier()
+    _create_event_ingress_provenance_barrier()
+    _create_ingress_lifecycle_barriers()
     _enable_tenant_rls()
 
 
@@ -2363,6 +2756,7 @@ def downgrade() -> None:
     op.drop_constraint("conflict", "memory_conflict_members", type_="foreignkey")
     op.drop_constraint("last_event", "memory_conflict_members", type_="foreignkey")
     op.drop_constraint("subject", "subject_aliases", type_="foreignkey")
+    op.drop_constraint("subject_origin_session", "memories", type_="foreignkey")
     op.drop_constraint("opened_event", "memory_conflicts", type_="foreignkey")
     op.drop_constraint("branch", "memory_conflicts", type_="foreignkey")
     op.drop_constraint("resolution_event", "memory_conflicts", type_="foreignkey")
@@ -2516,6 +2910,11 @@ def downgrade() -> None:
     op.drop_table("alembic_compatibility")
     # ### end Alembic commands ###
     op.execute(sa.text("DROP FUNCTION public.scalevault_enforce_branch_visibility()"))
+    op.execute(sa.text("DROP FUNCTION public.scalevault_enforce_ingress_result_reciprocity()"))
+    op.execute(sa.text("DROP FUNCTION public.scalevault_enforce_event_ingress_reciprocity()"))
+    op.execute(sa.text("DROP FUNCTION public.scalevault_enforce_ingress_lifecycle()"))
+    op.execute(sa.text("DROP FUNCTION public.scalevault_enforce_event_ingress_provenance()"))
+    op.execute(sa.text("DROP FUNCTION public.scalevault_enforce_event_payload_integrity()"))
     op.execute(sa.text("DROP FUNCTION public.scalevault_reject_immutable_field_mutation()"))
     op.execute(sa.text("DROP FUNCTION public.scalevault_reject_immutable_mutation()"))
     op.execute(sa.text("DROP FUNCTION public.scalevault_is_uuid_v7(uuid)"))

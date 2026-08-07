@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Sequence
 from typing import cast
+from unittest.mock import Mock
 
 import pytest
 from alembic import command
@@ -20,6 +22,7 @@ from .conftest import (
 )
 
 EXPECTED_HEAD = "0001_initial_domain"
+revision_module = importlib.import_module("migrations.versions.0001_initial_domain")
 
 
 def _schema_differences(connection: Connection) -> Sequence[object]:
@@ -56,6 +59,39 @@ def test_migration_fails_before_ddl_when_extensions_are_missing(
     with alembic_runner.connect() as connection:
         assert set(inspect(connection).get_table_names()) <= {"alembic_version"}
         assert _current_revision(connection) is None
+
+
+def test_migration_rejects_unsupported_extension_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bind = Mock()
+    bind.execute.return_value = [
+        ("citext", "1.6"),
+        ("pg_trgm", "1.6"),
+        ("pgcrypto", "1.3"),
+        ("vector", "0.7.4"),
+    ]
+    monkeypatch.setattr(revision_module.op, "get_bind", lambda: bind)
+
+    with pytest.raises(RuntimeError, match=r"vector 0\.7\.4 \(requires >= 0\.8\.0\)"):
+        revision_module._require_extensions()
+
+
+@pytest.mark.parametrize(
+    ("installed", "minimum", "supported"),
+    [
+        ("0.8.0", "0.8.0", True),
+        ("0.8.1", "0.8.0", True),
+        ("1.6", "1.6.0", True),
+        ("1.5.9", "1.6", False),
+    ],
+)
+def test_extension_version_comparison(
+    installed: str,
+    minimum: str,
+    supported: bool,
+) -> None:
+    assert revision_module._extension_version_is_supported(installed, minimum) is supported
 
 
 def test_zero_to_head_and_full_round_trip(
