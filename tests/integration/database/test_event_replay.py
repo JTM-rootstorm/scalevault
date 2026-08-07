@@ -111,6 +111,7 @@ def _event(
     operation: EventOperation,
     payload: OperationPayload,
     memory_id: UUID | None,
+    created_at: datetime = _EVENT_TIME,
 ) -> MemoryEvent:
     tenant_id = _seed_identifier("tenants", "tenant_id")
     lineage_id = _seed_identifier("lineages", "lineage_id")
@@ -155,16 +156,18 @@ def _event(
         payload_canonical=canonical,
         payload_sha256=payload_hash,
         command_sha256=command_hash,
-        created_at=_EVENT_TIME,
+        created_at=created_at,
     )
 
 
 def _branch_event(sequence: int) -> MemoryEvent:
+    branch = _branch_state()
     return _event(
         sequence,
         operation=EventOperation.BRANCH_CREATED,
-        payload=BranchCreatedPayload(branch=_branch_state()),
+        payload=BranchCreatedPayload(branch=branch),
         memory_id=None,
+        created_at=branch.created_at,
     )
 
 
