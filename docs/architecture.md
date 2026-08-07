@@ -7,6 +7,10 @@ deterministic recovery archive written by one logical exporter.
 
 Shared contracts are versioned and reviewed centrally. All write transports
 must converge on the same policy and concurrency-safe domain command layer.
+The private GitHub proposal repository evolves independently; its current and
+legacy contract boundary is tracked in
+[GitHub ingress compatibility](ingress-compatibility.md) and must be re-audited
+before importer work resumes.
 
 The production Memory API listener and PostgreSQL destination are restricted to
 loopback or an approved local Unix socket. Secure MCP Tunnel and node-agent
