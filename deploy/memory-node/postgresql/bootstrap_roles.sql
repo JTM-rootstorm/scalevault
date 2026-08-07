@@ -352,11 +352,18 @@ RESET ROLE;
 DO $bootstrap$
 BEGIN
     IF pg_catalog.to_regclass('public.ingress_items') IS NOT NULL THEN
+        -- PostgreSQL fires triggers for the same event in name order. Keep the
+        -- role authorization barrier ahead of the generic lifecycle barrier
+        -- so an ingress-role acceptance attempt fails as an authorization
+        -- error even when its result shape is also invalid.
         EXECUTE
             'DROP TRIGGER IF EXISTS trg_ingress_items_validation_write '
             'ON public.ingress_items';
         EXECUTE
-            'CREATE TRIGGER trg_ingress_items_validation_write '
+            'DROP TRIGGER IF EXISTS trg_ingress_items_00_validation_write '
+            'ON public.ingress_items';
+        EXECUTE
+            'CREATE TRIGGER trg_ingress_items_00_validation_write '
             'BEFORE UPDATE ON public.ingress_items '
             'FOR EACH ROW '
             'EXECUTE FUNCTION public.scalevault_enforce_ingress_validation_write()';
