@@ -228,19 +228,25 @@ async def test_committed_events_are_gap_free_and_rebuild_byte_equivalent(
 
             state = await rebuild_semantic_projections(session, tenant_id=tenant_id)
             expected = canonical_aggregate_bytes(state, memory.memory_id)
-            assert await load_canonical_aggregate_bytes(
-                session,
-                tenant_id=tenant_id,
-                memory_id=memory.memory_id,
-            ) == expected
+            assert (
+                await load_canonical_aggregate_bytes(
+                    session,
+                    tenant_id=tenant_id,
+                    memory_id=memory.memory_id,
+                )
+                == expected
+            )
 
         async with database.tenant_session(tenant_id) as session:
             rebuilt = await rebuild_semantic_projections(session, tenant_id=tenant_id)
             assert canonical_aggregate_bytes(rebuilt, memory.memory_id) == expected
-            assert await load_canonical_aggregate_bytes(
-                session,
-                tenant_id=tenant_id,
-                memory_id=memory.memory_id,
-            ) == expected
+            assert (
+                await load_canonical_aggregate_bytes(
+                    session,
+                    tenant_id=tenant_id,
+                    memory_id=memory.memory_id,
+                )
+                == expected
+            )
     finally:
         await database.dispose()
