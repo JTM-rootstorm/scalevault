@@ -714,8 +714,6 @@ def test_database_rejects_invalid_transport_and_event_ingress_provenance(
         )
         _accept_ingress(connection, INGRESS, ATTACK_EVENT, MEMORY)
 
-    with migrated_database.engine.begin() as connection:
-        _validate_ingress(connection, MISMATCHED_INSTALLATION_INGRESS)
     with (
         pytest.raises(DBAPIError) as invalid_duplicate,
         migrated_database.engine.begin() as connection,

@@ -580,9 +580,14 @@ def test_ingress_validation_trigger_and_api_processing_dml(
             connection.execute(
                 text(
                     "UPDATE ingress_items SET state = :terminal_state, "
-                    "processed_at = CURRENT_TIMESTAMP WHERE ingress_id = :ingress_id"
+                    "error_code = :error_code, processed_at = CURRENT_TIMESTAMP "
+                    "WHERE ingress_id = :ingress_id"
                 ),
-                {"ingress_id": ingress_id, "terminal_state": terminal_state},
+                {
+                    "ingress_id": ingress_id,
+                    "terminal_state": terminal_state,
+                    "error_code": f"synthetic_{terminal_state}",
+                },
             )
 
     with (
