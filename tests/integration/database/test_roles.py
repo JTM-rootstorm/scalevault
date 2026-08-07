@@ -521,8 +521,7 @@ def test_ingress_validation_trigger_and_api_processing_dml(
     binding_id = rows["transport_bindings"][2]["transport_binding_id"]
     rejected_ingress_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=101)
     quarantined_ingress_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=102)
-    accepted_ingress_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=103)
-    result_memory_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=104)
+    processed_ingress_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=103)
 
     with Session(role_secured_database.engine) as session:
         for layer in seed_model_layers():
@@ -537,7 +536,7 @@ def test_ingress_validation_trigger_and_api_processing_dml(
             {"tenant_id": str(tenant_id)},
         )
         for ordinal, ingress_id in enumerate(
-            (rejected_ingress_id, quarantined_ingress_id, accepted_ingress_id),
+            (rejected_ingress_id, quarantined_ingress_id, processed_ingress_id),
             start=1,
         ):
             connection.execute(
@@ -601,7 +600,7 @@ def test_ingress_validation_trigger_and_api_processing_dml(
         )
         connection.execute(
             text("UPDATE ingress_items SET state = 'rejected' WHERE ingress_id = :ingress_id"),
-            {"ingress_id": accepted_ingress_id},
+            {"ingress_id": processed_ingress_id},
         )
     assert _sqlstate(missing_processed_at.value) == "23514"
 
@@ -616,7 +615,7 @@ def test_ingress_validation_trigger_and_api_processing_dml(
         )
         connection.execute(
             text("UPDATE ingress_items SET state = 'accepted' WHERE ingress_id = :ingress_id"),
-            {"ingress_id": accepted_ingress_id},
+            {"ingress_id": processed_ingress_id},
         )
     assert _sqlstate(forbidden_acceptance.value) == "42501"
 
@@ -628,11 +627,11 @@ def test_ingress_validation_trigger_and_api_processing_dml(
         )
         connection.execute(
             text(
-                "UPDATE ingress_items SET state = 'accepted', "
-                "result_memory_id = :result_memory_id, processed_at = CURRENT_TIMESTAMP "
+                "UPDATE ingress_items SET state = 'conflict', "
+                "error_code = 'synthetic_conflict', processed_at = CURRENT_TIMESTAMP "
                 "WHERE ingress_id = :ingress_id"
             ),
-            {"ingress_id": accepted_ingress_id, "result_memory_id": result_memory_id},
+            {"ingress_id": processed_ingress_id},
         )
         connection.execute(
             text("UPDATE memory_event_counter SET next_sequence = next_sequence + 1")
@@ -648,7 +647,7 @@ def test_ingress_validation_trigger_and_api_processing_dml(
                 "ingress_ids": [
                     rejected_ingress_id,
                     quarantined_ingress_id,
-                    accepted_ingress_id,
+                    processed_ingress_id,
                 ]
             },
         )
@@ -660,6 +659,6 @@ def test_ingress_validation_trigger_and_api_processing_dml(
     assert states == {
         rejected_ingress_id: ("rejected", None),
         quarantined_ingress_id: ("quarantined", None),
-        accepted_ingress_id: ("accepted", result_memory_id),
+        processed_ingress_id: ("conflict", None),
     }
     assert next_sequence == 2
