@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +58,16 @@ class AlembicRunner:
     def upgrade(self, revision: str = "head") -> None:
         self._run("upgrade", revision)
 
+    def upgrade_as_scalevault_migrator(self, revision: str = "head") -> None:
+        """Exercise the production migrator-to-owner role transition."""
+
+        config = _alembic_config()
+        with self.engine.begin() as connection:
+            connection.execute(text("SET ROLE kivra_memory_migrator"))
+            connection.execute(text("SET ROLE kivra_memory_owner"))
+            config.attributes["connection"] = connection
+            command.upgrade(config, revision)
+
     def downgrade(self, revision: str) -> None:
         self._run("downgrade", revision)
 
@@ -87,6 +99,52 @@ def bootstrap_required_extensions(database_url: str) -> None:
                     psycopg_sql.Identifier(extension)
                 )
             )
+
+
+def run_operator_sql_file(
+    postgresql_server: PostgreSQLTestServer,
+    sql_file: Path,
+    *,
+    expected_database: str | None = None,
+) -> None:
+    """Run operator SQL without exposing the disposable password in argv."""
+
+    bindir = os.environ.get("SCALEVAULT_TEST_PG_BINDIR")
+    psql = str(Path(bindir) / "psql") if bindir else shutil.which("psql")
+    if psql is None or not os.access(psql, os.X_OK):
+        _database_unavailable("PostgreSQL test binary 'psql' is unavailable")
+
+    url = make_url(postgresql_server.database_url)
+    password = url.password
+    if password is None:
+        pytest.fail("the disposable PostgreSQL test URL has no password")
+    database = str(url.database)
+    environment = os.environ.copy()
+    environment["PGPASSWORD"] = password
+    completed = subprocess.run(
+        [
+            psql,
+            "--no-password",
+            "--no-psqlrc",
+            "--set=ON_ERROR_STOP=1",
+            f"--set=expected_database={expected_database or database}",
+            f"--host={url.host}",
+            f"--port={url.port}",
+            f"--username={url.username}",
+            f"--dbname={url.database}",
+            f"--file={sql_file}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+    if completed.returncode != 0:
+        output = "\n".join(
+            part.strip() for part in (completed.stdout, completed.stderr) if part.strip()
+        )
+        raise RuntimeError(f"PostgreSQL operator SQL failed ({sql_file.name}):\n{output}")
 
 
 @pytest.fixture
