@@ -42,7 +42,7 @@ def _postgresql_setting(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _run(command: list[str], *, timeout: int = 30) -> None:
+def _run(command: list[str], *, timeout: int = 120) -> None:
     completed = subprocess.run(
         command,
         check=False,
