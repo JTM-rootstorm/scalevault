@@ -362,6 +362,27 @@ async def test_all_non_create_operations_commit_atomic_projection_receipt_and_ou
                 ).all()
             }
             assert export_event_ids == {result.event_id for result in operation_results}
+
+            create_jobs = (
+                await session.scalars(
+                    select(OutboxJob).where(
+                        OutboxJob.job_type.in_(["embed_memory", "check_duplicates"])
+                    )
+                )
+            ).all()
+            create_payloads = {(row.job_type, row.aggregate_id): row.payload for row in create_jobs}
+            for result in created:
+                assert result.memory_id is not None
+                expected_references = {
+                    "event_id": str(result.event_id),
+                    "memory_id": str(result.memory_id),
+                    "memory_version": 1,
+                }
+                assert create_payloads[("embed_memory", result.memory_id)] == expected_references
+                assert (
+                    create_payloads[("check_duplicates", result.memory_id)] == expected_references
+                )
+
             purge_job = await session.scalar(
                 select(OutboxJob).where(OutboxJob.job_type == "purge_payload")
             )
@@ -370,7 +391,7 @@ async def test_all_non_create_operations_commit_atomic_projection_receipt_and_ou
             assert purge_job.payload == {
                 "event_id": str(hard_forgotten.event_id),
                 "memory_id": str(memory_ids[4]),
-                "memory_revision": 2,
+                "memory_version": 2,
             }
 
 

@@ -1007,7 +1007,7 @@ class MutationEngine:
             assert result.memory_id is not None and result.revision is not None
             references: dict[str, UUID | int] = {
                 "memory_id": result.memory_id,
-                "memory_revision": result.revision,
+                "memory_version": result.revision,
                 "event_id": event.event_id,
             }
             jobs.extend(
@@ -1033,7 +1033,7 @@ class MutationEngine:
                     result.memory_id,
                     {
                         "memory_id": result.memory_id,
-                        "memory_revision": result.revision,
+                        "memory_version": result.revision,
                         "event_id": event.event_id,
                     },
                 )

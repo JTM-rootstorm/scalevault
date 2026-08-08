@@ -165,6 +165,9 @@ async def _seeded_engine(
                 )
             if ingress is not None:
                 session.add(ingress)
+                await session.flush()
+                ingress.state = "validated"
+                ingress.validated_at = _NOW
             await session.flush()
 
         factory = async_sessionmaker(database.engine, expire_on_commit=False)
@@ -357,9 +360,9 @@ async def test_direct_and_validated_ingress_share_engine_and_commit_ingress_atom
         blob_id="synthetic-blob",
         declared_idempotency_key=ingress_key,
         payload_sha256=bytes(32),
-        state="validated",
+        state="discovered",
         discovered_at=_NOW - timedelta(minutes=1),
-        validated_at=_NOW,
+        validated_at=None,
     )
     async with _seeded_engine(
         postgresql_server.database_url,
