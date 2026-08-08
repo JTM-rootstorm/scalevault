@@ -23,6 +23,7 @@ GENESIS_SOURCE_REPOSITORY = "JTM-rootstorm/scalevault-memory-ingress"
 GENESIS_SOURCE_SNAPSHOT_COMMIT = "7dc1cae4b9a99173d2d227be1dd1d10c7f267ce9"
 GENESIS_POST_FREEZE_AUTHORIZATION_COMMIT = "f4338047f2f0e12d68b83aa6ffe3653bafeb1f2d"
 IMPORT_MANIFEST_VERSION = "scalevault.genesis-import-manifest.v1"
+GENESIS_IMPORT_COMPATIBILITY_VERSION = "genesis-first-import-compat-v1"
 
 _OBJECT_ID = re.compile(r"[0-9a-f]{40}")
 _PROPOSAL_PATH = re.compile(
@@ -257,10 +258,12 @@ def build_import_plan_manifest(
     mapping_version: str,
     selection_policy_version: str,
     selection_policy_sha256: str,
+    compatibility_version: str = GENESIS_IMPORT_COMPATIBILITY_VERSION,
 ) -> ImportPlanManifest:
     """Build and hash a deterministic manifest containing no source statements."""
 
     _require_version(mapping_version, "mapping_version")
+    _require_version(compatibility_version, "compatibility_version")
     _require_version(selection_policy_version, "selection_policy_version")
     _require_sha256(selection_policy_sha256, "selection_policy_sha256")
 
@@ -331,6 +334,7 @@ def build_import_plan_manifest(
         "source_snapshot_commit": GENESIS_SOURCE_SNAPSHOT_COMMIT,
         "parser_schema_versions": version_map,
         "mapping_version": mapping_version,
+        "compatibility_version": compatibility_version,
         "selection_policy_version": selection_policy_version,
         "selection_policy_sha256": selection_policy_sha256,
         "source_items": source_values,

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from kivra_memory.ingress.snapshot import (
+    GENESIS_IMPORT_COMPATIBILITY_VERSION,
     GENESIS_POST_FREEZE_AUTHORIZATION_COMMIT,
     GENESIS_SOURCE_REPOSITORY,
     GENESIS_SOURCE_SNAPSHOT_COMMIT,
@@ -229,6 +230,7 @@ def _manifest(
         records,
         parser_schema_versions={SourceContract.CHECKPOINT_V2: "checkpoint-v2.schema.1"},
         mapping_version="genesis-mapping-v1",
+        compatibility_version=GENESIS_IMPORT_COMPATIBILITY_VERSION,
         selection_policy_version="selection-v1",
         selection_policy_sha256="1" * 64,
     )
@@ -280,10 +282,21 @@ def test_manifest_digest_binds_raw_hash_mapping_parser_policy_and_derived_plan()
         idempotency_key="genesis-import-v1:candidate-001",
     )
     changed = _manifest([_source_item()], [changed_plan])
+    changed_compatibility = build_import_plan_manifest(
+        [_source_item()],
+        [_record()],
+        parser_schema_versions={SourceContract.CHECKPOINT_V2: "checkpoint-v2.schema.1"},
+        mapping_version="genesis-mapping-v1",
+        compatibility_version="genesis-first-import-compat-v2",
+        selection_policy_version="selection-v1",
+        selection_policy_sha256="1" * 64,
+    )
 
     assert baseline.digest != changed.digest
+    assert baseline.digest != changed_compatibility.digest
     assert baseline.value["source_snapshot_commit"] == GENESIS_SOURCE_SNAPSHOT_COMMIT
     assert baseline.value["mapping_version"] == "genesis-mapping-v1"
+    assert baseline.value["compatibility_version"] == GENESIS_IMPORT_COMPATIBILITY_VERSION
     assert baseline.value["parser_schema_versions"] == {
         SourceContract.CHECKPOINT_V2.value: "checkpoint-v2.schema.1"
     }
@@ -328,6 +341,7 @@ def test_manifest_requires_exact_parser_schema_coverage() -> None:
             [_record()],
             parser_schema_versions={},
             mapping_version="genesis-mapping-v1",
+            compatibility_version=GENESIS_IMPORT_COMPATIBILITY_VERSION,
             selection_policy_version="selection-v1",
             selection_policy_sha256="1" * 64,
         )
