@@ -1,0 +1,60 @@
+"""Deterministic machine-readable memory-selection policy."""
+
+from kivra_memory.policy.contracts import (
+    CandidateLifecycleState,
+    ContentSignal,
+    EpistemicQualifier,
+    EvidenceKind,
+    EvidenceSummary,
+    EvidenceTrust,
+    ExpiryEvaluation,
+    LifecycleAction,
+    LifecycleDecision,
+    LifecycleReasonCode,
+    NominationEvidenceReference,
+    NominationProposal,
+    PolicyDecision,
+    PolicyOutcome,
+    PolicyReasonCode,
+    SelectionBasis,
+    SelectionPolicyProfile,
+    SelectionRequest,
+)
+from kivra_memory.policy.evaluator import evaluate_selection
+from kivra_memory.policy.lifecycle import evaluate_expiry, evaluate_promotion
+from kivra_memory.policy.loader import (
+    SELECTION_V1,
+    SELECTION_V1_PROFILE,
+    SELECTION_V1_PROFILE_SHA256,
+    LoadedSelectionPolicy,
+    load_selection_policy,
+)
+
+__all__ = [
+    "SELECTION_V1",
+    "SELECTION_V1_PROFILE",
+    "SELECTION_V1_PROFILE_SHA256",
+    "CandidateLifecycleState",
+    "ContentSignal",
+    "EpistemicQualifier",
+    "EvidenceKind",
+    "EvidenceSummary",
+    "EvidenceTrust",
+    "ExpiryEvaluation",
+    "LifecycleAction",
+    "LifecycleDecision",
+    "LifecycleReasonCode",
+    "LoadedSelectionPolicy",
+    "NominationEvidenceReference",
+    "NominationProposal",
+    "PolicyDecision",
+    "PolicyOutcome",
+    "PolicyReasonCode",
+    "SelectionBasis",
+    "SelectionPolicyProfile",
+    "SelectionRequest",
+    "evaluate_expiry",
+    "evaluate_promotion",
+    "evaluate_selection",
+    "load_selection_policy",
+]

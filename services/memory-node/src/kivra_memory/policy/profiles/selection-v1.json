@@ -1,0 +1,242 @@
+{
+  "basis_rules": [
+    {
+      "allowed_categories": [],
+      "basis": "routine_banter",
+      "candidate_ttl_days": null,
+      "evidence_requirement": null,
+      "outcome": "omit",
+      "reason_code": "routine_banter_omitted",
+      "required_authority": null,
+      "required_qualifiers": [],
+      "requires_interpretation_limits": false,
+      "rule_id": "basis.routine_banter"
+    },
+    {
+      "allowed_categories": [
+        "stable_fact",
+        "user_preference",
+        "boundary_or_permission",
+        "interaction_convention",
+        "project_decision",
+        "project_state",
+        "procedure"
+      ],
+      "basis": "explicit_user_correction",
+      "candidate_ttl_days": null,
+      "evidence_requirement": {
+        "kinds": ["user_correction"],
+        "minimum": 1,
+        "trusts": ["trusted"]
+      },
+      "outcome": "active",
+      "reason_code": "explicit_user_correction",
+      "required_authority": "explicit_user_correction",
+      "required_qualifiers": [],
+      "requires_interpretation_limits": false,
+      "rule_id": "basis.explicit_user_correction"
+    },
+    {
+      "allowed_categories": ["user_preference"],
+      "basis": "explicit_user_preference",
+      "candidate_ttl_days": null,
+      "evidence_requirement": {
+        "kinds": ["user_statement"],
+        "minimum": 1,
+        "trusts": ["trusted"]
+      },
+      "outcome": "active",
+      "reason_code": "explicit_user_preference",
+      "required_authority": "explicit_user_statement",
+      "required_qualifiers": [],
+      "requires_interpretation_limits": false,
+      "rule_id": "basis.explicit_user_preference"
+    },
+    {
+      "allowed_categories": ["boundary_or_permission"],
+      "basis": "explicit_user_permission",
+      "candidate_ttl_days": null,
+      "evidence_requirement": {
+        "kinds": ["user_statement"],
+        "minimum": 1,
+        "trusts": ["trusted"]
+      },
+      "outcome": "active",
+      "reason_code": "explicit_user_permission",
+      "required_authority": "explicit_user_statement",
+      "required_qualifiers": [],
+      "requires_interpretation_limits": false,
+      "rule_id": "basis.explicit_user_permission"
+    },
+    {
+      "allowed_categories": ["project_decision"],
+      "basis": "verified_project_decision",
+      "candidate_ttl_days": null,
+      "evidence_requirement": {
+        "kinds": ["project_source"],
+        "minimum": 1,
+        "trusts": ["trusted", "corroborated"]
+      },
+      "outcome": "active",
+      "reason_code": "verified_project_decision",
+      "required_authority": "verified_project_source",
+      "required_qualifiers": [],
+      "requires_interpretation_limits": false,
+      "rule_id": "basis.verified_project_decision"
+    },
+    {
+      "allowed_categories": [
+        "assistant_preference_like_pattern",
+        "relationship_pattern",
+        "emergent_tendency",
+        "episodic_anchor",
+        "interpretation"
+      ],
+      "basis": "assistant_observation",
+      "candidate_ttl_days": 180,
+      "evidence_requirement": {
+        "kinds": ["assistant_observation", "conversation_episode"],
+        "minimum": 1,
+        "trusts": ["trusted", "corroborated"]
+      },
+      "outcome": "candidate",
+      "reason_code": "assistant_observation_candidate",
+      "required_authority": "assistant_observation",
+      "required_qualifiers": [],
+      "requires_interpretation_limits": false,
+      "rule_id": "basis.assistant_observation"
+    },
+    {
+      "allowed_categories": [
+        "assistant_preference_like_pattern",
+        "relationship_pattern",
+        "emergent_tendency",
+        "episodic_anchor",
+        "open_question",
+        "interpretation"
+      ],
+      "basis": "assistant_interpretation",
+      "candidate_ttl_days": 90,
+      "evidence_requirement": {
+        "kinds": ["conversation_episode"],
+        "minimum": 1,
+        "trusts": ["trusted", "corroborated"]
+      },
+      "outcome": "candidate",
+      "reason_code": "assistant_interpretation_candidate",
+      "required_authority": "assistant_interpretation",
+      "required_qualifiers": ["single_episode_not_stable_pattern"],
+      "requires_interpretation_limits": true,
+      "rule_id": "basis.assistant_interpretation"
+    },
+    {
+      "allowed_categories": [],
+      "basis": "imported_legacy",
+      "candidate_ttl_days": 365,
+      "evidence_requirement": {
+        "kinds": ["import_manifest"],
+        "minimum": 1,
+        "trusts": ["trusted", "corroborated"]
+      },
+      "outcome": "candidate",
+      "reason_code": "imported_legacy_candidate",
+      "required_authority": "imported_legacy_memory",
+      "required_qualifiers": ["imported_source_unreconciled"],
+      "requires_interpretation_limits": true,
+      "rule_id": "basis.imported_legacy"
+    },
+    {
+      "allowed_categories": ["episodic_anchor"],
+      "basis": "meaningful_episodic_anchor",
+      "candidate_ttl_days": 365,
+      "evidence_requirement": {
+        "kinds": ["conversation_episode"],
+        "minimum": 1,
+        "trusts": ["trusted", "corroborated"]
+      },
+      "outcome": "candidate",
+      "reason_code": "meaningful_episodic_anchor",
+      "required_authority": null,
+      "required_qualifiers": [],
+      "requires_interpretation_limits": false,
+      "rule_id": "basis.meaningful_episodic_anchor"
+    },
+    {
+      "allowed_categories": [],
+      "basis": "explicit_user_request",
+      "candidate_ttl_days": null,
+      "evidence_requirement": {
+        "kinds": ["user_statement"],
+        "minimum": 1,
+        "trusts": ["trusted"]
+      },
+      "outcome": "active",
+      "reason_code": "explicit_user_request",
+      "required_authority": "explicit_user_statement",
+      "required_qualifiers": [],
+      "requires_interpretation_limits": false,
+      "rule_id": "basis.explicit_user_request"
+    }
+  ],
+  "default_outcome": "reject",
+  "default_reason_code": "no_matching_rule",
+  "precedence": [
+    "structural",
+    "hard_guardrail",
+    "evidence",
+    "basis",
+    "qualification"
+  ],
+  "policy_id": "scalevault-memory-selection",
+  "profile_version": "selection-v1",
+  "signal_guardrails": [
+    {
+      "allowed_categories": ["episodic_anchor"],
+      "allowed_ontologies": ["fictional_or_roleplayed_scene"],
+      "allowed_scopes": ["episodic", "scene_local"],
+      "allowed_visibilities": ["private_root", "restricted"],
+      "force_candidate": true,
+      "forced_candidate_ttl_days": 180,
+      "required_qualifiers": ["roleplay_not_literal"],
+      "requires_interpretation_limits": true,
+      "rule_id": "guardrail.roleplayed_scene",
+      "signal": "roleplayed_scene",
+      "violation_code": "roleplay_literalization"
+    },
+    {
+      "allowed_categories": ["assistant_preference_like_pattern"],
+      "allowed_ontologies": [
+        "assistant_self_description",
+        "observed_assistant_behavior",
+        "hypothesis",
+        "uncertain"
+      ],
+      "allowed_scopes": ["persona", "relationship", "episodic", "scene_local"],
+      "allowed_visibilities": ["private_root", "restricted", "shareable"],
+      "force_candidate": true,
+      "forced_candidate_ttl_days": 180,
+      "required_qualifiers": ["assistant_pattern_not_subjective_experience"],
+      "requires_interpretation_limits": true,
+      "rule_id": "guardrail.assistant_preference_like",
+      "signal": "assistant_preference_like",
+      "violation_code": "epistemic_qualification_required"
+    },
+    {
+      "allowed_categories": [
+        "assistant_preference_like_pattern",
+        "open_question",
+        "interpretation"
+      ],
+      "allowed_ontologies": ["hypothesis", "uncertain"],
+      "allowed_scopes": ["persona", "relationship", "episodic", "scene_local"],
+      "allowed_visibilities": ["private_root", "restricted"],
+      "force_candidate": true,
+      "forced_candidate_ttl_days": 90,
+      "required_qualifiers": ["subjective_experience_unresolved"],
+      "requires_interpretation_limits": true,
+      "rule_id": "guardrail.subjective_experience_claim",
+      "signal": "subjective_experience_claim",
+      "violation_code": "sentience_overclaim"
+    }
+  ]
+}
