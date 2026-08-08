@@ -287,6 +287,19 @@ def test_manifest_digest_binds_raw_hash_mapping_parser_policy_and_derived_plan()
     assert baseline.value["parser_schema_versions"] == {
         SourceContract.CHECKPOINT_V2.value: "checkpoint-v2.schema.1"
     }
+    baseline.require_digest(baseline.digest)
+
+    with pytest.raises(ManifestError, match="digest mismatch"):
+        baseline.require_digest("f" * 64)
+
+
+def test_manifest_digest_gate_rejects_post_plan_manifest_mutation() -> None:
+    manifest = _manifest([_source_item()], [_record()])
+    assert isinstance(manifest.value, dict)
+    manifest.value["mapping_version"] = "post-plan-mutation"
+
+    with pytest.raises(ManifestError, match="digest mismatch"):
+        manifest.require_digest(manifest.digest)
 
 
 def test_manifest_rejects_unknown_source_path_and_mutated_raw_bytes() -> None:

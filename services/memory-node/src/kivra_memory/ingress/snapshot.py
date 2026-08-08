@@ -8,6 +8,7 @@ history cannot widen the import set.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -233,6 +234,19 @@ class ImportPlanManifest:
     value: Mapping[str, object]
     canonical_bytes: bytes
     digest: str
+
+    def require_digest(self, expected_digest: str) -> None:
+        """Fail unless this manifest still canonically matches an exact approved digest."""
+
+        _require_sha256(expected_digest, "expected_digest")
+        canonical = canonical_json_bytes(self.value)
+        actual = hashlib.sha256(canonical).hexdigest()
+        if (
+            canonical != self.canonical_bytes
+            or not hmac.compare_digest(actual, self.digest)
+            or not hmac.compare_digest(actual, expected_digest)
+        ):
+            raise ManifestError("import plan digest mismatch")
 
 
 def build_import_plan_manifest(
