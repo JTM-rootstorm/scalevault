@@ -5,11 +5,18 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 from uuid import UUID
 
 import pytest
-from kivra_memory.application import CommandPrincipal, MutationEngine
+from kivra_memory.api.mcp import NominationWireRequest
+from kivra_memory.application import (
+    CommandPrincipal,
+    MutationEngine,
+    ResolvedNominationContext,
+    SelectionEngine,
+    SelectionResult,
+)
 from kivra_memory.application import mutations as mutations_module
 from kivra_memory.domain.commands import (
     MemoryChanges,
@@ -33,6 +40,14 @@ from kivra_memory.domain.enums import (
 )
 from kivra_memory.domain.fingerprints import exact_memory_fingerprint
 from kivra_memory.domain.identifiers import new_uuid7
+from kivra_memory.policy import (
+    EvidenceKind,
+    EvidenceSummary,
+    EvidenceTrust,
+    NominationEvidenceReference,
+    NominationProposal,
+    SelectionBasis,
+)
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import (
     Client,
@@ -124,6 +139,64 @@ def _remember(
         branch_id=_seed_identifier("branches", "branch_id"),
         reason="Exercise the synthetic PostgreSQL mutation fixture.",
         memory=_memory_input(statement, project_subject_id=project_subject_id),
+    )
+
+
+def _project_nomination(
+    idempotency_key: str,
+    statement: str,
+    *,
+    project_subject_id: UUID,
+) -> NominationWireRequest:
+    return NominationWireRequest(
+        contract_version="mcp-mutation-v2",
+        idempotency_key=idempotency_key,
+        logical_session_id=None,
+        persona_id=_seed_identifier("personas", "persona_id"),
+        branch_id=_seed_identifier("branches", "branch_id"),
+        reason="Exercise the shared direct and ingress nomination path.",
+        proposal=NominationProposal(
+            subject_id=project_subject_id,
+            subject_kind=SubjectKind.PROJECT,
+            category=MemoryCategory.PROJECT_DECISION,
+            ontological_status=OntologicalStatus.LITERAL_TECHNICAL_FACT,
+            scope=MemoryScope.PROJECT,
+            visibility=MemoryVisibility.PRIVATE_ROOT,
+            statement=statement,
+            reason_to_remember="This synthetic record verifies shared nomination processing.",
+            interpretation_limits=("Synthetic integration-test data only.",),
+            confidence=Decimal("0.900000"),
+            salience=Decimal("0.800000"),
+            durability=Decimal("0.700000"),
+            sensitivity=0,
+            observed_at=_NOW,
+            metadata={"fixture": True},
+            selection_basis=SelectionBasis.VERIFIED_PROJECT_DECISION,
+            epistemic_qualifiers=(),
+            evidence_references=(
+                NominationEvidenceReference(
+                    evidence_key="synthetic-project-source",
+                    opaque_reference="synthetic:project-source",
+                ),
+            ),
+        ),
+    )
+
+
+async def _project_context(
+    principal: CommandPrincipal, _command: object
+) -> ResolvedNominationContext:
+    source_kind = "github_proposal" if principal.ingress_id is not None else "live_interaction"
+    return ResolvedNominationContext(
+        source_kind=cast(Literal["github_proposal", "live_interaction"], source_kind),
+        effective_authority_class=AuthorityClass.VERIFIED_PROJECT_SOURCE,
+        evidence=(
+            EvidenceSummary(
+                evidence_key="synthetic-project-source",
+                kind=EvidenceKind.PROJECT_SOURCE,
+                trust=EvidenceTrust.TRUSTED,
+            ),
+        ),
     )
 
 
@@ -424,11 +497,13 @@ async def test_direct_and_validated_ingress_share_engine_and_commit_ingress_atom
         postgresql_server.database_url,
         project_subject_id=project_subject_id,
         ingress=ingress,
-    ) as (database, engine):
+    ) as (database, _legacy_engine):
+        factory = async_sessionmaker(database.engine, expire_on_commit=False)
+        engine = SelectionEngine(factory, _project_context)
         direct, ingested = await asyncio.gather(
             engine.execute(
                 _principal(0),
-                _remember(
+                _project_nomination(
                     "synthetic-direct-command",
                     "Synthetic direct project memory.",
                     project_subject_id=project_subject_id,
@@ -440,15 +515,17 @@ async def test_direct_and_validated_ingress_share_engine_and_commit_ingress_atom
                     ingress_id=ingress_id,
                     scopes=frozenset({"memory:propose"}),
                 ),
-                _remember(
+                _project_nomination(
                     ingress_key,
                     "Synthetic ingress project memory.",
                     project_subject_id=project_subject_id,
                 ),
             ),
         )
-        direct_result = _success(direct)
-        ingress_result = _success(ingested)
+        assert isinstance(direct, SelectionResult), direct
+        assert isinstance(ingested, SelectionResult), ingested
+        direct_result = direct
+        ingress_result = ingested
         assert direct_result.memory_id != ingress_result.memory_id
 
         async with database.tenant_session(_principal(0).tenant_id) as session:
@@ -460,21 +537,19 @@ async def test_direct_and_validated_ingress_share_engine_and_commit_ingress_atom
             assert stored.processed_at is not None
         assert await _counts(database) == (2, 2, 2, 6)
 
-        replay = _success(
-            await engine.execute(
-                _principal(
-                    2,
-                    ingress_id=ingress_id,
-                    scopes=frozenset({"memory:propose"}),
-                ),
-                _remember(
-                    ingress_key,
-                    "Synthetic ingress project memory.",
-                    project_subject_id=project_subject_id,
-                ),
-            )
+        replay = await engine.execute(
+            _principal(
+                2,
+                ingress_id=ingress_id,
+                scopes=frozenset({"memory:propose"}),
+            ),
+            _project_nomination(
+                ingress_key,
+                "Synthetic ingress project memory.",
+                project_subject_id=project_subject_id,
+            ),
         )
-        assert replay.idempotent_replay is True
+        assert isinstance(replay, SelectionResult), replay
         assert replay.receipt_id == ingress_result.receipt_id
         assert replay.event_id == ingress_result.event_id
         assert replay.memory_id == ingress_result.memory_id
