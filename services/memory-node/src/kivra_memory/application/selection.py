@@ -248,16 +248,29 @@ def _input_digest(
     command: NominationCommandLike,
     resolved: ResolvedNominationContext,
 ) -> bytes:
+    resolved_material = {
+        "source_kind": resolved.source_kind,
+        "effective_authority_class": resolved.effective_authority_class.value,
+        "content_signals": sorted(signal.value for signal in resolved.content_signals),
+        "evidence": [
+            {
+                "evidence_key": item.evidence_key,
+                "kind": item.kind.value,
+                "trust": item.trust.value,
+            }
+            for item in sorted(resolved.evidence, key=lambda item: item.evidence_key)
+        ],
+    }
     material = {
         "idempotency_key": command.idempotency_key,
         "persona_id": str(command.persona_id),
         "branch_id": str(command.branch_id),
         "reason": command.reason,
-        "proposal": command.proposal.model_dump(mode="python"),
+        "proposal": command.proposal.model_dump(mode="json"),
         "logical_session_id": (
             str(command.logical_session_id) if command.logical_session_id is not None else None
         ),
-        "resolved": resolved.model_dump(mode="python"),
+        "resolved": resolved_material,
     }
     return hashlib.sha256(canonical_json_bytes(material)).digest()
 

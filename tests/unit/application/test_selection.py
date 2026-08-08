@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
@@ -8,12 +9,30 @@ from uuid import UUID
 import pytest
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import (
+    NominationCommandLike,
+    ResolvedNominationContext,
     SelectionEngine,
     SelectionExecutionError,
+    _input_digest,
     _new_candidate_evidence,
 )
+from kivra_memory.domain.enums import (
+    AuthorityClass,
+    MemoryCategory,
+    MemoryScope,
+    MemoryVisibility,
+    OntologicalStatus,
+    SubjectKind,
+)
 from kivra_memory.domain.identifiers import new_uuid7
-from kivra_memory.policy import EvidenceKind, EvidenceSummary, EvidenceTrust
+from kivra_memory.policy import (
+    ContentSignal,
+    EvidenceKind,
+    EvidenceSummary,
+    EvidenceTrust,
+    NominationProposal,
+    SelectionBasis,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -108,3 +127,63 @@ def test_duplicate_candidate_evidence_requires_a_distinct_evidence_key() -> None
 
     assert _new_candidate_evidence((first,), (first,)) == ()
     assert _new_candidate_evidence((first,), (second,)) == (second,)
+
+
+def test_nomination_digest_is_json_safe_and_order_independent_for_trusted_facts() -> None:
+    proposal = NominationProposal(
+        subject_id=new_uuid7(),
+        subject_kind=SubjectKind.GLOBAL,
+        category=MemoryCategory.USER_PREFERENCE,
+        ontological_status=OntologicalStatus.LITERAL_USER_FACT,
+        scope=MemoryScope.GLOBAL,
+        visibility=MemoryVisibility.PRIVATE_ROOT,
+        statement="The user prefers concise technical updates.",
+        reason_to_remember="This preference shapes future technical collaboration.",
+        interpretation_limits=("The preference is revisable.",),
+        confidence=Decimal("0.9"),
+        salience=Decimal("0.7"),
+        durability=Decimal("0.8"),
+        sensitivity=0,
+        metadata={},
+        selection_basis=SelectionBasis.EXPLICIT_USER_PREFERENCE,
+        epistemic_qualifiers=(),
+        evidence_references=(),
+    )
+    command = cast(
+        NominationCommandLike,
+        SimpleNamespace(
+            idempotency_key="digest-order-unit",
+            persona_id=new_uuid7(),
+            branch_id=new_uuid7(),
+            reason="Nominate an explicit preference.",
+            proposal=proposal,
+            logical_session_id=None,
+        ),
+    )
+    first = EvidenceSummary(
+        evidence_key="evidence-a",
+        kind=EvidenceKind.USER_STATEMENT,
+        trust=EvidenceTrust.TRUSTED,
+    )
+    second = EvidenceSummary(
+        evidence_key="evidence-b",
+        kind=EvidenceKind.USER_CONFIRMATION,
+        trust=EvidenceTrust.CORROBORATED,
+    )
+    content_signals = frozenset(
+        {ContentSignal.ASSISTANT_PREFERENCE_LIKE, ContentSignal.ROLEPLAYED_SCENE}
+    )
+    left = ResolvedNominationContext(
+        source_kind="live_interaction",
+        effective_authority_class=AuthorityClass.EXPLICIT_USER_STATEMENT,
+        content_signals=content_signals,
+        evidence=(first, second),
+    )
+    right = ResolvedNominationContext(
+        source_kind="live_interaction",
+        effective_authority_class=AuthorityClass.EXPLICIT_USER_STATEMENT,
+        content_signals=content_signals,
+        evidence=(second, first),
+    )
+
+    assert _input_digest(command, left) == _input_digest(command, right)
