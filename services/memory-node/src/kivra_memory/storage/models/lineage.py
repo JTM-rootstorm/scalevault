@@ -252,6 +252,14 @@ class LogicalSession(Base):
             unique=True,
             postgresql_where=text("conversation_ref IS NOT NULL"),
         ),
+        Index(
+            "ix_sessions_project_ref",
+            "tenant_id",
+            "lineage_id",
+            "branch_id",
+            "project_ref",
+            postgresql_where=text("project_ref IS NOT NULL"),
+        ),
         TENANT_TABLE_ARGS,
     )
 
@@ -323,6 +331,38 @@ class Subject(Base):
         CheckConstraint(_SUBJECT_KIND_ANCHOR_CHECK, name="kind_anchor_shape"),
         json_object_check("metadata", name="metadata_object"),
         uuid_v7_check("subject_id", name="subject_id_uuid_v7"),
+        Index(
+            "ix_subjects_display_name_trgm",
+            "display_name",
+            postgresql_using="gin",
+            postgresql_ops={"display_name": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_subjects_canonical_key_trgm",
+            text("(canonical_key::text) gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
+        Index(
+            "ix_subjects_project_ref",
+            "tenant_id",
+            "lineage_id",
+            "project_ref",
+            postgresql_where=text("project_ref IS NOT NULL"),
+        ),
+        Index(
+            "ix_subjects_relationship_actor",
+            "tenant_id",
+            "lineage_id",
+            "relationship_actor_id",
+            postgresql_where=text("relationship_actor_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_subjects_origin_session",
+            "tenant_id",
+            "lineage_id",
+            "origin_session_id",
+            postgresql_where=text("origin_session_id IS NOT NULL"),
+        ),
         {
             "info": {
                 TENANT_OWNED_INFO_KEY: True,
@@ -372,6 +412,11 @@ class SubjectAlias(Base):
         ),
         UniqueConstraint("tenant_id", "lineage_id", "alias", name="tenant_lineage_alias"),
         CheckConstraint("length(btrim(alias::text)) BETWEEN 1 AND 256", name="alias_length"),
+        Index(
+            "ix_subject_aliases_alias_trgm",
+            text("(alias::text) gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
         TENANT_TABLE_ARGS,
     )
 

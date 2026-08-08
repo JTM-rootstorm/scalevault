@@ -24,6 +24,7 @@ EXPECTED_TABLES = {
     "memory_event_counter",
     "memory_events",
     "memory_evidence",
+    "memory_embeddings_v1",
     "memory_links",
     "outbox_jobs",
     "personas",
@@ -38,7 +39,6 @@ EXPECTED_TABLES = {
 
 def test_metadata_registers_the_complete_initial_contract() -> None:
     assert set(metadata.tables) == EXPECTED_TABLES
-    assert "memory_embeddings_v1" not in metadata.tables
     assert (
         EXPECTED_TABLES
         - {
@@ -47,6 +47,66 @@ def test_metadata_registers_the_complete_initial_contract() -> None:
         }
         == TENANT_TABLE_NAMES
     )
+
+
+def test_embedding_projection_has_fixed_v1_contract() -> None:
+    embedding = metadata.tables["memory_embeddings_v1"]
+    assert set(embedding.c.keys()) == {
+        "tenant_id",
+        "memory_id",
+        "embedding_model_id",
+        "lineage_id",
+        "branch_id",
+        "source_memory_revision",
+        "source_event_id",
+        "input_contract_version",
+        "source_content_sha256",
+        "input_truncated",
+        "embedding",
+        "created_at",
+    }
+    assert {column.name for column in embedding.primary_key.columns} == {
+        "tenant_id",
+        "memory_id",
+        "embedding_model_id",
+    }
+    indexes = {str(index.name): index for index in embedding.indexes}
+    assert set(indexes) == {
+        "ix_memory_embeddings_v1_filter",
+        "ix_memory_embeddings_v1_hnsw_cosine",
+    }
+    assert (
+        indexes["ix_memory_embeddings_v1_hnsw_cosine"].dialect_options["postgresql"]["using"]
+        == "hnsw"
+    )
+
+
+def test_hybrid_retrieval_indexes_and_model_lifecycle_are_explicit() -> None:
+    event_indexes = {index.name for index in metadata.tables["memory_events"].indexes}
+    session_indexes = {index.name for index in metadata.tables["sessions"].indexes}
+    subject_indexes = {index.name for index in metadata.tables["subjects"].indexes}
+    alias_indexes = {index.name for index in metadata.tables["subject_aliases"].indexes}
+    assert "ix_memory_events_branch_created_at" in event_indexes
+    assert "ix_sessions_project_ref" in session_indexes
+    assert {
+        "ix_subjects_display_name_trgm",
+        "ix_subjects_canonical_key_trgm",
+        "ix_subjects_project_ref",
+        "ix_subjects_relationship_actor",
+        "ix_subjects_origin_session",
+    } <= subject_indexes
+    assert "ix_subject_aliases_alias_trgm" in alias_indexes
+
+    lifecycle = next(
+        constraint
+        for constraint in metadata.tables["embedding_models"].constraints
+        if isinstance(constraint, CheckConstraint)
+        and constraint.name == "ck_embedding_models_lifecycle_state"
+    )
+    lifecycle_sql = str(lifecycle.sqltext)
+    assert "state = 'approved' AND activated_at IS NOT NULL" in lifecycle_sql
+    assert "state = 'retired'" in lifecycle_sql
+    assert "retired_at >= activated_at" in lifecycle_sql
 
 
 def test_tenant_local_foreign_keys_are_tenant_qualified() -> None:

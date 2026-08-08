@@ -13,6 +13,7 @@ dependencies = [
     "alembic>=1.16,<2",
     "fastapi>=0.116,<1",
     "mcp>=1.12,<2",
+    "pgvector>=0.4,<1",
     "prometheus-client>=0.22,<1",
     "psycopg[binary,pool]>=3.2,<4",
     "pydantic>=2.11,<3",
@@ -21,6 +22,13 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0,<3",
     "structlog>=25.4,<26",
     "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+embedding-worker = [
+    "numpy>=2.2,<3",
+    "onnxruntime>=1.22,<2",
+    "tokenizers>=0.21,<1",
 ]
 
 [dependency-groups]
@@ -37,6 +45,7 @@ dev = [
 
 [project.scripts]
 kivra-memory-api = "kivra_memory.api.app:main"
+kivra-memory-worker = "kivra_memory.workers.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["services/memory-node/src/kivra_memory"]

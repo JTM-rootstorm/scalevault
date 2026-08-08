@@ -21,7 +21,7 @@ from .conftest import (
     installed_extensions,
 )
 
-EXPECTED_HEAD = "0001_initial_domain"
+EXPECTED_HEAD = "0002_hybrid_retrieval"
 revision_module = importlib.import_module("migrations.versions.0001_initial_domain")
 
 
@@ -117,7 +117,7 @@ def test_zero_to_head_and_full_round_trip(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (1, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (2, EXPECTED_HEAD, EXPECTED_HEAD)
 
     runner.downgrade("base")
     with runner.connect() as connection:
@@ -130,3 +130,25 @@ def test_zero_to_head_and_full_round_trip(
         assert _current_revision(connection) == EXPECTED_HEAD
         assert _schema_differences(connection) == []
         assert set(inspect(connection).get_table_names()) == first_head_tables
+
+
+def test_existing_0001_database_upgrades_to_hybrid_retrieval(
+    bootstrapped_alembic_runner: AlembicRunner,
+) -> None:
+    runner = bootstrapped_alembic_runner
+    runner.upgrade("0001_initial_domain")
+    with runner.connect() as connection:
+        assert _current_revision(connection) == "0001_initial_domain"
+        assert "memory_embeddings_v1" not in inspect(connection).get_table_names()
+
+    runner.upgrade()
+    with runner.connect() as connection:
+        assert _current_revision(connection) == EXPECTED_HEAD
+        assert "memory_embeddings_v1" in inspect(connection).get_table_names()
+        assert _schema_differences(connection) == []
+        assert connection.execute(
+            text(
+                "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
+                "FROM alembic_compatibility WHERE component = 'memory_node'"
+            )
+        ).one() == (2, EXPECTED_HEAD, EXPECTED_HEAD)

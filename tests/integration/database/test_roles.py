@@ -304,10 +304,28 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
             "SELECT",
             "INSERT,UPDATE,DELETE,TRUNCATE",
         ),
+        (
+            "kivra_memory_api",
+            "memory_embeddings_v1",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
         ("kivra_memory_worker", "branches", "SELECT,INSERT", "UPDATE,DELETE,TRUNCATE"),
         ("kivra_memory_worker", "memory_events", "SELECT", "INSERT,UPDATE,DELETE,TRUNCATE"),
         ("kivra_memory_worker", "memories", "SELECT,INSERT,UPDATE,DELETE", "TRUNCATE"),
+        (
+            "kivra_memory_worker",
+            "embedding_models",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
         ("kivra_memory_worker", "outbox_jobs", "SELECT,INSERT,UPDATE", "DELETE,TRUNCATE"),
+        (
+            "kivra_memory_worker",
+            "memory_embeddings_v1",
+            "SELECT,INSERT,UPDATE,DELETE",
+            "TRUNCATE",
+        ),
         ("kivra_memory_ingress", "ingress_items", "SELECT", "INSERT,UPDATE,DELETE,TRUNCATE"),
         ("kivra_memory_ingress", "memory_events", "", "SELECT,INSERT,UPDATE,DELETE,TRUNCATE"),
         (
@@ -319,7 +337,19 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
         ("kivra_memory_ingress", "command_receipts", "", "SELECT,INSERT,UPDATE,DELETE,TRUNCATE"),
         ("kivra_memory_ingress", "outbox_jobs", "", "SELECT,INSERT,UPDATE,DELETE,TRUNCATE"),
         ("kivra_memory_ingress", "memories", "", "SELECT,INSERT,UPDATE,DELETE,TRUNCATE"),
+        (
+            "kivra_memory_ingress",
+            "memory_embeddings_v1",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
         ("kivra_memory_exporter", "memory_events", "SELECT", "INSERT,UPDATE,DELETE,TRUNCATE"),
+        (
+            "kivra_memory_exporter",
+            "memory_embeddings_v1",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
         (
             "kivra_memory_exporter",
             "archive_export_checkpoints",

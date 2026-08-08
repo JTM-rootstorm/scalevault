@@ -5,8 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
@@ -53,6 +55,15 @@ class EmbeddingModel(Base):
             "activated_at IS NULL OR activated_at >= created_at", name="activation_order"
         ),
         CheckConstraint("retired_at IS NULL OR retired_at >= created_at", name="retirement_order"),
+        CheckConstraint(
+            "(state IN ('registered', 'evaluating') AND activated_at IS NULL "
+            "AND retired_at IS NULL) OR "
+            "(state = 'approved' AND activated_at IS NOT NULL AND retired_at IS NULL) OR "
+            "(state = 'retired' AND activated_at IS NOT NULL AND retired_at IS NOT NULL "
+            "AND retired_at >= activated_at) OR "
+            "(state = 'rejected' AND activated_at IS NULL AND retired_at IS NULL)",
+            name="lifecycle_state",
+        ),
         sha256_check("artifact_sha256", name="artifact_sha256_length"),
         json_object_check("tokenizer_details", name="tokenizer_details_object"),
         json_object_check("runtime_details", name="runtime_details_object"),
@@ -84,6 +95,79 @@ class EmbeddingModel(Base):
     )
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MemoryEmbeddingV1(Base):
+    """Current 384-dimensional embedding for one memory and model."""
+
+    __tablename__ = "memory_embeddings_v1"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "lineage_id", "branch_id"],
+            ["branches.tenant_id", "branches.lineage_id", "branches.branch_id"],
+            name="branch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "lineage_id", "memory_id"],
+            ["memories.tenant_id", "memories.lineage_id", "memories.memory_id"],
+            name="memory",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "embedding_model_id"],
+            ["embedding_models.tenant_id", "embedding_models.embedding_model_id"],
+            name="embedding_model",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "lineage_id", "source_event_id"],
+            ["memory_events.tenant_id", "memory_events.lineage_id", "memory_events.event_id"],
+            name="source_event",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("source_memory_revision >= 1", name="source_memory_revision_positive"),
+        CheckConstraint(
+            "input_contract_version = 'memory-statement-embedding-v1'",
+            name="input_contract_version",
+        ),
+        sha256_check("source_content_sha256", name="source_content_sha256_length"),
+        CheckConstraint("vector_dims(embedding) = 384", name="embedding_dimension"),
+        CheckConstraint(
+            "abs(vector_norm(embedding) - 1.0) <= 0.001",
+            name="embedding_unit_norm",
+        ),
+        Index(
+            "ix_memory_embeddings_v1_filter",
+            "tenant_id",
+            "lineage_id",
+            "branch_id",
+            "embedding_model_id",
+        ),
+        Index(
+            "ix_memory_embeddings_v1_hnsw_cosine",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_with={"m": 16, "ef_construction": 64},
+        ),
+        TENANT_TABLE_ARGS,
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(primary_key=True)
+    memory_id: Mapped[UUID] = mapped_column(primary_key=True)
+    embedding_model_id: Mapped[UUID] = mapped_column(primary_key=True)
+    lineage_id: Mapped[UUID] = mapped_column(nullable=False)
+    branch_id: Mapped[UUID] = mapped_column(nullable=False)
+    source_memory_revision: Mapped[int] = mapped_column(Integer(), nullable=False)
+    source_event_id: Mapped[UUID] = mapped_column(nullable=False)
+    input_contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_content_sha256: Mapped[bytes] = mapped_column(LargeBinary(), nullable=False)
+    input_truncated: Mapped[bool] = mapped_column(Boolean(), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
 
 
 class OutboxJob(Base):

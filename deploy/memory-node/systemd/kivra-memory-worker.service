@@ -1,0 +1,50 @@
+[Unit]
+Description=ScaleVault local embedding and outbox worker
+After=network-online.target postgresql@17-main.service
+Wants=network-online.target
+Requires=postgresql@17-main.service
+RequiresMountsFor=/mnt/memory
+ConditionPathIsMountPoint=/mnt/memory
+ConditionPathIsDirectory=/mnt/memory/kivra-memory/models
+
+[Service]
+Type=simple
+User=memory-worker
+Group=kivra-memory
+WorkingDirectory=/opt/kivra-memory/app
+Environment=KIVRA_MEMORY_ENVIRONMENT=production
+Environment=KIVRA_MEMORY_EMBEDDING_MODEL_ROOT=/mnt/memory/kivra-memory/models
+Environment=KIVRA_MEMORY_QUERY_EMBEDDING_SOCKET=/run/kivra-memory-worker/query-embedding.sock
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Environment=TOKENIZERS_PARALLELISM=false
+Environment=HOME=/nonexistent
+Environment=XDG_CACHE_HOME=/run/kivra-memory-worker/cache
+EnvironmentFile=/etc/kivra-memory/memory-worker.env
+ExecStartPre=/usr/bin/test -d /mnt/memory/kivra-memory/models
+ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-worker
+Restart=on-failure
+RestartSec=5s
+RuntimeDirectory=kivra-memory-worker
+RuntimeDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=
+ReadOnlyPaths=/mnt/memory/kivra-memory/models
+ReadWritePaths=/run/kivra-memory-worker
+
+[Install]
+WantedBy=multi-user.target

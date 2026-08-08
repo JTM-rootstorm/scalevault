@@ -17,10 +17,14 @@ useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-node
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-tunnel
+useradd --system --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin --gid kivra-memory memory-worker
 mountpoint --quiet /mnt/memory
 install -d -o root -g root -m 0755 /opt/kivra-memory/app
 install -d -o root -g root -m 0750 /etc/kivra-memory
 install -d -o root -g root -m 0755 /mnt/memory/kivra-memory
+install -d -o root -g kivra-memory -m 2750 \
+  /mnt/memory/kivra-memory/models
 install -d -o memory-node -g kivra-memory -m 0700 \
   /mnt/memory/kivra-memory/node-agent
 ```
@@ -30,7 +34,7 @@ group membership as an installation error; inspect and reconcile it rather than
 blindly replacing it. The application tree is root-owned and not writable by a
 service account.
 
-Create `memory-api.env`, `node-agent.env`, and `tunnel.env` locally under
+Create `memory-api.env`, `memory-worker.env`, `node-agent.env`, and `tunnel.env` locally under
 `/etc/kivra-memory`. Each file must be `root:root` mode `0600`, even when it
 currently contains only nonsecret coordinates. Never copy `.env` from a
 development checkout. Database passwords remain local deployment secrets and
@@ -47,6 +51,45 @@ KIVRA_MEMORY_PORT=8080
 KIVRA_MEMORY_METRICS_ENABLED=true
 ```
 
+The embedding worker has a separate root-owned mode-0600 environment file. It
+contains only its local worker database URL and an explicit comma-separated
+allowlist of tenant UUIDs; model paths cannot be supplied by jobs:
+
+```text
+KIVRA_MEMORY_DATABASE_URL=postgresql+psycopg://kivra_memory_worker:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
+KIVRA_MEMORY_WORKER_TENANT_IDS=REPLACE_WITH_UUIDV7
+```
+
+The worker verifies digest-addressed model bundles below
+`/mnt/memory/kivra-memory/models`, never downloads model material, and refuses
+to start if the network-share mount or approved bundle is unavailable. Its
+query-embedding socket is mode `0660` below a mode-`0750` systemd runtime
+directory owned by `memory-worker:kivra-memory`. This permits the `memory-api`
+account, whose primary group is `kivra-memory`, to request bounded local query
+embeddings without importing ONNX Runtime or reading model files.
+
+Prepare a bundle only from artifacts already present on the operator host. The
+helper does not download anything; it refuses symlinked inputs, duplicate
+sources, an existing destination, and unrecorded files. It writes the four
+artifacts plus a canonical manifest into a directory named for the manifest
+SHA-256:
+
+```sh
+UV_CACHE_DIR=.cache/uv uv run --locked python scripts/prepare_embedding_bundle.py \
+  --model-root /mnt/memory/kivra-memory/models \
+  --model /path/to/local/model.onnx \
+  --tokenizer /path/to/local/tokenizer.json \
+  --config /path/to/local/config.json \
+  --license /path/to/local/LICENSE \
+  --onnxruntime-version 1.28.0 \
+  --export-tool REPLACE_WITH_EXPORT_TOOL \
+  --export-version REPLACE_WITH_EXPORT_VERSION
+```
+
+The single line printed on success is the `artifact_sha256` that must be used
+by the corresponding embedding-model registry row. Record the actual export
+tool and version; do not substitute illustrative values.
+
 Use `install -o root -g root -m 0600` when placing each completed environment
 file. The node-agent file is optional at this milestone because the service
 remains disabled. The API file is required before starting the API; the tunnel
@@ -59,6 +102,8 @@ stat -c '%U:%G %a %n' \
   /opt/kivra-memory/app \
   /etc/kivra-memory \
   /etc/kivra-memory/memory-api.env \
+  /etc/kivra-memory/memory-worker.env \
+  /mnt/memory/kivra-memory/models \
   /mnt/memory/kivra-memory/node-agent
 ```
 
@@ -92,6 +137,9 @@ install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-tunnel.service \
   /etc/systemd/system/kivra-memory-tunnel.service
 install -D -o root -g root -m 0644 \
+  deploy/memory-node/systemd/kivra-memory-worker.service \
+  /etc/systemd/system/kivra-memory-worker.service
+install -D -o root -g root -m 0644 \
   deploy/memory-node/postgresql/systemd/postgresql@17-main.service.d/10-kivra-memory-mount.conf \
   /etc/systemd/system/postgresql@17-main.service.d/10-kivra-memory-mount.conf
 systemctl daemon-reload
@@ -99,6 +147,7 @@ systemd-analyze verify \
   postgresql@17-main.service \
   kivra-memory-api.service \
   kivra-memory-node-agent.service \
+  kivra-memory-worker.service \
   kivra-memory-tunnel.service
 ```
 
@@ -122,8 +171,10 @@ enrollment and workspace prerequisites are satisfied.
 
 The API unit starts the Debian PostgreSQL 17 cluster dependency. The node-agent
 unit is installed but should remain disabled until relay enrollment is
-implemented. Worker, ingress, exporter, and timer units will be added with their
-runnable entry points so deployment never advertises an unimplemented service.
+implemented. Ingress, exporter, and timer units will be added with their runnable
+entry points so deployment never advertises an unimplemented service. The worker
+unit remains disabled until its pinned bundle, registry row, tenant
+configuration, and live acceptance gate have been verified.
 
 The tunnel unit is installed separately and remains disabled until its Platform
 tunnel ID, restricted runtime credential, and ChatGPT workspace association are

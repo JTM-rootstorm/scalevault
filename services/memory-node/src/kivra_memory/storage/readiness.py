@@ -8,7 +8,7 @@ from typing import Literal
 from psycopg import AsyncConnection
 from pydantic import PostgresDsn
 
-EXPECTED_ALEMBIC_HEAD = "0001_initial_domain"
+EXPECTED_ALEMBIC_HEAD = "0002_hybrid_retrieval"
 MINIMUM_EXTENSION_VERSIONS = {
     "citext": "1.6",
     "pg_trgm": "1.6",

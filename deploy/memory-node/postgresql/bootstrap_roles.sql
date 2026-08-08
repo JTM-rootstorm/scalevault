@@ -171,7 +171,7 @@ BEGIN
         'subject_aliases', 'ingress_items', 'memory_event_counter',
         'memory_events', 'command_receipts', 'memories', 'memory_evidence',
         'memory_links', 'memory_conflicts', 'memory_conflict_members',
-        'memory_content_keys', 'embedding_models', 'outbox_jobs',
+        'memory_content_keys', 'embedding_models', 'memory_embeddings_v1', 'outbox_jobs',
         'archive_targets', 'archive_export_checkpoints'
     ]
     LOOP
@@ -228,6 +228,7 @@ BEGIN
         'branches', 'sessions', 'subjects', 'subject_aliases', 'memory_events',
         'memories', 'memory_evidence', 'memory_links', 'memory_conflicts',
         'memory_conflict_members', 'memory_content_keys', 'embedding_models',
+        'memory_embeddings_v1',
         'outbox_jobs', 'archive_targets', 'archive_export_checkpoints'
     ]
     LOOP
@@ -250,7 +251,7 @@ BEGIN
             );
         END IF;
     END LOOP;
-    FOREACH table_name IN ARRAY ARRAY['embedding_models', 'outbox_jobs']
+    FOREACH table_name IN ARRAY ARRAY['memory_embeddings_v1', 'outbox_jobs']
     LOOP
         IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
             EXECUTE format(
@@ -259,6 +260,9 @@ BEGIN
             );
         END IF;
     END LOOP;
+    IF pg_catalog.to_regclass('public.memory_embeddings_v1') IS NOT NULL THEN
+        GRANT DELETE ON TABLE public.memory_embeddings_v1 TO kivra_memory_worker;
+    END IF;
     IF pg_catalog.to_regclass('public.branches') IS NOT NULL THEN
         GRANT INSERT ON TABLE public.branches TO kivra_memory_worker;
     END IF;

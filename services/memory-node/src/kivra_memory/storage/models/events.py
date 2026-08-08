@@ -276,6 +276,14 @@ class MemoryEvent(Base):
         Index(
             "ix_memory_events_branch_sequence", "tenant_id", "lineage_id", "branch_id", "sequence"
         ),
+        Index(
+            "ix_memory_events_branch_created_at",
+            "tenant_id",
+            "lineage_id",
+            "branch_id",
+            "created_at",
+            "sequence",
+        ),
         Index("ix_memory_events_memory_sequence", "tenant_id", "memory_id", "sequence"),
         Index("ix_memory_events_correlation", "tenant_id", "correlation_id"),
         {"info": {TENANT_OWNED_INFO_KEY: True, "scalevault_immutable": True}},

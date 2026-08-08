@@ -28,6 +28,7 @@ from kivra_memory.storage.models.operations import (
     ArchiveExportCheckpoint,
     ArchiveTarget,
     EmbeddingModel,
+    MemoryEmbeddingV1,
     OutboxJob,
 )
 from kivra_memory.storage.models.projections import (
@@ -60,6 +61,7 @@ __all__ = [
     "MemoryConflict",
     "MemoryConflictMember",
     "MemoryContentKey",
+    "MemoryEmbeddingV1",
     "MemoryEvent",
     "MemoryEventCounter",
     "MemoryEvidence",
