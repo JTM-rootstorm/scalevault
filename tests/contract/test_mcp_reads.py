@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app
-from kivra_memory.api.mcp import ReadExecutor, ReadPrincipalResolver
+from kivra_memory.api.mcp import SERVER_INSTRUCTIONS, ReadExecutor, ReadPrincipalResolver
 from kivra_memory.application.status import (
     IngressStatusQuery,
     TransportStatusQuery,
@@ -284,7 +284,8 @@ async def test_production_discovery_lists_nine_reads_before_eight_mutations() ->
         initialized = await session.initialize()
         tools = (await session.list_tools()).tools
 
-    assert initialized.instructions is not None
+    assert initialized.serverInfo.name == "ScaleVault Memory Node"
+    assert initialized.instructions == SERVER_INSTRUCTIONS
     assert initialized.instructions.startswith(
         "Use this server as the authoritative shared continuity store for the Kivra persona."
     )

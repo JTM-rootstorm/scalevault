@@ -9,7 +9,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app
-from kivra_memory.api.mcp import SERVER_INSTRUCTIONS, MutationExecutor
+from kivra_memory.api.mcp import MutationExecutor
 from kivra_memory.config import Settings
 from kivra_memory.domain.commands import (
     DirectMutationCommand,
@@ -48,14 +48,6 @@ MutationOperation = Literal[
     "retire",
     "forget",
 ]
-INSTRUCTION_PREFIX = (
-    "Use this server as the authoritative shared continuity store for the Kivra persona. "
-    "Retrieve a context pack before continuity-sensitive work. Save only durable facts, "
-    "preferences, permissions, project decisions, recurring patterns, or meaningful episodic "
-    "anchors. Distinguish literal facts from roleplay and interpretations. Never overwrite "
-    "contradictions or store secrets. Mutations require idempotency keys and expected revisions "
-    "when updating existing memories."
-)
 
 
 def uid(value: int) -> UUID:
@@ -225,17 +217,6 @@ async def mcp_session(app: FastAPI) -> AsyncIterator[ClientSession]:
 def mutation_app(executor: MutationExecutor | None = None) -> FastAPI:
     settings = Settings(environment="test")
     return create_app(settings, mutation_executor=executor) if executor else create_app(settings)
-
-
-async def test_mutation_server_discovery_is_exact_and_self_contained() -> None:
-    async with mcp_session(mutation_app()) as session:
-        initialized = await session.initialize()
-        listed = await session.list_tools()
-
-    assert initialized.serverInfo.name == "ScaleVault Memory Node"
-    assert initialized.instructions == SERVER_INSTRUCTIONS
-    assert initialized.instructions.startswith(INSTRUCTION_PREFIX)
-    assert [tool.name for tool in listed.tools][-len(TOOL_NAMES) :] == TOOL_NAMES
 
 
 async def test_mutation_schemas_keep_identity_out_of_top_level_arguments() -> None:

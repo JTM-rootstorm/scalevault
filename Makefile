@@ -1,4 +1,4 @@
-.PHONY: bootstrap build build-go format generate generate-protobuf lint migrate-database test test-database test-database-required verify verify-generated verify-go verify-go-build verify-locks verify-plugin verify-protobuf verify-python verify-schemas
+.PHONY: bootstrap build build-go format generate generate-protobuf lint migrate-database test test-fast test-database test-database-required verify verify-generated verify-go verify-go-build verify-locks verify-plugin verify-protobuf verify-python verify-schemas
 
 UV_CACHE_DIR ?= .cache/uv
 GOCACHE ?= $(CURDIR)/.cache/go-build
@@ -41,6 +41,9 @@ test:
 	$(PYTHON) pytest
 	GOCACHE=$(GOCACHE) go test ./gen/relay/... ./services/memory-relay/... ./services/memory-node-agent/...
 	$(PNPM) --dir $(PLUGIN_DIR) test
+
+test-fast:
+	$(PYTHON) pytest -m "not database"
 
 test-database:
 	$(PYTHON) pytest tests/integration

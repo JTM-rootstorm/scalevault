@@ -54,6 +54,9 @@ packages = ["services/memory-node/src/kivra_memory"]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "database: provisions or controls a disposable PostgreSQL test environment",
+]
 
 [tool.ruff]
 target-version = "py313"
