@@ -78,8 +78,7 @@ def evaluate_promotion(
     observation_keys = {
         item.evidence_key
         for item in candidate.evidence
-        if item.kind is EvidenceKind.ASSISTANT_OBSERVATION
-        and item.trust is EvidenceTrust.TRUSTED
+        if item.kind is EvidenceKind.ASSISTANT_OBSERVATION and item.trust is EvidenceTrust.TRUSTED
     }
     if len(observation_keys) >= 2:
         return _decision(

@@ -50,9 +50,7 @@ class EpistemicQualifier(StrEnum):
     """Machine-readable limits that accompany human interpretation-limit prose."""
 
     ROLEPLAY_NOT_LITERAL = "roleplay_not_literal"
-    ASSISTANT_PATTERN_NOT_SUBJECTIVE_EXPERIENCE = (
-        "assistant_pattern_not_subjective_experience"
-    )
+    ASSISTANT_PATTERN_NOT_SUBJECTIVE_EXPERIENCE = "assistant_pattern_not_subjective_experience"
     SINGLE_EPISODE_NOT_STABLE_PATTERN = "single_episode_not_stable_pattern"
     SUBJECTIVE_EXPERIENCE_UNRESOLVED = "subjective_experience_unresolved"
     IMPORTED_SOURCE_UNRECONCILED = "imported_source_unreconciled"
@@ -180,9 +178,7 @@ class NominationProposal(PolicyModel):
     metadata: Annotated[dict[str, object], Field(max_length=128)]
     selection_basis: SelectionBasis
     epistemic_qualifiers: Annotated[tuple[EpistemicQualifier, ...], Field(max_length=16)]
-    evidence_references: Annotated[
-        tuple[NominationEvidenceReference, ...], Field(max_length=64)
-    ]
+    evidence_references: Annotated[tuple[NominationEvidenceReference, ...], Field(max_length=64)]
 
     @field_validator("subject_id", "origin_session_id")
     @classmethod
@@ -246,9 +242,9 @@ class SelectionRequest(PolicyModel):
     visibility: MemoryVisibility
     effective_authority_class: AuthorityClass
     content_signals: Annotated[frozenset[ContentSignal], Field(max_length=8)] = frozenset()
-    epistemic_qualifiers: Annotated[
-        frozenset[EpistemicQualifier], Field(max_length=16)
-    ] = frozenset()
+    epistemic_qualifiers: Annotated[frozenset[EpistemicQualifier], Field(max_length=16)] = (
+        frozenset()
+    )
     reason_to_remember: Annotated[str | None, Field(min_length=1, max_length=4096)] = None
     interpretation_limits: Annotated[
         tuple[Annotated[str, Field(min_length=1, max_length=1024)], ...], Field(max_length=32)
@@ -322,13 +318,9 @@ class SignalGuardrail(PolicyModel):
     rule_id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_.-]*$", max_length=128)]
     signal: ContentSignal
     allowed_categories: Annotated[tuple[MemoryCategory, ...], Field(min_length=1, max_length=16)]
-    allowed_ontologies: Annotated[
-        tuple[OntologicalStatus, ...], Field(min_length=1, max_length=8)
-    ]
+    allowed_ontologies: Annotated[tuple[OntologicalStatus, ...], Field(min_length=1, max_length=8)]
     allowed_scopes: Annotated[tuple[MemoryScope, ...], Field(min_length=1, max_length=6)]
-    allowed_visibilities: Annotated[
-        tuple[MemoryVisibility, ...], Field(min_length=1, max_length=4)
-    ]
+    allowed_visibilities: Annotated[tuple[MemoryVisibility, ...], Field(min_length=1, max_length=4)]
     required_qualifiers: Annotated[
         tuple[EpistemicQualifier, ...], Field(min_length=1, max_length=16)
     ]
