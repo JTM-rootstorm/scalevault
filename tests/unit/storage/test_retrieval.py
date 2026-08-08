@@ -98,3 +98,21 @@ async def test_vector_query_rejects_invalid_vectors_before_database_access(
     with pytest.raises(ValueError, match="query embedding"):
         await repository.vector_candidates(filters(), vector, 10)
     session.execute.assert_not_awaited()
+
+
+async def test_vector_query_binds_pgvector_compatible_list() -> None:
+    result = MagicMock()
+    result.all.return_value = []
+    session = MagicMock(spec=AsyncSession)
+    session.execute = AsyncMock(side_effect=(MagicMock(), result))
+    repository = RetrievalRepository(cast(AsyncSession, session))
+
+    assert await repository.vector_candidates(filters(), (1.0,) + (0.0,) * 383, 10) == ()
+
+    statement = session.execute.await_args_list[1].args[0]
+    compiled = statement.compile()
+    bound_vectors = [
+        value for value in compiled.params.values() if isinstance(value, list) and len(value) == 384
+    ]
+    assert len(bound_vectors) == 1
+    assert bound_vectors[0][0] == 1.0

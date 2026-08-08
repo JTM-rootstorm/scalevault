@@ -419,7 +419,7 @@ class RetrievalRepository:
         limit: int,
     ) -> tuple[RankedCandidate, ...]:
         result_limit = _bounded_limit(limit)
-        vector = tuple(float(value) for value in query_embedding)
+        vector = [float(value) for value in query_embedding]
         if len(vector) != 384 or any(not math.isfinite(value) for value in vector):
             raise ValueError("query embedding must contain exactly 384 finite values")
         if not any(value != 0 for value in vector):
