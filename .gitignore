@@ -24,6 +24,10 @@ dist/
 *.pem
 *.key
 
+# Private persona seed material is local-only. Keep only the warning README tracked.
+seeds/kivra-private/*
+!seeds/kivra-private/README.md
+
 # Editors and operating systems
 .idea/
 .vscode/
