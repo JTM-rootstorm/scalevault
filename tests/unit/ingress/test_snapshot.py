@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 from kivra_memory.ingress.snapshot import (
@@ -13,6 +15,7 @@ from kivra_memory.ingress.snapshot import (
     GenesisSnapshotSource,
     GitTreeEntry,
     ImportPlanManifest,
+    LocalGitObjectReader,
     ManifestError,
     PlannedImportRecord,
     SnapshotError,
@@ -155,6 +158,39 @@ def test_rejects_unknown_path_inside_ingress_tree_instead_of_silent_omission() -
 
     with pytest.raises(SnapshotError, match="unknown ingress source path"):
         GenesisSnapshotSource(reader).enumerate()
+
+
+def test_local_git_reader_reads_an_exact_commit_not_head(tmp_path: Path) -> None:
+    repository = tmp_path / "source"
+    repository.mkdir()
+
+    def git(*arguments: str) -> bytes:
+        return subprocess.run(
+            ("git", "-C", str(repository), *arguments),
+            check=True,
+            capture_output=True,
+        ).stdout
+
+    git("init", "-q")
+    git("config", "user.name", "Synthetic Test")
+    git("config", "user.email", "synthetic@example.invalid")
+    git("config", "commit.gpgsign", "false")
+    source = repository / "source.json"
+    pinned_raw = b'{"synthetic":"pinned"}\n'
+    source.write_bytes(pinned_raw)
+    git("add", "source.json")
+    git("commit", "-q", "-m", "pinned")
+    pinned_commit = git("rev-parse", "HEAD").decode().strip()
+
+    source.write_bytes(b'{"synthetic":"post-pin"}\n')
+    git("commit", "-q", "-am", "post-pin")
+
+    reader = LocalGitObjectReader(repository)
+    entries = reader.list_tree(pinned_commit)
+
+    assert reader.resolve_commit(pinned_commit) == pinned_commit
+    assert entries == (GitTreeEntry(path="source.json", blob_sha=_blob_sha(pinned_raw)),)
+    assert reader.read_blob(entries[0].blob_sha) == pinned_raw
 
 
 def _source_item(
