@@ -2,7 +2,7 @@
 
 - Review date: 2026-08-08 (America/Chicago)
 - Status: Complete within the staged authentication boundary
-- Accepted implementation source: `43f1f68`
+- Accepted implementation source: `071a8e6`
 
 This checklist separates repository verification, disposable PostgreSQL 17 and
 pgvector acceptance, the local embedding artifact, and the canonical Memory
@@ -43,12 +43,17 @@ Biome, and the plugin privacy test all passed.
 
 The authoritative database lane ran as `postgres` with
 `SCALEVAULT_REQUIRE_DATABASE_TESTS=1`, PostgreSQL 17.10, and pgvector. Source and
-the 333 MiB locked virtual environment remained on the LXC main disk under:
+the 333 MiB locked virtual environment remained on the LXC main disk under the
+pre-sign staging identifier:
 
 ```text
 /opt/kivra-memory/releases/43f1f68-m4
 /opt/kivra-memory/releases/687e5e2f382a-m4/.venv
 ```
+
+The staged source tree is byte-identical to signed implementation commit
+`071a8e6`; signing changed commit identity after live acceptance without
+changing its tree.
 
 Disposable cluster data, model downloads, and retained JUnit evidence remained
 on the network share under:
@@ -60,8 +65,8 @@ on the network share under:
 The first 48-case migration, privilege, retrieval, status, and worker run
 passed 47 cases and exposed a real query-boundary defect: the pgvector adapter
 requires a list or NumPy array, while the storage repository bound an immutable
-tuple. Commit `48d7d53` converts only the database-bound value and adds a
-regression. A later assertion was corrected in `08d1135` to distinguish an
+tuple. Commit `6cec223` converts only the database-bound value and adds a
+regression. A later assertion was corrected in `04eba2e` to distinguish an
 eligible nearest neighbor with zero cosine similarity from a stale vector.
 
 The corrected embedding lifecycle passed in 67.98 seconds. The remaining three
@@ -99,7 +104,7 @@ loaded ONNX Runtime 1.28.0 with only `CPUExecutionProvider`, and embedded the
 same synthetic statement twice. It produced a 384-dimensional vector with norm
 `0.9999999660636719`, maximum repeat delta `0.0`, and no truncation. The live
 NFS run also exposed and fixed an unconditional redundant `chown`; commit
-`43f1f68` now preserves an already inherited group without asking a
+`071a8e6` now preserves an already inherited group without asking a
 root-squashed share to change ownership.
 
 Runtime evidence is retained at:
@@ -122,5 +127,6 @@ read and mutation executors therefore continue to fail closed with structured
 `dependency_unavailable` responses.
 
 No canonical database migration, synthetic canonical memory, application
-symlink switch, service restart, service enablement, commit signing, or push was
-performed for this milestone.
+symlink switch, service restart, or service enablement was performed for this
+milestone. The accepted repository commits were signed and pushed only after
+live validation completed.
