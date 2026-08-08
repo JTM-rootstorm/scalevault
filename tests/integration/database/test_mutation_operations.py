@@ -307,7 +307,7 @@ async def test_all_non_create_operations_commit_atomic_projection_receipt_and_ou
             assert await _count(session, MemoryLink) == 1
             assert await _count(session, MemoryConflict) == 1
             assert await _count(session, MemoryConflictMember) == 2
-            assert await _count(session, OutboxJob) == 22
+            assert await _count(session, OutboxJob) == 29
 
             stored_memories = {
                 row.memory_id: row for row in (await session.scalars(select(Memory))).all()
@@ -370,7 +370,9 @@ async def test_all_non_create_operations_commit_atomic_projection_receipt_and_ou
                     )
                 )
             ).all()
-            create_payloads = {(row.job_type, row.aggregate_id): row.payload for row in create_jobs}
+            create_payloads = [
+                (row.job_type, row.aggregate_id, row.payload) for row in create_jobs
+            ]
             for result in created:
                 assert result.memory_id is not None
                 expected_references = {
@@ -378,10 +380,31 @@ async def test_all_non_create_operations_commit_atomic_projection_receipt_and_ou
                     "memory_id": str(result.memory_id),
                     "memory_version": 1,
                 }
-                assert create_payloads[("embed_memory", result.memory_id)] == expected_references
+                assert ("embed_memory", result.memory_id, expected_references) in create_payloads
                 assert (
-                    create_payloads[("check_duplicates", result.memory_id)] == expected_references
+                    "check_duplicates",
+                    result.memory_id,
+                    expected_references,
+                ) in create_payloads
+
+            embed_targets = {
+                (
+                    row.aggregate_id,
+                    cast(int, row.payload["memory_version"]),
+                    UUID(cast(str, row.payload["event_id"])),
                 )
+                for row in create_jobs
+                if row.job_type == "embed_memory"
+            }
+            assert {
+                (memory_ids[0], 2, opened.event_id),
+                (memory_ids[1], 2, opened.event_id),
+                (memory_ids[0], 3, resolved.event_id),
+                (memory_ids[1], 3, resolved.event_id),
+                (memory_ids[2], 2, retired.event_id),
+                (memory_ids[3], 2, logically_forgotten.event_id),
+                (memory_ids[4], 2, hard_forgotten.event_id),
+            } <= embed_targets
 
             purge_job = await session.scalar(
                 select(OutboxJob).where(OutboxJob.job_type == "purge_payload")

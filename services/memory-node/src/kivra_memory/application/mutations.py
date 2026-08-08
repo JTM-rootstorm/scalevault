@@ -329,7 +329,10 @@ class MutationEngine:
         aggregate_id = new_uuid7()
         correlation_id = new_uuid7()
         created_at = datetime.now(UTC)
-        job_ids = tuple(new_uuid7() for _ in range(4))
+        # Conflict commands can revise 32 memories. Allocate every possible
+        # side-effect identity before the retry loop so retries cannot change
+        # a logical job's UUID.
+        job_ids = tuple(new_uuid7() for _ in range(34))
 
         async def attempt(session: AsyncSession) -> MutationResult:
             return await self._attempt(
@@ -546,6 +549,7 @@ class MutationEngine:
             principal=principal,
             command=command,
             event=event,
+            payload=payload,
             result=result,
             job_ids=job_ids,
         )
@@ -999,45 +1003,13 @@ class MutationEngine:
         principal: CommandPrincipal,
         command: DirectMutationCommand,
         event: MemoryEvent,
+        payload: OperationPayload,
         result: MutationResult,
         job_ids: tuple[UUID, ...],
     ) -> None:
-        jobs: list[tuple[str, str, UUID | None, dict[str, UUID | int]]] = []
-        if isinstance(command, ObserveCommand | RememberCommand):
-            assert result.memory_id is not None and result.revision is not None
-            references: dict[str, UUID | int] = {
-                "memory_id": result.memory_id,
-                "memory_version": result.revision,
-                "event_id": event.event_id,
-            }
-            jobs.extend(
-                (
-                    ("embed_memory", "memory", result.memory_id, references),
-                    ("check_duplicates", "memory", result.memory_id, references),
-                )
-            )
-        jobs.append(
-            (
-                "export_git_batch",
-                "event",
-                event.event_id,
-                {"event_id": event.event_id, "event_sequence": event.sequence},
-            )
-        )
-        if isinstance(command, ForgetCommand) and command.mode == "hard":
-            assert result.memory_id is not None and result.revision is not None
-            jobs.append(
-                (
-                    "purge_payload",
-                    "memory",
-                    result.memory_id,
-                    {
-                        "memory_id": result.memory_id,
-                        "memory_version": result.revision,
-                        "event_id": event.event_id,
-                    },
-                )
-            )
+        jobs = _scheduled_jobs(command=command, event=event, payload=payload, result=result)
+        if len(jobs) > len(job_ids):
+            raise ValueError("preallocated outbox job identities are exhausted")
         for job_id, (job_type, aggregate_type, aggregate_id, references) in zip(
             job_ids, jobs, strict=False
         ):
@@ -1050,3 +1022,70 @@ class MutationEngine:
                 references=references,
                 job_uuid=job_id,
             )
+
+
+type _JobSpec = tuple[str, str, UUID | None, dict[str, UUID | int]]
+
+
+def _memory_after_images(payload: OperationPayload) -> tuple[MemoryState, ...]:
+    if isinstance(payload, MemoryCreatedPayload | MemoryTransitionPayload):
+        return (payload.memory,)
+    if isinstance(payload, ConflictOpenedPayload | ConflictResolvedPayload):
+        return tuple(
+            affected.memory
+            for affected in sorted(
+                payload.affected_memories, key=lambda item: str(item.memory.memory_id)
+            )
+        )
+    return ()
+
+
+def _revise_changes_fingerprint(command: ReviseCommand) -> bool:
+    return bool(
+        command.changes.model_fields_set
+        & {"statement", "category", "ontological_status", "interpretation_limits"}
+    )
+
+
+def _scheduled_jobs(
+    *,
+    command: DirectMutationCommand,
+    event: MemoryEvent,
+    payload: OperationPayload,
+    result: MutationResult,
+) -> list[_JobSpec]:
+    jobs: list[_JobSpec] = []
+    for memory in _memory_after_images(payload):
+        references: dict[str, UUID | int] = {
+            "memory_id": memory.memory_id,
+            "memory_version": memory.revision,
+            "event_id": event.event_id,
+        }
+        jobs.append(("embed_memory", "memory", memory.memory_id, references))
+        if isinstance(command, ObserveCommand | RememberCommand) or (
+            isinstance(command, ReviseCommand) and _revise_changes_fingerprint(command)
+        ):
+            jobs.append(("check_duplicates", "memory", memory.memory_id, references))
+    jobs.append(
+        (
+            "export_git_batch",
+            "event",
+            event.event_id,
+            {"event_id": event.event_id, "event_sequence": event.sequence},
+        )
+    )
+    if isinstance(command, ForgetCommand) and command.mode == "hard":
+        assert result.memory_id is not None and result.revision is not None
+        jobs.append(
+            (
+                "purge_payload",
+                "memory",
+                result.memory_id,
+                {
+                    "memory_id": result.memory_id,
+                    "memory_version": result.revision,
+                    "event_id": event.event_id,
+                },
+            )
+        )
+    return jobs

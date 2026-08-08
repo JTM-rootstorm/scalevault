@@ -10,12 +10,16 @@ import pytest
 from kivra_memory.application import CommandPrincipal, MutationEngine
 from kivra_memory.application import mutations as mutations_module
 from kivra_memory.domain.commands import (
+    ForgetCommand,
     LinkCommand,
     MemoryChanges,
     MemoryInput,
     MutationResult,
     ObserveCommand,
+    OpenConflictCommand,
     RememberCommand,
+    ResolveConflictCommand,
+    RetireCommand,
     ReviseCommand,
 )
 from kivra_memory.domain.enums import (
@@ -28,7 +32,18 @@ from kivra_memory.domain.enums import (
     OntologicalStatus,
     SubjectKind,
 )
-from kivra_memory.domain.events import MemoryState
+from kivra_memory.domain.events import (
+    AffectedMemory,
+    ConflictMemberState,
+    ConflictOpenedPayload,
+    ConflictResolvedPayload,
+    ConflictState,
+    MemoryCreatedPayload,
+    MemoryEvent,
+    MemoryState,
+    MemoryTransitionPayload,
+    TombstonedPayload,
+)
 from kivra_memory.domain.identifiers import new_uuid7
 from pydantic import ValidationError
 
@@ -303,6 +318,165 @@ async def test_retry_callback_reuses_attempt_identity_and_timestamp(
     assert response == result()
     assert len(identities) == 2
     assert identities[0] == identities[1]
+    job_ids = cast(tuple[UUID, ...], identities[0][-1])
+    assert len(job_ids) == 34
+    assert len(set(job_ids)) == 34
+
+
+def _job_event() -> MemoryEvent:
+    event = MagicMock(spec=MemoryEvent)
+    event.event_id = uid(80)
+    event.sequence = 17
+    return cast(MemoryEvent, event)
+
+
+def _mock_command(command_type: type[Any], **values: object) -> Any:
+    command = MagicMock(spec=command_type)
+    for name, value in values.items():
+        setattr(command, name, value)
+    return command
+
+
+def _job_types(
+    command_value: Any,
+    payload: Any,
+    *,
+    mutation_result: MutationResult | None = None,
+) -> list[str]:
+    scheduled = mutations_module._scheduled_jobs(
+        command=command_value,
+        event=_job_event(),
+        payload=payload,
+        result=mutation_result or result(),
+    )
+    return [job_type for job_type, _, _, _ in scheduled]
+
+
+def test_create_and_revision_duplicate_scheduling_is_content_sensitive() -> None:
+    created = memory().model_copy(update={"revision": 1})
+    create_payload = MemoryCreatedPayload(memory=created)
+    assert _job_types(
+        _mock_command(RememberCommand), create_payload
+    ) == ["embed_memory", "check_duplicates", "export_git_batch"]
+
+    revised = memory().model_copy(update={"revision": 4})
+    revision_payload = MemoryTransitionPayload(previous_revision=3, memory=revised)
+    content_revision = _mock_command(
+        ReviseCommand,
+        changes=MemoryChanges(statement="A changed semantic statement."),
+    )
+    metadata_revision = _mock_command(
+        ReviseCommand,
+        changes=MemoryChanges(metadata={"reviewed": True}),
+    )
+    assert _job_types(content_revision, revision_payload) == [
+        "embed_memory",
+        "check_duplicates",
+        "export_git_batch",
+    ]
+    assert _job_types(metadata_revision, revision_payload) == [
+        "embed_memory",
+        "export_git_batch",
+    ]
+
+
+@pytest.mark.parametrize("terminal_type", [RetireCommand, ForgetCommand])
+def test_terminal_revisions_always_schedule_embedding_cleanup(
+    terminal_type: type[RetireCommand] | type[ForgetCommand],
+) -> None:
+    terminal = memory().model_copy(update={"revision": 4, "status": MemoryStatus.TOMBSTONED})
+    payload = TombstonedPayload(
+        previous_revision=3,
+        memory=terminal.model_copy(
+            update={
+                "statement": None,
+                "reason_to_remember": None,
+                "interpretation_limits": (),
+                "normalized_fingerprint": None,
+                "metadata": {},
+            }
+        ),
+        forget_mode="hard",
+    )
+    command_value = _mock_command(terminal_type, mode="hard")
+    scheduled = mutations_module._scheduled_jobs(
+        command=command_value,
+        event=_job_event(),
+        payload=payload,
+        result=result().model_copy(update={"memory_id": uid(7), "revision": 4}),
+    )
+    job_types = [job_type for job_type, _, _, _ in scheduled]
+
+    assert job_types[0] == "embed_memory"
+    assert job_types.count("export_git_batch") == 1
+    assert job_types.count("purge_payload") == (1 if terminal_type is ForgetCommand else 0)
+    assert scheduled[0][3] == {
+        "memory_id": uid(7),
+        "memory_version": 4,
+        "event_id": uid(80),
+    }
+
+
+def _conflict_payload(*, resolved: bool) -> ConflictOpenedPayload | ConflictResolvedPayload:
+    first = memory().model_copy(
+        update={"memory_id": uid(71), "revision": 4, "status": MemoryStatus.DISPUTED}
+    )
+    second = memory().model_copy(
+        update={"memory_id": uid(70), "revision": 6, "status": MemoryStatus.DISPUTED}
+    )
+    conflict_id = uid(72)
+    conflict = ConflictState(
+        conflict_id=conflict_id,
+        tenant_id=uid(1),
+        lineage_id=uid(8),
+        branch_id=uid(6),
+        subject_id=uid(9),
+        status="resolved" if resolved else "open",
+        reason="Synthetic conflict scheduling fixture.",
+        resolution_kind="explicit_user_resolution" if resolved else None,
+        resolution_rationale="Synthetic resolution." if resolved else None,
+        opened_at=NOW,
+        resolved_at=NOW if resolved else None,
+        metadata={},
+    )
+    members = tuple(
+        ConflictMemberState(
+            conflict_id=conflict_id,
+            memory_id=item.memory_id,
+            disposition="retained" if resolved else "disputed",
+            joined_at=NOW,
+        )
+        for item in (first, second)
+    )
+    affected = (
+        AffectedMemory(previous_revision=3, memory=first),
+        AffectedMemory(previous_revision=5, memory=second),
+    )
+    payload_type = ConflictResolvedPayload if resolved else ConflictOpenedPayload
+    return payload_type(conflict=conflict, members=members, affected_memories=affected)
+
+
+@pytest.mark.parametrize(
+    ("command_type", "resolved"),
+    [(OpenConflictCommand, False), (ResolveConflictCommand, True)],
+)
+def test_conflict_state_changes_schedule_every_after_image_in_stable_order(
+    command_type: type[OpenConflictCommand] | type[ResolveConflictCommand], resolved: bool
+) -> None:
+    scheduled = mutations_module._scheduled_jobs(
+        command=_mock_command(command_type),
+        event=_job_event(),
+        payload=_conflict_payload(resolved=resolved),
+        result=result(),
+    )
+
+    assert [job_type for job_type, _, _, _ in scheduled] == [
+        "embed_memory",
+        "embed_memory",
+        "export_git_batch",
+    ]
+    assert [job[2] for job in scheduled[:2]] == [uid(70), uid(71)]
+    assert [job[3]["memory_version"] for job in scheduled[:2]] == [6, 4]
 
 
 def test_safe_error_mapping_contains_no_exception_or_command_content() -> None:

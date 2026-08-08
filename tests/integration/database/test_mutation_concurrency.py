@@ -236,7 +236,7 @@ async def test_concurrent_revisions_have_one_winner_and_no_lost_update(
             assert row.statement in {
                 f"Synthetic winning revision candidate {index}." for index in range(16)
             }
-        assert await _counts(database) == (2, 1, 2, 4)
+        assert await _counts(database) == (2, 1, 2, 6)
 
 
 async def test_concurrent_same_command_replays_one_atomic_result(
