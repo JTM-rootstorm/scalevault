@@ -12,7 +12,7 @@ from typing import cast
 from uuid import UUID
 
 from sqlalchemy import select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.domain.events import (
@@ -49,6 +49,12 @@ from kivra_memory.storage.projector import (
     memory_row_to_state,
     memory_state_to_row,
 )
+from kivra_memory.storage.transactions import database_sqlstate
+
+
+def _raise_serialization_failure(error: SQLAlchemyError) -> None:
+    if isinstance(error, DBAPIError) and database_sqlstate(error) == "40001":
+        raise error
 
 
 def _sorted_ids(values: Iterable[UUID]) -> tuple[UUID, ...]:
@@ -189,7 +195,8 @@ async def load_projection_state_for_update(
         member_states = {
             (row.conflict_id, row.memory_id): conflict_member_row_to_state(row) for row in members
         }
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
+        _raise_serialization_failure(error)
         raise ProjectionPersistenceError("live_projection_load_failed") from None
     except (TypeError, ValueError):
         raise ProjectionPersistenceError("invalid_live_projection") from None
@@ -351,5 +358,6 @@ async def stage_live_projection(
                     )
                 )
         await session.flush()
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
+        _raise_serialization_failure(error)
         raise ProjectionPersistenceError("live_projection_write_failed") from None

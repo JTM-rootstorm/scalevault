@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import timedelta
 from typing import cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from kivra_memory.domain.enums import EventOperation, LinkType, MemoryStatus
@@ -25,7 +26,9 @@ from kivra_memory.storage.live_projection import (
     validate_live_event,
 )
 from kivra_memory.storage.models import Memory, MemoryEvidence, MemoryLink
-from kivra_memory.storage.projector import memory_state_to_row
+from kivra_memory.storage.projector import ProjectionPersistenceError, memory_state_to_row
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Update
 from sqlalchemy.sql.selectable import Select
 from test_projector import (  # type: ignore[import-not-found]
@@ -58,6 +61,16 @@ class _Result:
             return None
         assert len(self.rows) == 1
         return self.rows[0]
+
+
+class PostgreSQLError(Exception):
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__("content-bearing database detail")
+        self.sqlstate = sqlstate
+
+
+def database_error(sqlstate: str) -> DBAPIError:
+    return DBAPIError("private statement", {}, PostgreSQLError(sqlstate), False)
 
 
 class _Session:
@@ -400,3 +413,78 @@ async def test_tombstone_loads_active_evidence_so_canonical_fold_rejects_it() ->
     evidence_sql = str(session.statements[1])
     assert "ORDER BY memory_evidence.evidence_id" in evidence_sql
     assert "FOR UPDATE" in evidence_sql
+
+
+async def test_projection_load_serialization_failure_propagates_for_retry() -> None:
+    expected = database_error("40001")
+    raw = Mock(spec=AsyncSession)
+    raw.in_transaction = Mock(return_value=True)
+    raw.execute = AsyncMock(side_effect=expected)
+
+    with pytest.raises(DBAPIError) as caught:
+        await load_projection_state_for_update(
+            cast(AsyncSession, raw),
+            event=_direct_cases()[1][2],
+            branch=_branch_state(),
+        )
+
+    assert caught.value is expected
+
+
+async def test_projection_write_serialization_failure_propagates_for_retry() -> None:
+    before, event = _direct_cases()[1][1:3]
+    after = validate_live_event(before, event)
+    expected = database_error("40001")
+    raw = Mock(spec=AsyncSession)
+    raw.in_transaction = Mock(return_value=True)
+    raw.add = Mock()
+    raw.flush = AsyncMock(side_effect=expected)
+
+    with pytest.raises(DBAPIError) as caught:
+        await stage_live_projection(
+            cast(AsyncSession, raw),
+            before=before,
+            after=after,
+            event=event,
+        )
+
+    assert caught.value is expected
+
+
+@pytest.mark.parametrize("sqlstate", ["40P01", "23505", "08006"])
+async def test_projection_load_non_serialization_failure_is_sanitized(sqlstate: str) -> None:
+    raw = Mock(spec=AsyncSession)
+    raw.in_transaction = Mock(return_value=True)
+    raw.execute = AsyncMock(side_effect=database_error(sqlstate))
+
+    with pytest.raises(ProjectionPersistenceError) as caught:
+        await load_projection_state_for_update(
+            cast(AsyncSession, raw),
+            event=_direct_cases()[1][2],
+            branch=_branch_state(),
+        )
+
+    assert str(caught.value) == "live_projection_load_failed"
+    assert "private statement" not in repr(caught.value)
+    assert caught.value.__suppress_context__ is True
+
+
+async def test_projection_write_non_serialization_failure_is_sanitized() -> None:
+    before, event = _direct_cases()[1][1:3]
+    after = validate_live_event(before, event)
+    raw = Mock(spec=AsyncSession)
+    raw.in_transaction = Mock(return_value=True)
+    raw.add = Mock()
+    raw.flush = AsyncMock(side_effect=database_error("23505"))
+
+    with pytest.raises(ProjectionPersistenceError) as caught:
+        await stage_live_projection(
+            cast(AsyncSession, raw),
+            before=before,
+            after=after,
+            event=event,
+        )
+
+    assert str(caught.value) == "live_projection_write_failed"
+    assert "private statement" not in repr(caught.value)
+    assert caught.value.__suppress_context__ is True

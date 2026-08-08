@@ -19,7 +19,7 @@ from typing import Never
 
 from pydantic import ValidationError
 from sqlalchemy import and_, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.domain.constraints import MemoryConstraintContext, validate_memory_constraints
@@ -48,6 +48,7 @@ from kivra_memory.storage.models.identity import (
     TransportBinding,
     TransportInstallation,
 )
+from kivra_memory.storage.transactions import database_sqlstate
 
 EventBuilder = Callable[[int], MemoryEvent]
 
@@ -354,5 +355,7 @@ async def append_memory_event(session: AsyncSession, builder: EventBuilder) -> M
         return await _append_memory_event(session, builder)
     except EventStoreError:
         raise
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
+        if isinstance(error, DBAPIError) and database_sqlstate(error) == "40001":
+            raise
         raise EventStoreError("event_store_unavailable", "event store operation failed") from None

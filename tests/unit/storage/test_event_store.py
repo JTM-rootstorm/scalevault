@@ -32,10 +32,20 @@ from kivra_memory.storage.event_store import EventStoreError, append_memory_even
 from kivra_memory.storage.models.events import IngressItem, MemoryEventCounter
 from kivra_memory.storage.models.events import MemoryEvent as MemoryEventRow
 from kivra_memory.storage.models.identity import TransportBinding
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 NOW = datetime(2026, 8, 3, 20, 0, tzinfo=UTC)
+
+
+class PostgreSQLError(Exception):
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__("content-bearing database detail")
+        self.sqlstate = sqlstate
+
+
+def database_error(sqlstate: str) -> DBAPIError:
+    return DBAPIError("private statement", {}, PostgreSQLError(sqlstate), False)
 
 
 def uid(value: int) -> UUID:
@@ -627,4 +637,42 @@ async def test_database_failure_is_rendered_as_safe_typed_error() -> None:
 
     assert caught.value.code == "event_store_unavailable"
     assert "private details" not in str(caught.value)
+    assert caught.value.__suppress_context__ is True
+
+
+async def test_counter_serialization_failure_propagates_for_transaction_retry() -> None:
+    expected = database_error("40001")
+    raw = Mock(spec=AsyncSession)
+    raw.execute = AsyncMock(side_effect=expected)
+    session = cast(AsyncSession, raw)
+
+    with pytest.raises(DBAPIError) as caught:
+        await append_memory_event(session, make_event)
+
+    assert caught.value is expected
+
+
+async def test_flush_serialization_failure_propagates_for_transaction_retry() -> None:
+    counter = MemoryEventCounter(counter_id=1, next_sequence=1)
+    session, raw = fake_session(counter, binding())
+    expected = database_error("40001")
+    raw.flush.side_effect = expected
+
+    with pytest.raises(DBAPIError) as caught:
+        await append_memory_event(session, make_event)
+
+    assert caught.value is expected
+
+
+@pytest.mark.parametrize("sqlstate", ["40P01", "23505", "08006"])
+async def test_non_serialization_dbapi_failure_is_sanitized(sqlstate: str) -> None:
+    raw = Mock(spec=AsyncSession)
+    raw.execute = AsyncMock(side_effect=database_error(sqlstate))
+    session = cast(AsyncSession, raw)
+
+    with pytest.raises(EventStoreError) as caught:
+        await append_memory_event(session, make_event)
+
+    assert caught.value.code == "event_store_unavailable"
+    assert "private statement" not in str(caught.value)
     assert caught.value.__suppress_context__ is True
