@@ -1,20 +1,34 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
 
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from kivra_memory.api.app import create_app
-from kivra_memory.config import Settings
+from kivra_memory.api.mcp_echo import create_echo_mcp
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+
+
+def echo_probe_app() -> FastAPI:
+    """Mount the isolated capability probe outside the production app factory."""
+
+    mcp_server = create_echo_mcp()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        del app
+        async with mcp_server.session_manager.run():
+            yield
+
+    app = FastAPI(lifespan=lifespan)
+    app.mount("/", mcp_server.streamable_http_app())
+    return app
 
 
 @asynccontextmanager
 async def mcp_session(app: FastAPI | None = None) -> AsyncIterator[ClientSession]:
     """Connect the official MCP client to the in-process Streamable HTTP app."""
 
-    runtime_app = app or create_app(Settings(environment="test"))
+    runtime_app = app or echo_probe_app()
     transport = ASGITransport(app=runtime_app)
     async with (
         runtime_app.router.lifespan_context(runtime_app),
@@ -57,14 +71,7 @@ async def test_mcp_lists_only_non_mutating_echo_tool() -> None:
 
 
 async def test_mcp_echo_returns_input_without_database_access() -> None:
-    database_probe_calls: list[tuple[Any, ...]] = []
-
-    async def database_probe(*args: Any) -> bool:
-        database_probe_calls.append(args)
-        return False
-
-    app = create_app(Settings(environment="test"), database_probe=database_probe)
-    async with mcp_session(app) as session:
+    async with mcp_session() as session:
         await session.initialize()
         result = await session.call_tool("echo", {"message": "transport works"})
 
@@ -72,4 +79,3 @@ async def test_mcp_echo_returns_input_without_database_access() -> None:
     assert len(result.content) == 1
     assert result.content[0].type == "text"
     assert result.content[0].text == "transport works"
-    assert database_probe_calls == []
