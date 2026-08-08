@@ -15,9 +15,30 @@ from kivra_memory.policy import (
     LifecycleAction,
     LifecycleReasonCode,
     SelectionBasis,
+    content_signals_from_rule_ids,
     evaluate_expiry,
     evaluate_promotion,
 )
+
+
+def test_content_signals_reconstruct_only_exact_canonical_guardrail_rule_ids() -> None:
+    signals = content_signals_from_rule_ids(
+        (
+            "guardrail.roleplayed_scene",
+            "guardrail.assistant_preference_like",
+            "guardrail.subjective_experience_claim",
+            "basis.subjective_experience_claim",
+            "guardrail.roleplayish_but_not_canonical",
+        )
+    )
+
+    assert signals == frozenset(
+        {
+            ContentSignal.ROLEPLAYED_SCENE,
+            ContentSignal.ASSISTANT_PREFERENCE_LIKE,
+            ContentSignal.SUBJECTIVE_EXPERIENCE_CLAIM,
+        }
+    )
 
 
 def evidence(

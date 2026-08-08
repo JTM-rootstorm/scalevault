@@ -133,7 +133,10 @@ async def load_projection_state_for_update(
                 .with_for_update()
             )
             evidence = list(cast(Sequence[MemoryEvidence], result.scalars().all()))
-        elif isinstance(typed_payload, CandidateLifecyclePayload) and typed_payload.evidence:
+        elif (
+            isinstance(typed_payload, MemoryCreatedPayload | CandidateLifecyclePayload)
+            and typed_payload.evidence
+        ):
             evidence_ids = _sorted_ids(item.evidence_id for item in typed_payload.evidence)
             result = await session.execute(
                 select(MemoryEvidence)
@@ -304,7 +307,7 @@ async def stage_live_projection(
                     .values(**values)
                 )
 
-        if isinstance(payload, CandidateLifecyclePayload):
+        if isinstance(payload, MemoryCreatedPayload | CandidateLifecyclePayload):
             for evidence in payload.evidence:
                 if evidence.evidence_id in before.evidence:
                     raise ProjectionPersistenceError("duplicate_evidence_after_image")

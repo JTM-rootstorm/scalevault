@@ -203,6 +203,9 @@ BEGIN
             );
         END IF;
     END LOOP;
+    IF pg_catalog.to_regclass('public.memory_evidence') IS NOT NULL THEN
+        GRANT INSERT ON TABLE public.memory_evidence TO kivra_memory_api;
+    END IF;
     FOREACH table_name IN ARRAY ARRAY[
         'memories', 'memory_links', 'memory_conflicts',
         'memory_conflict_members'

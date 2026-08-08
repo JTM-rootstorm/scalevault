@@ -15,6 +15,7 @@ from kivra_memory.domain.events import (
     LinkedPayload,
     LinkState,
     MemoryCreatedPayload,
+    MemoryCreatedPayloadV2,
     MemoryEvent,
     MemoryState,
     MemoryStateV2,
@@ -389,6 +390,75 @@ async def test_candidate_promotion_locks_and_stages_policy_evidence() -> None:
         if isinstance(statement, Select) and "memory_evidence" in str(statement)
     )
     assert "FOR UPDATE" in str(evidence_select)
+
+
+@pytest.mark.asyncio
+async def test_created_memory_locks_and_stages_initial_evidence() -> None:
+    created = memory_state()
+    created_v2 = MemoryStateV2.model_validate(
+        {**created.model_dump(mode="python"), "candidate_expires_at": None}
+    )
+    item = evidence_state(uid(50), created.memory_id)
+    event = make_event(
+        sequence=2,
+        operation=EventOperation.REMEMBERED,
+        payload=MemoryCreatedPayloadV2(memory=created_v2, evidence=(item,)),
+        memory_id=created.memory_id,
+        schema_version=2,
+        payload_version=2,
+    )
+    session = _Session({Memory: (), MemoryEvidence: ()})
+
+    before = await load_projection_state_for_update(
+        cast(object, session),  # type: ignore[arg-type]
+        event=event,
+        branch=_branch_state(),
+    )
+    after = validate_live_event(before, event)
+    await stage_live_projection(
+        cast(object, session),  # type: ignore[arg-type]
+        before=before,
+        after=after,
+        event=event,
+    )
+
+    staged = [row for row in session.added if isinstance(row, MemoryEvidence)]
+    assert len(staged) == 1
+    assert staged[0].evidence_id == item.evidence_id
+    assert staged[0].source_event_id == event.event_id
+    evidence_select = next(
+        statement
+        for statement in session.statements
+        if isinstance(statement, Select) and "memory_evidence" in str(statement)
+    )
+    assert "FOR UPDATE" in str(evidence_select)
+
+
+@pytest.mark.asyncio
+async def test_created_memory_does_not_stage_duplicate_evidence_after_image() -> None:
+    created = memory_state()
+    item = evidence_state(uid(50), created.memory_id)
+    event = make_event(
+        sequence=2,
+        operation=EventOperation.REMEMBERED,
+        payload=MemoryCreatedPayload(memory=created, evidence=(item,)),
+        memory_id=created.memory_id,
+    )
+    clean_before = _base_state()
+    after = validate_live_event(clean_before, event)
+    duplicate_before = ProjectionState(
+        sequence=clean_before.sequence,
+        evidence={item.evidence_id: item},
+        branches=clean_before.branches,
+    )
+
+    with pytest.raises(ProjectionPersistenceError, match="duplicate_evidence_after_image"):
+        await stage_live_projection(
+            cast(object, _Session()),  # type: ignore[arg-type]
+            before=duplicate_before,
+            after=after,
+            event=event,
+        )
 
 
 @pytest.mark.asyncio

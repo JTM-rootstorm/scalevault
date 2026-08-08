@@ -309,8 +309,8 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
         (
             "kivra_memory_api",
             "memory_evidence",
-            "SELECT",
-            "INSERT,UPDATE,DELETE,TRUNCATE",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
         ),
         (
             "kivra_memory_policy",

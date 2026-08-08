@@ -21,7 +21,11 @@ from kivra_memory.policy.contracts import (
     SelectionRequest,
 )
 from kivra_memory.policy.evaluator import evaluate_selection
-from kivra_memory.policy.lifecycle import evaluate_expiry, evaluate_promotion
+from kivra_memory.policy.lifecycle import (
+    content_signals_from_rule_ids,
+    evaluate_expiry,
+    evaluate_promotion,
+)
 from kivra_memory.policy.loader import (
     SELECTION_V1,
     SELECTION_V1_PROFILE,
@@ -53,6 +57,7 @@ __all__ = [
     "SelectionBasis",
     "SelectionPolicyProfile",
     "SelectionRequest",
+    "content_signals_from_rule_ids",
     "evaluate_expiry",
     "evaluate_promotion",
     "evaluate_selection",

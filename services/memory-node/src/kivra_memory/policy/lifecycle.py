@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from kivra_memory.domain.enums import MemoryStatus
 from kivra_memory.policy.contracts import (
     CandidateLifecycleState,
@@ -15,6 +17,28 @@ from kivra_memory.policy.contracts import (
     SelectionBasis,
 )
 from kivra_memory.policy.loader import SELECTION_V1, LoadedSelectionPolicy
+
+_CONTENT_SIGNALS_BY_RULE_ID: dict[str, ContentSignal] = {
+    "guardrail.roleplayed_scene": ContentSignal.ROLEPLAYED_SCENE,
+    "guardrail.assistant_preference_like": ContentSignal.ASSISTANT_PREFERENCE_LIKE,
+    "guardrail.subjective_experience_claim": ContentSignal.SUBJECTIVE_EXPERIENCE_CLAIM,
+}
+
+
+def content_signals_from_rule_ids(rule_ids: Iterable[str]) -> frozenset[ContentSignal]:
+    """Reconstruct only selection-v1 content signals from exact guardrail IDs.
+
+    Decision ledgers intentionally retain matched rule identifiers instead of
+    content-derived signals.  Lifecycle callers may reconstruct the limited
+    guardrail signals above, but unknown identifiers must never be interpreted
+    heuristically.
+    """
+
+    return frozenset(
+        _CONTENT_SIGNALS_BY_RULE_ID[rule_id]
+        for rule_id in rule_ids
+        if rule_id in _CONTENT_SIGNALS_BY_RULE_ID
+    )
 
 
 def _decision(
