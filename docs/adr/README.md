@@ -15,6 +15,7 @@ documentation and do not change these decisions implicitly.
 | [0007](0007-controlled-storage-and-encrypted-backups.md) | Accepted | Use operator-controlled persistent storage and encrypted offsite recovery copies. |
 | [0008](0008-versioned-memory-domain-contract.md) | Accepted | Freeze tenant isolation, ontology, provenance, and relational invariants for the v1 memory domain. |
 | [0009](0009-canonical-events-and-replay.md) | Accepted | Use UUIDv7 identifiers, transactional event ordering, RFC 8785 hashing, and deterministic replay. |
+| [0010](0010-mcp-mutation-command-contract.md) | Accepted | Freeze mutation tools, typed command semantics, fine-grained scopes, concurrency behavior, and the durable storage boundary. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries
