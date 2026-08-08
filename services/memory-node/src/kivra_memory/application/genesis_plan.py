@@ -7,7 +7,7 @@ import hmac
 import re
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from kivra_memory.domain.canonical_json import canonical_json_bytes, parse_json_strict
 from kivra_memory.domain.errors import CanonicalJsonError
@@ -31,7 +31,11 @@ from kivra_memory.ingress.snapshot import (
     SourceContract,
     build_import_plan_manifest,
 )
-from kivra_memory.ingress.validator import IngressValidationError, validate_ingress
+from kivra_memory.ingress.validator import (
+    IngressValidationError,
+    ValidatedIngress,
+    validate_ingress,
+)
 from kivra_memory.policy import SELECTION_V1_PROFILE, SELECTION_V1_PROFILE_SHA256
 
 GENESIS_PLAN_REPORT_VERSION = "scalevault.genesis-import-plan-report.v1"
@@ -80,6 +84,7 @@ class GenesisImportPlan:
 
     manifest: ImportPlanManifest
     report: GenesisPlanReport
+    planned_sources: tuple[GenesisPlannedSource, ...] = field(repr=False)
 
     def verify_report(self, expected: GenesisPlanReport) -> None:
         """Require byte-identical safe reports after recomputing the complete plan."""
@@ -87,6 +92,15 @@ class GenesisImportPlan:
         if not hmac.compare_digest(self.report.canonical_bytes, expected.canonical_bytes):
             raise GenesisPlanError("genesis_plan_digest_mismatch")
         self.manifest.require_digest(str(expected.value["import_plan_digest"]))
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class GenesisPlannedSource:
+    """Exact validated bytes and derived records retained only for an in-memory apply seam."""
+
+    source_item: SnapshotSourceItem
+    validated: ValidatedIngress
+    processed: GenesisProcessingResult
 
 
 def plan_genesis_import(reader: GitObjectReader) -> GenesisImportPlan:
@@ -105,7 +119,7 @@ def plan_genesis_import(reader: GitObjectReader) -> GenesisImportPlan:
     candidate_supersession_count = 0
     exclusion_supersession_count = 0
     unresolved_legacy_binding_count = 0
-    processed_sources: list[tuple[SnapshotSourceItem, GenesisProcessingResult]] = []
+    processed_sources: list[GenesisPlannedSource] = []
 
     for source_item in source_items:
         try:
@@ -125,7 +139,13 @@ def plan_genesis_import(reader: GitObjectReader) -> GenesisImportPlan:
         unresolved_legacy_binding_count += len(
             validated.unresolved_legacy_binding_candidate_ids
         )
-        processed_sources.append((source_item, processed))
+        processed_sources.append(
+            GenesisPlannedSource(
+                source_item=source_item,
+                validated=validated,
+                processed=processed,
+            )
+        )
         _append_processed_records(source_item, processed, planned_records)
         nomination_count += len(processed.nominations)
         exclusion_count += len(processed.provenance.exclusions)
@@ -190,6 +210,7 @@ def plan_genesis_import(reader: GitObjectReader) -> GenesisImportPlan:
     return GenesisImportPlan(
         manifest=manifest,
         report=GenesisPlanReport(value=report_value, canonical_bytes=canonical),
+        planned_sources=tuple(processed_sources),
     )
 
 
@@ -297,13 +318,14 @@ def _append_supersession(
 
 
 def _validate_supersession_graphs(
-    processed_sources: list[tuple[SnapshotSourceItem, GenesisProcessingResult]],
+    processed_sources: list[GenesisPlannedSource],
 ) -> None:
     candidate_ids: list[str] = []
     exclusion_ids: list[str] = []
     candidate_edges: list[tuple[str, str]] = []
     exclusion_edges: list[tuple[str, str]] = []
-    for _source, processed in processed_sources:
+    for planned_source in processed_sources:
+        processed = planned_source.processed
         candidate_ids.extend(nomination.source_record_id for nomination in processed.nominations)
         exclusion_ids.extend(
             exclusion.exclusion_id for exclusion in processed.provenance.exclusions
@@ -441,5 +463,6 @@ __all__ = [
     "GenesisImportPlan",
     "GenesisPlanError",
     "GenesisPlanReport",
+    "GenesisPlannedSource",
     "plan_genesis_import",
 ]

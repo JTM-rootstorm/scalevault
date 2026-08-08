@@ -145,6 +145,8 @@ def test_plan_accounts_for_every_record_and_emits_only_safe_aggregates() -> None
     assert plan.report.value["parser_schema_versions"] == {
         "scalevault.ingress.genesis-checkpoint.v2": "checkpoint-v2.schema.1"
     }
+    assert len(plan.planned_sources) == 1
+    assert plan.planned_sources[0].source_item.raw_bytes
 
     report = plan.report.canonical_bytes
     for private_value in (
@@ -159,6 +161,10 @@ def test_plan_accounts_for_every_record_and_emits_only_safe_aggregates() -> None
         b"private note",
     ):
         assert private_value not in report
+    rendered_plan = repr(plan)
+    assert "planned_sources" not in rendered_plan
+    assert "private synthetic statement" not in rendered_plan
+    assert repr(plan.planned_sources[0]).startswith("<")
 
 
 def test_plan_is_deterministic_and_safe_report_verifies_exact_digest() -> None:
