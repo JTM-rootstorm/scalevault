@@ -50,6 +50,7 @@ _SELECTION_SOURCE_KINDS = (
     "github_proposal",
     "candidate_reassessment",
     "candidate_expiry",
+    "genesis_import",
 )
 _SELECTION_OPERATIONS = ("nominate", "promote", "expire")
 _SELECTION_OUTCOMES = (
@@ -468,7 +469,8 @@ class SelectionDecision(Base):
             name="operation_outcome_compatible",
         ),
         CheckConstraint(
-            "(source_kind IN ('live_interaction', 'reviewed_seed', 'github_proposal') "
+            "(source_kind IN ('live_interaction', 'reviewed_seed', 'github_proposal', "
+            "'genesis_import') "
             "AND requested_operation = 'nominate') OR "
             "(source_kind = 'candidate_reassessment' AND requested_operation = 'promote') OR "
             "(source_kind = 'candidate_expiry' AND requested_operation = 'expire')",

@@ -32,6 +32,7 @@ MIGRATOR_ROLE = "kivra_memory_migrator"
 RUNTIME_ROLES = (
     "kivra_memory_api",
     "kivra_memory_policy",
+    "kivra_memory_genesis_importer",
     "kivra_memory_worker",
     "kivra_memory_ingress",
     "kivra_memory_exporter",
@@ -226,6 +227,7 @@ def test_role_bootstrap_upgrades_m1_ownership_and_is_idempotent(
     assert role_rows == [
         ("kivra_memory_api", True, False, False, False, False, False, False),
         ("kivra_memory_exporter", True, False, False, False, False, False, False),
+        ("kivra_memory_genesis_importer", True, False, False, False, False, False, False),
         ("kivra_memory_ingress", True, False, False, False, False, False, False),
         ("kivra_memory_migrator", True, False, False, False, False, False, False),
         ("kivra_memory_owner", False, False, False, False, False, False, False),
@@ -363,6 +365,72 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
             "UPDATE,DELETE,TRUNCATE",
         ),
         (
+            "kivra_memory_genesis_importer",
+            "genesis_import_sources",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_genesis_importer",
+            "genesis_import_records",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_genesis_importer",
+            "selection_decisions",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_genesis_importer",
+            "memory_events",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_genesis_importer",
+            "memories",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_genesis_importer",
+            "memory_evidence",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_api",
+            "genesis_import_sources",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_policy",
+            "genesis_import_sources",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_worker",
+            "genesis_import_sources",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_ingress",
+            "genesis_import_sources",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_exporter",
+            "genesis_import_sources",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
             "kivra_memory_api",
             "memory_content_keys",
             "SELECT",
@@ -445,6 +513,69 @@ def test_runtime_table_privilege_matrix(
             text("SELECT has_table_privilege(:role, :table_name, :privileges)"),
             {"role": role, "table_name": f"public.{table_name}", "privileges": denied},
         ).scalar_one()
+
+
+def test_genesis_importer_has_only_terminal_result_update_columns(
+    role_secured_database: AlembicRunner,
+) -> None:
+    with role_secured_database.engine.begin() as connection:
+        for column in (
+            "processing_state",
+            "selection_decision_id",
+            "event_id",
+            "memory_id",
+            "processed_at",
+        ):
+            assert connection.execute(
+                text(
+                    "SELECT has_column_privilege('kivra_memory_genesis_importer', "
+                    "'public.genesis_import_records', :column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
+        for column in (
+            "source_item_document",
+            "nomination_sha256",
+            "mapping_metadata",
+            "provenance_metadata",
+        ):
+            assert not connection.execute(
+                text(
+                    "SELECT has_column_privilege('kivra_memory_genesis_importer', "
+                    "'public.genesis_import_records', :column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
+
+
+def test_other_runtime_roles_have_no_genesis_table_privileges(
+    role_secured_database: AlembicRunner,
+) -> None:
+    genesis_tables = (
+        "genesis_import_runs",
+        "genesis_import_sources",
+        "genesis_import_records",
+        "genesis_import_exclusions",
+        "genesis_import_supersessions",
+        "genesis_import_run_results",
+    )
+    denied_roles = (
+        "kivra_memory_api",
+        "kivra_memory_policy",
+        "kivra_memory_worker",
+        "kivra_memory_ingress",
+        "kivra_memory_exporter",
+    )
+    with role_secured_database.engine.begin() as connection:
+        for role in denied_roles:
+            for table_name in genesis_tables:
+                assert not connection.execute(
+                    text(
+                        "SELECT has_table_privilege(:role, :table_name, "
+                        "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')"
+                    ),
+                    {"role": role, "table_name": f"public.{table_name}"},
+                ).scalar_one()
 
 
 def test_runtime_roles_cannot_create_ddl_disable_guards_or_bypass_rls(

@@ -47,6 +47,7 @@ BEGIN
             ('kivra_memory_migrator', true),
             ('kivra_memory_api', true),
             ('kivra_memory_policy', true),
+            ('kivra_memory_genesis_importer', true),
             ('kivra_memory_worker', true),
             ('kivra_memory_ingress', true),
             ('kivra_memory_exporter', true)
@@ -71,6 +72,8 @@ ALTER ROLE kivra_memory_api
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_policy
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE kivra_memory_genesis_importer
+    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_worker
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_ingress
@@ -81,12 +84,14 @@ ALTER ROLE kivra_memory_exporter
 REVOKE kivra_memory_owner FROM
     kivra_memory_api,
     kivra_memory_policy,
+    kivra_memory_genesis_importer,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
 REVOKE kivra_memory_migrator FROM
     kivra_memory_api,
     kivra_memory_policy,
+    kivra_memory_genesis_importer,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
@@ -122,7 +127,8 @@ BEGIN
     EXECUTE format(
         'GRANT CONNECT ON DATABASE %I TO kivra_memory_migrator, '
         'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
-        'kivra_memory_exporter, kivra_memory_policy',
+        'kivra_memory_exporter, kivra_memory_policy, '
+        'kivra_memory_genesis_importer',
         pg_catalog.current_database()
     );
 END
@@ -132,6 +138,7 @@ REVOKE ALL ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON SCHEMA public FROM
     kivra_memory_api,
     kivra_memory_policy,
+    kivra_memory_genesis_importer,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
@@ -139,6 +146,7 @@ GRANT USAGE ON SCHEMA public TO
     kivra_memory_migrator,
     kivra_memory_api,
     kivra_memory_policy,
+    kivra_memory_genesis_importer,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
@@ -146,12 +154,14 @@ GRANT USAGE ON SCHEMA public TO
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM
     kivra_memory_api,
     kivra_memory_policy,
+    kivra_memory_genesis_importer,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM
     kivra_memory_api,
     kivra_memory_policy,
+    kivra_memory_genesis_importer,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
@@ -167,7 +177,8 @@ BEGIN
         EXECUTE
             'GRANT SELECT ON TABLE public.alembic_version TO '
             'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
-            'kivra_memory_exporter, kivra_memory_policy';
+            'kivra_memory_exporter, kivra_memory_policy, '
+            'kivra_memory_genesis_importer';
     END IF;
 
     -- The API reads canonical state, appends events/receipts/outbox work,
@@ -296,6 +307,68 @@ BEGIN
             last_error_code,
             last_error_summary
         ) ON TABLE public.outbox_jobs TO kivra_memory_policy;
+    END IF;
+
+    -- The pinned Genesis importer alone archives protected source provenance
+    -- and participates in the ordinary selection transaction. Other runtime
+    -- roles receive no privileges on Genesis relations.
+    FOREACH table_name IN ARRAY ARRAY[
+        'alembic_compatibility', 'tenants', 'actors', 'clients',
+        'transport_installations', 'transport_bindings', 'personas', 'lineages',
+        'branches', 'sessions', 'subjects', 'memory_event_counter',
+        'selection_decision_counter', 'memory_events', 'command_receipts',
+        'selection_decisions', 'memories', 'memory_evidence', 'outbox_jobs',
+        'genesis_import_runs', 'genesis_import_sources', 'genesis_import_records',
+        'genesis_import_exclusions', 'genesis_import_supersessions',
+        'genesis_import_run_results'
+    ]
+    LOOP
+        IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
+            EXECUTE format(
+                'GRANT SELECT ON TABLE public.%I TO kivra_memory_genesis_importer',
+                table_name
+            );
+        END IF;
+    END LOOP;
+    FOREACH table_name IN ARRAY ARRAY[
+        'memory_events', 'command_receipts', 'selection_decisions', 'outbox_jobs',
+        'genesis_import_runs', 'genesis_import_sources', 'genesis_import_records',
+        'genesis_import_exclusions', 'genesis_import_supersessions',
+        'genesis_import_run_results'
+    ]
+    LOOP
+        IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
+            EXECUTE format(
+                'GRANT INSERT ON TABLE public.%I TO kivra_memory_genesis_importer',
+                table_name
+            );
+        END IF;
+    END LOOP;
+    FOREACH table_name IN ARRAY ARRAY['memories', 'memory_evidence']
+    LOOP
+        IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
+            EXECUTE format(
+                'GRANT INSERT ON TABLE public.%I '
+                'TO kivra_memory_genesis_importer',
+                table_name
+            );
+        END IF;
+    END LOOP;
+    IF pg_catalog.to_regclass('public.genesis_import_records') IS NOT NULL THEN
+        GRANT UPDATE (
+            processing_state,
+            selection_decision_id,
+            event_id,
+            memory_id,
+            processed_at
+        ) ON TABLE public.genesis_import_records TO kivra_memory_genesis_importer;
+    END IF;
+    IF pg_catalog.to_regclass('public.memory_event_counter') IS NOT NULL THEN
+        GRANT UPDATE ON TABLE public.memory_event_counter TO kivra_memory_genesis_importer;
+    END IF;
+    IF pg_catalog.to_regclass('public.selection_decision_counter') IS NOT NULL THEN
+        GRANT UPDATE ON TABLE public.selection_decision_counter
+            TO kivra_memory_genesis_importer;
     END IF;
 
     -- Workers read event/domain state and exclusively maintain derived state,
@@ -477,14 +550,16 @@ BEGIN
         'scalevault_reject_immutable_field_mutation()',
         'scalevault_enforce_branch_visibility()',
         'scalevault_enforce_event_ingress_provenance()',
-        'scalevault_enforce_ingress_validation_write()'
+        'scalevault_enforce_ingress_validation_write()',
+        'scalevault_enforce_genesis_record_terminalization()'
     ]
     LOOP
         IF pg_catalog.to_regprocedure('public.' || function_signature) IS NOT NULL THEN
             EXECUTE format(
                 'REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, '
                 'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
-                'kivra_memory_exporter, kivra_memory_policy',
+                'kivra_memory_exporter, kivra_memory_policy, '
+                'kivra_memory_genesis_importer',
                 function_signature
             );
         END IF;
@@ -494,7 +569,8 @@ BEGIN
     -- remain executable only through their installed triggers.
     FOREACH runtime_role IN ARRAY ARRAY[
         'kivra_memory_api', 'kivra_memory_worker', 'kivra_memory_ingress',
-        'kivra_memory_exporter', 'kivra_memory_policy'
+        'kivra_memory_exporter', 'kivra_memory_policy',
+        'kivra_memory_genesis_importer'
     ]
     LOOP
         IF pg_catalog.to_regprocedure('public.scalevault_is_uuid_v7(uuid)') IS NOT NULL THEN
@@ -526,6 +602,10 @@ BEGIN
         );
         EXECUTE format(
             'GRANT USAGE ON SEQUENCE %s TO kivra_memory_policy',
+            sequence_name
+        );
+        EXECUTE format(
+            'GRANT USAGE ON SEQUENCE %s TO kivra_memory_genesis_importer',
             sequence_name
         );
     END IF;

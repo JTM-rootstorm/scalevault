@@ -15,6 +15,12 @@ EXPECTED_TABLES = {
     "clients",
     "command_receipts",
     "embedding_models",
+    "genesis_import_exclusions",
+    "genesis_import_records",
+    "genesis_import_run_results",
+    "genesis_import_runs",
+    "genesis_import_sources",
+    "genesis_import_supersessions",
     "ingress_items",
     "lineages",
     "memories",
@@ -250,6 +256,7 @@ def test_selection_decisions_are_bounded_immutable_and_authorization_anchored() 
     assert "jsonb_array_length(matched_rule_ids) BETWEEN 0 AND 16" in checks
     assert "outcome IN ('omit', 'reject')" in checks
     assert "scope = 'scene_local' AND subject_kind = 'scene'" in checks
+    assert "'genesis_import'" in checks
 
     counter = metadata.tables["selection_decision_counter"]
     assert set(counter.c.keys()) == {"counter_id", "next_sequence"}
@@ -422,5 +429,8 @@ async def test_database_hides_bound_parameters() -> None:
     database = Database("postgresql://user:password@127.0.0.1:5432/scalevault")
     try:
         assert database.engine.sync_engine.hide_parameters is True
+        session = database.session_factory()
+        assert session.bind is database.engine
+        await session.close()
     finally:
         await database.dispose()

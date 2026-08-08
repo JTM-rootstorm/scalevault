@@ -9,6 +9,14 @@ from kivra_memory.storage.models.events import (
     SelectionDecision,
     SelectionDecisionCounter,
 )
+from kivra_memory.storage.models.genesis_import import (
+    GenesisImportExclusion,
+    GenesisImportRecord,
+    GenesisImportRun,
+    GenesisImportRunResult,
+    GenesisImportSource,
+    GenesisImportSupersession,
+)
 from kivra_memory.storage.models.identity import (
     Actor,
     AlembicCompatibility,
@@ -56,6 +64,12 @@ __all__ = [
     "ClientCredential",
     "CommandReceipt",
     "EmbeddingModel",
+    "GenesisImportExclusion",
+    "GenesisImportRecord",
+    "GenesisImportRun",
+    "GenesisImportRunResult",
+    "GenesisImportSource",
+    "GenesisImportSupersession",
     "IngressItem",
     "Lineage",
     "LogicalSession",

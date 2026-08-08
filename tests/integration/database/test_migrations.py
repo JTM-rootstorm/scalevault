@@ -21,7 +21,7 @@ from .conftest import (
     installed_extensions,
 )
 
-EXPECTED_HEAD = "0003_selection_policy_lifecycle"
+EXPECTED_HEAD = "0004_genesis_import_provenance"
 revision_module = importlib.import_module("migrations.versions.0001_initial_domain")
 
 
@@ -123,7 +123,7 @@ def test_zero_to_head_and_full_round_trip(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (3, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (4, EXPECTED_HEAD, EXPECTED_HEAD)
 
     runner.downgrade("base")
     with runner.connect() as connection:
@@ -157,7 +157,7 @@ def test_existing_0001_database_upgrades_to_hybrid_retrieval(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (3, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (4, EXPECTED_HEAD, EXPECTED_HEAD)
 
 
 def test_existing_0002_database_upgrades_and_downgrades_policy_lifecycle(
@@ -204,3 +204,26 @@ def test_existing_0002_database_upgrades_and_downgrades_policy_lifecycle(
         }
         assert receipt_columns["event_id"] is False
         assert "selection_decision_id" not in receipt_columns
+
+
+def test_existing_0003_database_upgrades_to_genesis_provenance(
+    bootstrapped_alembic_runner: AlembicRunner,
+) -> None:
+    runner = bootstrapped_alembic_runner
+    runner.upgrade("0003_selection_policy_lifecycle")
+    with runner.connect() as connection:
+        assert _current_revision(connection) == "0003_selection_policy_lifecycle"
+        assert "genesis_import_runs" not in inspect(connection).get_table_names()
+
+    runner.upgrade()
+    with runner.connect() as connection:
+        assert _current_revision(connection) == EXPECTED_HEAD
+        assert {
+            "genesis_import_runs",
+            "genesis_import_sources",
+            "genesis_import_records",
+            "genesis_import_exclusions",
+            "genesis_import_supersessions",
+            "genesis_import_run_results",
+        } <= set(inspect(connection).get_table_names())
+        assert _schema_differences(connection) == []

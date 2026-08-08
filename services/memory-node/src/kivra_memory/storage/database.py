@@ -35,6 +35,12 @@ class Database:
         )
         self._sessions = async_sessionmaker(self.engine, expire_on_commit=False)
 
+    @property
+    def session_factory(self) -> async_sessionmaker[AsyncSession]:
+        """Expose session creation to services that own their transaction boundary."""
+
+        return self._sessions
+
     @asynccontextmanager
     async def tenant_session(self, tenant_id: UUID) -> AsyncIterator[AsyncSession]:
         """Open a transaction whose RLS tenant setting disappears at commit."""
