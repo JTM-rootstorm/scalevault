@@ -83,7 +83,7 @@ The common fields are combined with exactly one of these operation payloads:
 |---|---|---|
 | `memory_observe` | `memory`: `MemoryInputV1` | Create; `expected_revision` is forbidden. The server assigns `candidate` status. |
 | `memory_remember` | `memory`: `MemoryInputV1` | Create; `expected_revision` is forbidden. The server assigns `active` status. |
-| `memory_revise` | `memory_id`, `expected_revision`, `changes`: `MemoryRevisionInputV1` | The target revision must match exactly; `changes` must contain at least one mutable field. |
+| `memory_revise` | `memory_id`, `expected_revision`, `changes`: `MemoryChanges` | The target revision must match exactly; `changes` must contain at least one mutable field. |
 | `memory_link` | `source_memory_id`, `source_expected_revision`, `target_memory_id`, `target_expected_revision`, `link_type`, optional bounded `metadata` | Append-only relationship creation. Both target revisions must match. |
 | `memory_open_conflict` | `subject_id`, `members`, `conflict_reason` | `members` contains 2 to 32 unique `{memory_id, expected_revision}` objects. All revisions must match. |
 | `memory_resolve_conflict` | `conflict_id`, `members`, `resolution_kind`, `resolution_rationale`, `user_confirmed` | `members` contains the complete member set as `{memory_id, expected_revision, disposition, resulting_status}`. The conflict must still be open and all revisions must match. |
@@ -96,11 +96,12 @@ remember, interpretation limits,
 confidence, salience, durability, sensitivity, authority class, temporal and
 origin context, and bounded metadata. It does not accept server-owned IDs,
 revisions, status, timestamps, fingerprints, publication approval,
-content-key metadata, or transport provenance. `memory_observe` always creates
-a candidate and `memory_remember` always creates an active memory; the caller
-cannot force lifecycle or publication state.
+content protection, content-key metadata, or transport provenance.
+`memory_observe` always creates a candidate and `memory_remember` always
+creates an active memory; the caller cannot force lifecycle, protection, or
+publication state.
 
-`MemoryRevisionInputV1` is a strict, non-empty patch over mutable semantic
+`MemoryChanges` is a strict, non-empty patch over mutable semantic
 fields. Omission means unchanged; explicit `null` is accepted only for fields
 that are nullable in ADR 0008. It cannot change identity, tenant, lineage,
 branch, subject, scope, origin session, revision, creation time, lifecycle

@@ -16,6 +16,8 @@ documentation and do not change these decisions implicitly.
 | [0008](0008-versioned-memory-domain-contract.md) | Accepted | Freeze tenant isolation, ontology, provenance, and relational invariants for the v1 memory domain. |
 | [0009](0009-canonical-events-and-replay.md) | Accepted | Use UUIDv7 identifiers, transactional event ordering, RFC 8785 hashing, and deterministic replay. |
 | [0010](0010-mcp-mutation-command-contract.md) | Accepted | Freeze mutation tools, typed command semantics, fine-grained scopes, concurrency behavior, and the durable storage boundary. |
+| [0011](0011-mcp-read-retrieval-and-status-contract.md) | Accepted | Freeze exact-branch read and status tools, privacy-safe results, hybrid ranking, and bounded context output. |
+| [0012](0012-versioned-local-embedding-model.md) | Accepted | Use a pinned local 384-dimensional MiniLM model with versioned derived storage and explicit activation. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries
