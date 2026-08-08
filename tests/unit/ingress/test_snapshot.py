@@ -150,6 +150,13 @@ def test_rejects_blob_bytes_that_do_not_match_tree_provenance() -> None:
         GenesisSnapshotSource(reader).enumerate()
 
 
+def test_rejects_unknown_path_inside_ingress_tree_instead_of_silent_omission() -> None:
+    reader = _reader({"ingress/checkpoints/v3/genesis/2026/08/unknown.json": b"{}"})
+
+    with pytest.raises(SnapshotError, match="unknown ingress source path"):
+        GenesisSnapshotSource(reader).enumerate()
+
+
 def _source_item(
     path: str = CHECKPOINT_V2_PATH, raw: bytes = b'{"synthetic":true}'
 ) -> SnapshotSourceItem:

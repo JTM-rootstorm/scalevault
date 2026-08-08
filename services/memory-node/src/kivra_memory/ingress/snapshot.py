@@ -114,6 +114,8 @@ class LocalGitObjectReader:
                 blob_sha = raw_sha.decode("ascii")
             except (UnicodeDecodeError, ValueError):
                 raise SnapshotError("git tree output was invalid") from None
+            if path.startswith("ingress/") and (mode != b"100644" or object_type != b"blob"):
+                raise SnapshotError("ingress tree entry was not a regular blob")
             if mode != b"100644" or object_type != b"blob":
                 continue
             self._require_object_id(blob_sha, "blob")
@@ -179,6 +181,8 @@ class GenesisSnapshotSource:
             seen_paths.add(entry.path)
             matched = _source_contract(entry.path)
             if matched is None:
+                if entry.path.startswith("ingress/"):
+                    raise SnapshotError("snapshot contained an unknown ingress source path")
                 continue
             contract, source_id = matched
             if _OBJECT_ID.fullmatch(entry.blob_sha) is None:
