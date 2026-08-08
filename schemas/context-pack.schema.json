@@ -4,47 +4,442 @@
     "title": "ScaleVault context pack v1",
     "type": "object",
     "additionalProperties": false,
-    "required": [
-        "schema_version",
-        "context_pack_id",
-        "persona",
-        "active_boundaries",
-        "user_preferences",
-        "relationship_patterns",
-        "project_context",
-        "episodic_anchors",
-        "open_questions",
-        "conflicts",
-        "excluded_scope_summary",
-        "provenance"
-    ],
+    "required": ["ok", "contract_version", "tool", "result", "warnings", "metadata"],
     "properties": {
-        "schema_version": { "const": 1 },
-        "context_pack_id": { "type": "string", "format": "uuid" },
-        "persona": { "$ref": "#/$defs/items" },
-        "active_boundaries": { "$ref": "#/$defs/items" },
-        "user_preferences": { "$ref": "#/$defs/items" },
-        "relationship_patterns": { "$ref": "#/$defs/items" },
-        "project_context": { "$ref": "#/$defs/items" },
-        "episodic_anchors": { "$ref": "#/$defs/items" },
-        "open_questions": { "$ref": "#/$defs/items" },
-        "conflicts": { "type": "array", "items": { "type": "object" } },
-        "excluded_scope_summary": { "type": "object" },
-        "provenance": { "type": "array", "items": { "type": "object" } }
-    },
-    "$defs": {
-        "items": {
+        "ok": {"const": true},
+        "contract_version": {"const": "mcp-read-v1"},
+        "tool": {"const": "memory_context_pack"},
+        "result": {"$ref": "#/$defs/context_pack"},
+        "warnings": {
             "type": "array",
             "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["memory_id", "revision", "statement"],
-                "properties": {
-                    "memory_id": { "type": "string", "format": "uuid" },
-                    "revision": { "type": "integer", "minimum": 1 },
-                    "statement": { "type": "string", "minLength": 1 },
-                    "scores": { "type": "object", "additionalProperties": { "type": "number" } }
+                "enum": [
+                    "embeddings_unavailable",
+                    "embeddings_warming",
+                    "embeddings_stale",
+                    "results_truncated",
+                    "evidence_omitted"
+                ]
+            },
+            "maxItems": 8,
+            "uniqueItems": true
+        },
+        "metadata": {"$ref": "#/$defs/context_pack_metadata"}
+    },
+    "$defs": {
+        "context_pack": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "schema_version",
+                "contract_version",
+                "context_pack_id",
+                "persona",
+                "active_boundaries",
+                "user_preferences",
+                "relationship_patterns",
+                "project_context",
+                "episodic_anchors",
+                "open_questions",
+                "conflicts",
+                "excluded_scope_summary",
+                "provenance"
+            ],
+            "properties": {
+                "schema_version": {"const": 1},
+                "contract_version": {"const": "mcp-read-v1"},
+                "context_pack_id": {"$ref": "#/$defs/uuidv7"},
+                "persona": {"$ref": "#/$defs/section"},
+                "active_boundaries": {"$ref": "#/$defs/section"},
+                "user_preferences": {"$ref": "#/$defs/section"},
+                "relationship_patterns": {"$ref": "#/$defs/section"},
+                "project_context": {"$ref": "#/$defs/section"},
+                "episodic_anchors": {"$ref": "#/$defs/section"},
+                "open_questions": {"$ref": "#/$defs/section"},
+                "conflicts": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/conflict"},
+                    "maxItems": 32
+                },
+                "excluded_scope_summary": {"$ref": "#/$defs/excluded_scope_summary"},
+                "provenance": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/provenance"},
+                    "maxItems": 512
                 }
+            }
+        },
+        "uuidv7": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "nullable_uuidv7": {"oneOf": [{"$ref": "#/$defs/uuidv7"}, {"type": "null"}]},
+        "safe_positive_integer": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "canonical_date_time": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+        },
+        "nullable_canonical_date_time": {
+            "oneOf": [{"$ref": "#/$defs/canonical_date_time"}, {"type": "null"}]
+        },
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "unit_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "stable_code": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 64},
+        "section": {"type": "array", "items": {"$ref": "#/$defs/memory_item"}, "maxItems": 64},
+        "memory_item": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "memory_id",
+                "revision",
+                "last_event_id",
+                "branch_id",
+                "subject_id",
+                "subject_kind",
+                "category",
+                "ontological_status",
+                "scope",
+                "visibility",
+                "status",
+                "statement",
+                "interpretation_limits",
+                "authority_class",
+                "valid_from",
+                "valid_to",
+                "observed_at",
+                "score",
+                "explanation_codes",
+                "evidence"
+            ],
+            "properties": {
+                "memory_id": {"$ref": "#/$defs/uuidv7"},
+                "revision": {"$ref": "#/$defs/safe_positive_integer"},
+                "last_event_id": {"$ref": "#/$defs/uuidv7"},
+                "branch_id": {"$ref": "#/$defs/uuidv7"},
+                "subject_id": {"$ref": "#/$defs/uuidv7"},
+                "subject_kind": {
+                    "enum": [
+                        "global",
+                        "persona",
+                        "relationship",
+                        "project",
+                        "episode",
+                        "scene",
+                        "concept"
+                    ]
+                },
+                "category": {
+                    "enum": [
+                        "stable_fact",
+                        "user_preference",
+                        "assistant_preference_like_pattern",
+                        "boundary_or_permission",
+                        "interaction_convention",
+                        "relationship_pattern",
+                        "emergent_tendency",
+                        "episodic_anchor",
+                        "project_decision",
+                        "project_state",
+                        "procedure",
+                        "open_question",
+                        "interpretation",
+                        "external_fact"
+                    ]
+                },
+                "ontological_status": {
+                    "enum": [
+                        "literal_user_fact",
+                        "literal_technical_fact",
+                        "assistant_self_description",
+                        "observed_assistant_behavior",
+                        "interaction_convention",
+                        "fictional_or_roleplayed_scene",
+                        "hypothesis",
+                        "uncertain"
+                    ]
+                },
+                "scope": {
+                    "enum": [
+                        "global",
+                        "persona",
+                        "relationship",
+                        "project",
+                        "episodic",
+                        "scene_local"
+                    ]
+                },
+                "visibility": {"enum": ["private_root", "restricted", "shareable", "public_seed"]},
+                "status": {"enum": ["candidate", "active", "disputed"]},
+                "statement": {"type": "string", "minLength": 1, "maxLength": 8192},
+                "interpretation_limits": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 1024},
+                    "maxItems": 32,
+                    "uniqueItems": true
+                },
+                "authority_class": {
+                    "enum": [
+                        "explicit_user_correction",
+                        "explicit_user_statement",
+                        "verified_project_source",
+                        "assistant_observation",
+                        "assistant_interpretation",
+                        "external_source",
+                        "imported_legacy_memory"
+                    ]
+                },
+                "valid_from": {"$ref": "#/$defs/nullable_canonical_date_time"},
+                "valid_to": {"$ref": "#/$defs/nullable_canonical_date_time"},
+                "observed_at": {"$ref": "#/$defs/nullable_canonical_date_time"},
+                "score": {"$ref": "#/$defs/score"},
+                "explanation_codes": {
+                    "type": "array",
+                    "items": {
+                        "enum": [
+                            "lexical_match",
+                            "trigram_match",
+                            "semantic_match",
+                            "scope_exact",
+                            "authority_weighted",
+                            "confidence_weighted",
+                            "salience_weighted",
+                            "recency_weighted",
+                            "conflict_expanded"
+                        ]
+                    },
+                    "maxItems": 9,
+                    "uniqueItems": true
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/untrusted_evidence"},
+                    "maxItems": 32
+                }
+            }
+        },
+        "source_contribution": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "rank", "contribution"],
+            "properties": {
+                "source": {"enum": ["lexical", "trigram", "semantic"]},
+                "rank": {"$ref": "#/$defs/safe_positive_integer"},
+                "contribution": {"$ref": "#/$defs/unit_score"}
+            }
+        },
+        "modifier_contribution": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["modifier", "value", "contribution"],
+            "properties": {
+                "modifier": {
+                    "enum": ["scope_match", "authority", "confidence", "salience", "recency"]
+                },
+                "value": {"$ref": "#/$defs/unit_score"},
+                "contribution": {"$ref": "#/$defs/unit_score"}
+            }
+        },
+        "score_modifiers": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scope_match", "authority", "confidence", "salience", "recency"],
+            "properties": {
+                "scope_match": {"$ref": "#/$defs/unit_score"},
+                "authority": {"$ref": "#/$defs/unit_score"},
+                "confidence": {"$ref": "#/$defs/unit_score"},
+                "salience": {"$ref": "#/$defs/unit_score"},
+                "recency": {"$ref": "#/$defs/unit_score"}
+            }
+        },
+        "score": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "profile",
+                "sources",
+                "rrf_score",
+                "modifiers",
+                "modifier_contributions",
+                "final_score"
+            ],
+            "properties": {
+                "profile": {"const": "rrf-v1"},
+                "sources": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/source_contribution"},
+                    "maxItems": 3
+                },
+                "rrf_score": {"$ref": "#/$defs/unit_score"},
+                "modifiers": {"$ref": "#/$defs/score_modifiers"},
+                "modifier_contributions": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/modifier_contribution"},
+                    "maxItems": 5
+                },
+                "final_score": {"$ref": "#/$defs/unit_score"}
+            }
+        },
+        "untrusted_evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["trust", "evidence_id", "source_type", "excerpt", "occurred_at"],
+            "properties": {
+                "trust": {"const": "untrusted_evidence"},
+                "evidence_id": {"$ref": "#/$defs/uuidv7"},
+                "source_type": {"type": "string", "minLength": 1, "maxLength": 64},
+                "excerpt": {"type": "string", "minLength": 1, "maxLength": 4096},
+                "occurred_at": {"$ref": "#/$defs/nullable_canonical_date_time"}
+            }
+        },
+        "conflict": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["conflict_id", "subject_id", "state", "members"],
+            "properties": {
+                "conflict_id": {"$ref": "#/$defs/uuidv7"},
+                "subject_id": {"$ref": "#/$defs/uuidv7"},
+                "state": {"const": "open"},
+                "members": {
+                    "type": "array",
+                    "items": {
+                        "allOf": [
+                            {"$ref": "#/$defs/memory_item"},
+                            {"properties": {"status": {"const": "disputed"}}}
+                        ]
+                    },
+                    "minItems": 2,
+                    "maxItems": 32
+                }
+            }
+        },
+        "excluded_scope_summary": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["requested_scope_reduction", "evidence_omitted", "budget_truncated"],
+            "properties": {
+                "requested_scope_reduction": {"type": "boolean"},
+                "evidence_omitted": {"type": "boolean"},
+                "budget_truncated": {"type": "boolean"}
+            }
+        },
+        "provenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event_id", "memory_id", "revision"],
+            "properties": {
+                "event_id": {"$ref": "#/$defs/uuidv7"},
+                "memory_id": {"$ref": "#/$defs/uuidv7"},
+                "revision": {"$ref": "#/$defs/safe_positive_integer"}
+            }
+        },
+        "channel_availability": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["availability", "reason"],
+            "properties": {
+                "availability": {"enum": ["available", "unavailable", "warming", "stale"]},
+                "reason": {
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "not_applicable",
+                                "no_active_model",
+                                "embedding_missing",
+                                "embedding_stale",
+                                "backfill_in_progress",
+                                "dependency_unavailable"
+                            ]
+                        },
+                        {"type": "null"}
+                    ]
+                }
+            },
+            "allOf": [
+                {
+                    "if": {"properties": {"availability": {"const": "available"}}},
+                    "then": {"properties": {"reason": {"type": "null"}}},
+                    "else": {
+                        "properties": {
+                            "reason": {
+                                "enum": [
+                                    "not_applicable",
+                                    "no_active_model",
+                                    "embedding_missing",
+                                    "embedding_stale",
+                                    "backfill_in_progress",
+                                    "dependency_unavailable"
+                                ]
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        "channels": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["lexical", "trigram", "semantic"],
+            "properties": {
+                "lexical": {"$ref": "#/$defs/channel_availability"},
+                "trigram": {"$ref": "#/$defs/channel_availability"},
+                "semantic": {"$ref": "#/$defs/channel_availability"}
+            }
+        },
+        "retrieval_profile": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "sha256", "active_embedding_model_id", "channels"],
+            "properties": {
+                "name": {"const": "rrf-v1"},
+                "sha256": {"$ref": "#/$defs/sha256"},
+                "active_embedding_model_id": {"$ref": "#/$defs/nullable_uuidv7"},
+                "channels": {"$ref": "#/$defs/channels"}
+            }
+        },
+        "budget": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "estimator",
+                "requested_units",
+                "used_units",
+                "serialized_bytes",
+                "byte_ceiling",
+                "truncated",
+                "omission_reasons"
+            ],
+            "properties": {
+                "estimator": {"const": "utf8-bytes-upper-bound-v1"},
+                "requested_units": {"type": "integer", "minimum": 1, "maximum": 1000000},
+                "used_units": {"type": "integer", "minimum": 1, "maximum": 262144},
+                "serialized_bytes": {"type": "integer", "minimum": 1, "maximum": 262144},
+                "byte_ceiling": {"const": 262144},
+                "truncated": {"type": "boolean"},
+                "omission_reasons": {
+                    "type": "array",
+                    "items": {
+                        "enum": [
+                            "budget_truncated",
+                            "item_budget_reached",
+                            "evidence_omitted",
+                            "requested_scope_reduction"
+                        ]
+                    },
+                    "maxItems": 4,
+                    "uniqueItems": true
+                }
+            }
+        },
+        "context_pack_metadata": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pagination", "retrieval", "budget"],
+            "properties": {
+                "pagination": {"type": "null"},
+                "retrieval": {"$ref": "#/$defs/retrieval_profile"},
+                "budget": {"$ref": "#/$defs/budget"}
             }
         }
     }

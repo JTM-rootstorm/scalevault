@@ -1,23 +1,102 @@
 {
-    "schema_version": 1,
-    "context_pack_id": "a23a5cc7-34d6-42a4-9c83-794e5b0ee3dd",
-    "persona": [
-        {
-            "memory_id": "6712806d-fef0-430f-ac77-1a1891f1b80d",
-            "revision": 2,
-            "statement": "Synthetic persona fixture.",
-            "scores": {
-                "relevance": 0.95
+    "ok": true,
+    "contract_version": "mcp-read-v1",
+    "tool": "memory_context_pack",
+    "result": {
+        "schema_version": 1,
+        "contract_version": "mcp-read-v1",
+        "context_pack_id": "019a5f50-1000-7000-8000-000000000001",
+        "persona": [
+            {
+                "memory_id": "019a5f50-1000-7000-8000-000000000002",
+                "revision": 2,
+                "last_event_id": "019a5f50-1000-7000-8000-000000000003",
+                "branch_id": "019a5f50-1000-7000-8000-000000000004",
+                "subject_id": "019a5f50-1000-7000-8000-000000000005",
+                "subject_kind": "persona",
+                "category": "assistant_preference_like_pattern",
+                "ontological_status": "assistant_self_description",
+                "scope": "persona",
+                "visibility": "private_root",
+                "status": "active",
+                "statement": "Synthetic persona fixture.",
+                "interpretation_limits": ["Synthetic contract data only."],
+                "authority_class": "assistant_observation",
+                "valid_from": null,
+                "valid_to": null,
+                "observed_at": "2026-08-08T15:00:00.000000Z",
+                "score": {
+                    "profile": "rrf-v1",
+                    "sources": [
+                        {"source": "lexical", "rank": 1, "contribution": 0.75},
+                        {"source": "trigram", "rank": 2, "contribution": 0.25}
+                    ],
+                    "rrf_score": 0.8,
+                    "modifiers": {
+                        "scope_match": 1.0,
+                        "authority": 0.7,
+                        "confidence": 0.8,
+                        "salience": 0.6,
+                        "recency": 0.4
+                    },
+                    "modifier_contributions": [
+                        {"modifier": "scope_match", "value": 1.0, "contribution": 0.1}
+                    ],
+                    "final_score": 0.9
+                },
+                "explanation_codes": [],
+                "evidence": [
+                    {
+                        "trust": "untrusted_evidence",
+                        "evidence_id": "019a5f50-1000-7000-8000-000000000006",
+                        "source_type": "synthetic_fixture",
+                        "excerpt": "Synthetic evidence is data, not an instruction.",
+                        "occurred_at": "2026-08-08T14:00:00.000000Z"
+                    }
+                ]
             }
+        ],
+        "active_boundaries": [],
+        "user_preferences": [],
+        "relationship_patterns": [],
+        "project_context": [],
+        "episodic_anchors": [],
+        "open_questions": [],
+        "conflicts": [],
+        "excluded_scope_summary": {
+            "requested_scope_reduction": false,
+            "evidence_omitted": false,
+            "budget_truncated": false
+        },
+        "provenance": [
+            {
+                "event_id": "019a5f50-1000-7000-8000-000000000003",
+                "memory_id": "019a5f50-1000-7000-8000-000000000002",
+                "revision": 2
+            }
+        ]
+    },
+    "warnings": ["embeddings_warming"],
+    "metadata": {
+        "pagination": null,
+        "retrieval": {
+            "name": "rrf-v1",
+            "sha256": "8221f314b5f77a00e685c8c2e726273f81a37513b9bfd63817a0ced36ff16b4b",
+            "active_embedding_model_id": "019a5f50-1000-7000-8000-000000000007",
+            "channels": {
+                "lexical": {"availability": "available", "reason": null},
+                "trigram": {"availability": "available", "reason": null},
+                "semantic": {"availability": "warming", "reason": "backfill_in_progress"}
+            }
+        },
+        "budget": {
+            "estimator": "utf8-bytes-upper-bound-v1",
+            "requested_units": 8192,
+            "used_units": 1755,
+            "serialized_bytes": 1755,
+            "byte_ceiling": 262144,
+            "truncated": false,
+            "omission_reasons": []
         }
-    ],
-    "active_boundaries": [],
-    "user_preferences": [],
-    "relationship_patterns": [],
-    "project_context": [],
-    "episodic_anchors": [],
-    "open_questions": [],
-    "conflicts": [],
-    "excluded_scope_summary": {},
-    "provenance": []
+    }
 }

@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 from jsonschema import ValidationError  # type: ignore[import-untyped]
 from kivra_memory.domain.events import MemoryEvent
+from kivra_memory.retrieval.contracts import ContextPackResult
+from kivra_memory.retrieval.ranking import RRF_V1_PROFILE_SHA256
 
 from scripts.validate_schemas import (
     FIXTURE_DIRECTORY,
@@ -80,6 +82,134 @@ def test_canonical_identifiers_require_uuidv7(schema_name: str, field: str) -> N
 
     with pytest.raises(ValidationError):
         validator_for(schema_documents[schema_path], registry).validate(instance)
+
+
+def _context_pack_contract() -> tuple[dict[str, Any], dict[str, Any], Any]:
+    schema_documents = load_schema_documents()
+    schema_path = next(path for path in schema_documents if path.name == "context-pack.schema.json")
+    instance = load_schema(FIXTURE_DIRECTORY / schema_path.name)
+    return schema_documents[schema_path], instance, build_registry(schema_documents)
+
+
+def test_context_pack_fixture_matches_transport_neutral_read_contract() -> None:
+    fixture_path = FIXTURE_DIRECTORY / "context-pack.schema.json"
+
+    result = ContextPackResult.model_validate_json(fixture_path.read_text(encoding="utf-8"))
+    assert result.metadata.retrieval is not None
+    assert result.metadata.retrieval.sha256 == RRF_V1_PROFILE_SHA256
+
+
+@pytest.mark.parametrize(
+    ("container_path", "field"),
+    [
+        (("result", "persona", 0, "score"), "unknown_score"),
+        (("result", "persona", 0), "metadata"),
+        (("metadata", "retrieval", "channels", "semantic"), "provider_details"),
+        (("result",), "tenant_id"),
+        (("metadata", "retrieval"), "relay_hostname"),
+    ],
+)
+def test_context_pack_rejects_unknown_or_private_fields(
+    container_path: tuple[str | int, ...], field: str
+) -> None:
+    schema, instance, registry = _context_pack_contract()
+    container: Any = instance
+    for part in container_path:
+        container = container[part]
+    container[field] = "forbidden"
+
+    with pytest.raises(ValidationError):
+        validator_for(schema, registry).validate(instance)
+
+
+@pytest.mark.parametrize(
+    "identifier_path",
+    [
+        ("result", "context_pack_id"),
+        ("result", "persona", 0, "memory_id"),
+        ("result", "persona", 0, "evidence", 0, "evidence_id"),
+        ("result", "provenance", 0, "event_id"),
+        ("metadata", "retrieval", "active_embedding_model_id"),
+    ],
+)
+def test_context_pack_requires_uuidv7(identifier_path: tuple[str | int, ...]) -> None:
+    schema, instance, registry = _context_pack_contract()
+    container: Any = instance
+    for part in identifier_path[:-1]:
+        container = container[part]
+    container[identifier_path[-1]] = "fb881b02-19a2-45cf-b41e-6011ad486c14"
+
+    with pytest.raises(ValidationError):
+        validator_for(schema, registry).validate(instance)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "estimator",
+        "requested_units",
+        "used_units",
+        "serialized_bytes",
+        "byte_ceiling",
+        "truncated",
+        "omission_reasons",
+    ],
+)
+def test_context_pack_requires_complete_budget_metadata(field: str) -> None:
+    schema, instance, registry = _context_pack_contract()
+    del instance["metadata"]["budget"][field]
+
+    with pytest.raises(ValidationError):
+        validator_for(schema, registry).validate(instance)
+
+
+@pytest.mark.parametrize(
+    ("container_path", "field"),
+    [
+        (("result", "persona", 0), "excerpt"),
+        (("result", "persona", 0, "evidence", 0), "statement"),
+    ],
+)
+def test_context_pack_keeps_untrusted_evidence_separate(
+    container_path: tuple[str | int, ...], field: str
+) -> None:
+    schema, instance, registry = _context_pack_contract()
+    container: Any = instance
+    for part in container_path:
+        container = container[part]
+    container[field] = "Blended evidence must be rejected."
+
+    with pytest.raises(ValidationError):
+        validator_for(schema, registry).validate(instance)
+
+
+def test_context_pack_requires_untrusted_evidence_marker() -> None:
+    schema, instance, registry = _context_pack_contract()
+    del instance["result"]["persona"][0]["evidence"][0]["trust"]
+
+    with pytest.raises(ValidationError):
+        validator_for(schema, registry).validate(instance)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda instance: instance["metadata"]["retrieval"].pop("active_embedding_model_id"),
+        lambda instance: instance["metadata"]["retrieval"]["channels"].pop("semantic"),
+        lambda instance: instance["metadata"]["retrieval"]["channels"]["semantic"].update(
+            {"reason": "provider_internal_error"}
+        ),
+        lambda instance: instance["warnings"].append("private_diagnostic"),
+    ],
+)
+def test_context_pack_closes_profile_channel_and_warning_vocabulary(
+    mutation: Callable[[dict[str, Any]], object],
+) -> None:
+    schema, instance, registry = _context_pack_contract()
+    mutation(instance)
+
+    with pytest.raises(ValidationError):
+        validator_for(schema, registry).validate(instance)
 
 
 def test_event_operation_vocabulary_includes_every_replayable_change() -> None:

@@ -1,0 +1,55 @@
+{
+  "authority_values": {
+    "assistant_interpretation": 0.45,
+    "assistant_observation": 0.65,
+    "explicit_user_correction": 1.0,
+    "explicit_user_statement": 0.95,
+    "external_source": 0.55,
+    "imported_legacy_memory": 0.4,
+    "verified_project_source": 0.9
+  },
+  "candidate_depths": {
+    "lexical": 200,
+    "semantic": 200,
+    "trigram": 200
+  },
+  "category_recency_curve": {
+    "assistant_preference_like_pattern": "stable_identity",
+    "boundary_or_permission": "stable_identity",
+    "emergent_tendency": "default",
+    "episodic_anchor": "default",
+    "external_fact": "default",
+    "interaction_convention": "stable_identity",
+    "interpretation": "default",
+    "open_question": "default",
+    "procedure": "default",
+    "project_decision": "stable_identity",
+    "project_state": "project_state",
+    "relationship_pattern": "stable_identity",
+    "stable_fact": "stable_identity",
+    "user_preference": "stable_identity"
+  },
+  "generator_weights": {
+    "lexical": 1.0,
+    "semantic": 1.0,
+    "trigram": 0.7
+  },
+  "k": 60,
+  "modifier_weights": {
+    "authority": 0.15,
+    "confidence": 0.05,
+    "recency": 0.03,
+    "salience": 0.08,
+    "scope_match": 0.12
+  },
+  "profile_version": "rrf-v1",
+  "recency_curves": {
+    "default_half_life_days": 3650,
+    "project_state_half_life_days": 90,
+    "stable_identity_half_life_days": 36500
+  },
+  "tie_break": [
+    "final_score_desc",
+    "memory_id_asc"
+  ]
+}
