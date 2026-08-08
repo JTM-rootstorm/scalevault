@@ -294,9 +294,12 @@ async def test_embedding_queue_is_async_revision_safe_idempotent_and_tombstone_c
         assert await _handle_and_ack(database, version_two_job, runtime) == "embedded"
         async with database.tenant_session(_principal().tenant_id) as session:
             repository = RetrievalRepository(session)
-            assert not await repository.vector_candidates(_filters(), _vector(0), 5)
+            old_direction = await repository.vector_candidates(_filters(), _vector(0), 5)
+            assert [item.memory_id for item in old_direction] == [memory_id]
+            assert old_direction[0].channel_score == 0.0
             replacement = await repository.vector_candidates(_filters(), _vector(1), 5)
             assert [item.memory_id for item in replacement] == [memory_id]
+            assert replacement[0].channel_score == 1.0
             row = await session.scalar(
                 select(MemoryEmbeddingV1).where(MemoryEmbeddingV1.memory_id == memory_id)
             )
