@@ -13,8 +13,13 @@ from kivra_memory.application.candidate_lifecycle import (
     CandidateLifecycleExecutionError,
     _LifecycleIdentifiers,
 )
+from kivra_memory.application.candidate_lifecycle import (
+    _event as lifecycle_event,
+)
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.domain.commands import CandidatePromotionCommand
+from kivra_memory.domain.enums import EventOperation
+from kivra_memory.domain.events import CandidateLifecyclePayload
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.event_store import EventStoreError
 from kivra_memory.storage.models import Memory, SelectionDecision
@@ -49,6 +54,47 @@ def _command(memory_id: UUID, decision_id: UUID) -> CandidatePromotionCommand:
         selection_decision_id=decision_id,
         policy_rule_code="candidate_promoted",
     )
+
+
+def test_lifecycle_event_builder_hashes_the_v2_payload_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def hash_fields(**kwargs: object) -> tuple[dict[str, object], str, str, str]:
+        captured.update(kwargs)
+        return {}, "e30=", "0" * 64, "1" * 64
+
+    def event_model(**kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(candidate_lifecycle, "event_hash_fields", hash_fields)
+    monkeypatch.setattr(candidate_lifecycle, "MemoryEvent", event_model)
+    principal = CommandPrincipal(
+        tenant_id=new_uuid7(),
+        actor_id=new_uuid7(),
+        client_id=new_uuid7(),
+        transport_binding_id=new_uuid7(),
+        scopes=frozenset({"memory.lifecycle.promote"}),
+    )
+
+    event = lifecycle_event(
+        operation=EventOperation.CANDIDATE_PROMOTED,
+        principal=principal,
+        branch_id=new_uuid7(),
+        lineage_id=new_uuid7(),
+        memory_id=new_uuid7(),
+        expected_revision=1,
+        payload=cast(CandidateLifecyclePayload, SimpleNamespace()),
+        event_id=new_uuid7(),
+        correlation_id=new_uuid7(),
+        idempotency_key="lifecycle-v2-event-unit",
+        created_at=datetime(2026, 8, 8, tzinfo=UTC),
+        policy_rule_code="independent_observations",
+    )
+
+    assert event.payload_version == 2
+    assert captured["payload_version"] == 2
 
 
 @pytest.mark.asyncio

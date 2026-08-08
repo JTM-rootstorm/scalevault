@@ -444,6 +444,7 @@ def _event(
     payload_value, payload_canonical, payload_sha256, command_sha256 = event_hash_fields(
         operation=operation,
         payload=payload,
+        payload_version=2,
         tenant_id=principal.tenant_id,
         lineage_id=lineage_id,
         branch_id=command.branch_id,

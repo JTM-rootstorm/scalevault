@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
+from kivra_memory.application import selection
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import (
     NominationCommandLike,
@@ -23,15 +24,20 @@ from kivra_memory.application.selection import (
     _validate_session_scope_anchors,
     _validate_unsealed_identity,
 )
+from kivra_memory.application.selection import (
+    _event as selection_event,
+)
 from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import (
     AuthorityClass,
+    EventOperation,
     MemoryCategory,
     MemoryScope,
     MemoryVisibility,
     OntologicalStatus,
     SubjectKind,
 )
+from kivra_memory.domain.events import MemoryCreatedPayloadV2
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.policy import (
     ContentSignal,
@@ -133,6 +139,55 @@ def _receipt(command: NominationCommandLike, principal: CommandPrincipal) -> Com
         result_sha256=hashlib.sha256(canonical).digest(),
         created_at=datetime.now(UTC),
     )
+
+
+def test_nomination_event_builder_hashes_the_v2_payload_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def hash_fields(**kwargs: object) -> tuple[dict[str, object], str, str, str]:
+        captured.update(kwargs)
+        return {}, "e30=", "0" * 64, "1" * 64
+
+    def event_model(**kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(selection, "event_hash_fields", hash_fields)
+    monkeypatch.setattr(selection, "MemoryEvent", event_model)
+    principal = CommandPrincipal(
+        tenant_id=new_uuid7(),
+        actor_id=new_uuid7(),
+        client_id=new_uuid7(),
+        transport_binding_id=new_uuid7(),
+        scopes=frozenset({"memory.write.nominate"}),
+    )
+    branch_id = new_uuid7()
+    command = cast(
+        NominationCommandLike,
+        SimpleNamespace(
+            branch_id=branch_id,
+            logical_session_id=None,
+            idempotency_key="selection-v2-event-unit",
+        ),
+    )
+
+    event = selection_event(
+        operation=EventOperation.OBSERVED,
+        principal=principal,
+        command=command,
+        lineage_id=new_uuid7(),
+        payload=cast(MemoryCreatedPayloadV2, SimpleNamespace()),
+        event_id=new_uuid7(),
+        correlation_id=new_uuid7(),
+        created_at=datetime(2026, 8, 8, tzinfo=UTC),
+        memory_id=new_uuid7(),
+        expected_revision=None,
+        policy_input_digest=b"ignored-by-v2-envelope",
+    )
+
+    assert event.payload_version == 2
+    assert captured["payload_version"] == 2
 
 
 async def test_promotion_provider_requires_exact_internal_scope_and_binding() -> None:
