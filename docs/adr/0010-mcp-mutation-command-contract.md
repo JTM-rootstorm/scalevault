@@ -103,10 +103,10 @@ cannot force lifecycle or publication state.
 `MemoryRevisionInputV1` is a strict, non-empty patch over mutable semantic
 fields. Omission means unchanged; explicit `null` is accepted only for fields
 that are nullable in ADR 0008. It cannot change identity, tenant, lineage,
-branch, revision, creation time, lifecycle state, transport provenance, or
-server-owned protection and publication fields. A scope or subject change must
-supply the complete mutually consistent scope/subject/origin group and pass
-ADR 0008's structural validation.
+branch, subject, scope, origin session, revision, creation time, lifecycle
+state, transport provenance, or server-owned protection and publication
+fields. Moving a claim to another structural scope requires a new memory and
+an explicit typed relationship; revision never rewrites the claim's identity.
 
 Conflict-resolution `resulting_status` is limited to `active`, `superseded`, or
 `retired`. `user_confirmed` must be true when policy requires explicit user
