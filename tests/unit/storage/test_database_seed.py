@@ -124,9 +124,7 @@ def test_seed_has_required_clients_bindings_and_fail_closed_authorization_shape(
     }
     direct_operations = cast(
         list[str],
-        cast(dict[str, object], bindings["direct_private"]["authorized_operations"])[
-            "operations"
-        ],
+        cast(dict[str, object], bindings["direct_private"]["authorized_operations"])["operations"],
     )
     assert {"candidate_promoted", "candidate_expired"}.isdisjoint(direct_operations)
     relay_operations = cast(

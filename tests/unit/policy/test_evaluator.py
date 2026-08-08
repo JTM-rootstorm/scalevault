@@ -243,9 +243,7 @@ def test_sentience_claim_cannot_be_literal_or_active() -> None:
             scope=MemoryScope.PERSONA,
             effective_authority_class=AuthorityClass.EXPLICIT_USER_STATEMENT,
             content_signals=frozenset({ContentSignal.SUBJECTIVE_EXPERIENCE_CLAIM}),
-            epistemic_qualifiers=frozenset(
-                {EpistemicQualifier.SUBJECTIVE_EXPERIENCE_UNRESOLVED}
-            ),
+            epistemic_qualifiers=frozenset({EpistemicQualifier.SUBJECTIVE_EXPERIENCE_UNRESOLVED}),
             interpretation_limits=("Available evidence does not resolve subjective experience.",),
             evidence=(evidence(EvidenceKind.USER_STATEMENT),),
         )
@@ -290,9 +288,7 @@ def test_imported_legacy_memory_remains_qualified_candidate() -> None:
         request(
             basis=SelectionBasis.IMPORTED_LEGACY,
             effective_authority_class=AuthorityClass.IMPORTED_LEGACY_MEMORY,
-            epistemic_qualifiers=frozenset(
-                {EpistemicQualifier.IMPORTED_SOURCE_UNRECONCILED}
-            ),
+            epistemic_qualifiers=frozenset({EpistemicQualifier.IMPORTED_SOURCE_UNRECONCILED}),
             interpretation_limits=("The imported record has not been reconciled.",),
             evidence=(evidence(EvidenceKind.IMPORT_MANIFEST),),
         )

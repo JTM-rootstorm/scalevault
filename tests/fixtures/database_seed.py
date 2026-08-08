@@ -71,9 +71,7 @@ def seed_rows() -> SeedRows:
         EventOperation.CANDIDATE_EXPIRED,
     }
     direct_operations = [
-        operation
-        for operation in EventOperation
-        if operation not in ordinary_lifecycle_operations
+        operation for operation in EventOperation if operation not in ordinary_lifecycle_operations
     ]
     relay_operations = [
         operation.value

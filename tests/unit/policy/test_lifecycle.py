@@ -66,9 +66,7 @@ def test_untrusted_or_insufficient_observation_evidence_does_not_promote() -> No
 
 def test_trusted_user_confirmation_can_promote_without_repetition() -> None:
     decision = evaluate_promotion(
-        candidate(
-            evidence=(evidence("confirmation:one", EvidenceKind.USER_CONFIRMATION),)
-        )
+        candidate(evidence=(evidence("confirmation:one", EvidenceKind.USER_CONFIRMATION),))
     )
 
     assert decision.action is LifecycleAction.PROMOTE
@@ -115,9 +113,7 @@ def test_non_candidate_and_stale_policy_promotion_are_safe_no_ops() -> None:
 
 def test_candidate_expires_at_deadline_but_not_before() -> None:
     now = datetime(2026, 8, 8, 18, 0, tzinfo=UTC)
-    due = evaluate_expiry(
-        ExpiryEvaluation(candidate=candidate(), deadline=now, evaluated_at=now)
-    )
+    due = evaluate_expiry(ExpiryEvaluation(candidate=candidate(), deadline=now, evaluated_at=now))
     future = evaluate_expiry(
         ExpiryEvaluation(
             candidate=candidate(),

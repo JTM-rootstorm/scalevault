@@ -116,8 +116,7 @@ def test_zero_to_head_and_full_round_trip(
             text("SELECT counter_id, next_sequence FROM selection_decision_counter")
         ).one() == (1, 1)
         assert (
-            connection.execute(text("SELECT count(*) FROM selection_decisions")).scalar_one()
-            == 0
+            connection.execute(text("SELECT count(*) FROM selection_decisions")).scalar_one() == 0
         )
         assert connection.execute(
             text(

@@ -80,9 +80,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("counter_id", name=op.f("pk_selection_decision_counter")),
     )
     op.execute(
-        sa.text(
-            "INSERT INTO selection_decision_counter (counter_id, next_sequence) VALUES (1, 1)"
-        )
+        sa.text("INSERT INTO selection_decision_counter (counter_id, next_sequence) VALUES (1, 1)")
     )
 
     op.create_table(
@@ -135,8 +133,8 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "NOT jsonb_path_exists(matched_rule_ids, "
-            "'$[*] ? (@.type() != \"string\" || "
-            "!(@ like_regex \"^[a-z][a-z0-9_.-]{0,127}$\"))')",
+            '\'$[*] ? (@.type() != "string" || '
+            '!(@ like_regex "^[a-z][a-z0-9_.-]{0,127}$"))\')',
             name=op.f("ck_selection_decisions_matched_rule_ids_safe"),
         ),
         sa.CheckConstraint(
@@ -181,8 +179,8 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "NOT jsonb_path_exists(reason_codes, "
-            "'$[*] ? (@.type() != \"string\" || "
-            "!(@ like_regex \"^[a-z][a-z0-9_]{0,63}$\"))')",
+            '\'$[*] ? (@.type() != "string" || '
+            '!(@ like_regex "^[a-z][a-z0-9_]{0,63}$"))\')',
             name=op.f("ck_selection_decisions_reason_codes_safe"),
         ),
         sa.CheckConstraint(
@@ -190,8 +188,7 @@ def upgrade() -> None:
             name=op.f("ck_selection_decisions_requested_operation_values"),
         ),
         sa.CheckConstraint(
-            "scope IN ('global', 'persona', 'relationship', 'project', 'episodic', "
-            "'scene_local')",
+            "scope IN ('global', 'persona', 'relationship', 'project', 'episodic', 'scene_local')",
             name=op.f("ck_selection_decisions_scope_values"),
         ),
         sa.CheckConstraint(

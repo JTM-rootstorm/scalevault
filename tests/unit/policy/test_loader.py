@@ -62,9 +62,7 @@ def test_loader_rejects_precedence_changes_and_candidate_ttl_mismatch(tmp_path: 
         load_selection_policy(precedence)
 
     document = json.loads(SELECTION_V1.canonical_bytes)
-    candidate = next(
-        rule for rule in document["basis_rules"] if rule["outcome"] == "candidate"
-    )
+    candidate = next(rule for rule in document["basis_rules"] if rule["outcome"] == "candidate")
     candidate["candidate_ttl_days"] = None
     ttl = tmp_path / "ttl.json"
     ttl.write_text(json.dumps(document), encoding="utf-8")
