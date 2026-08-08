@@ -132,7 +132,13 @@ class LocalGitObjectReader:
     def _git(self, *arguments: str) -> bytes:
         try:
             result = subprocess.run(
-                ("git", "-C", str(self._repository_path), *arguments),
+                (
+                    "git",
+                    "--no-replace-objects",
+                    "-C",
+                    str(self._repository_path),
+                    *arguments,
+                ),
                 check=True,
                 capture_output=True,
                 timeout=30,
@@ -215,6 +221,7 @@ class PlannedImportRecord:
     source_path: str
     record_kind: str
     source_record_id: str
+    owner_actor_id: str | None
     derived_record_sha256: str
     idempotency_key: str
 
@@ -260,7 +267,7 @@ def build_import_plan_manifest(
         _require_version(version, "parser_schema_version")
         version_map[contract.value] = version
 
-    plan_values: list[dict[str, str]] = []
+    plan_values: list[dict[str, object]] = []
     plan_identities: set[tuple[str, str, str]] = set()
     for record in planned_records:
         if record.source_path not in items_by_path:
@@ -269,6 +276,11 @@ def build_import_plan_manifest(
             raise ManifestError("planned record kind was invalid")
         if _SAFE_SOURCE_ID.fullmatch(record.source_record_id) is None:
             raise ManifestError("planned source record ID was invalid")
+        if (
+            record.owner_actor_id is not None
+            and _SAFE_SOURCE_ID.fullmatch(record.owner_actor_id) is None
+        ):
+            raise ManifestError("planned owner actor ID was invalid")
         _require_sha256(record.derived_record_sha256, "derived_record_sha256")
         if _SAFE_IDEMPOTENCY_KEY.fullmatch(record.idempotency_key) is None:
             raise ManifestError("planned idempotency key was invalid")
@@ -281,6 +293,7 @@ def build_import_plan_manifest(
                 "source_path": record.source_path,
                 "record_kind": record.record_kind,
                 "source_record_id": record.source_record_id,
+                "owner_actor_id": record.owner_actor_id,
                 "derived_record_sha256": record.derived_record_sha256,
                 "idempotency_key": record.idempotency_key,
             }
@@ -310,9 +323,9 @@ def build_import_plan_manifest(
         "planned_records": sorted(
             plan_values,
             key=lambda candidate: (
-                candidate["source_path"],
-                candidate["record_kind"],
-                candidate["source_record_id"],
+                str(candidate["source_path"]),
+                str(candidate["record_kind"]),
+                str(candidate["source_record_id"]),
             ),
         ),
     }

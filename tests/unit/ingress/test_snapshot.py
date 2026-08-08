@@ -215,6 +215,7 @@ def _record(source_path: str = CHECKPOINT_V2_PATH) -> PlannedImportRecord:
         source_path=source_path,
         record_kind="candidate",
         source_record_id="candidate-001",
+        owner_actor_id="kivra:genesis",
         derived_record_sha256="2" * 64,
         idempotency_key="genesis-import-v1:candidate-001",
     )
@@ -251,6 +252,7 @@ def test_manifest_is_content_free_canonical_and_order_independent() -> None:
         source_path=second_path,
         record_kind="exclusion",
         source_record_id="exclusion-001",
+        owner_actor_id=None,
         derived_record_sha256="3" * 64,
         idempotency_key="genesis-import-v1:exclusion-001",
     )
@@ -273,6 +275,7 @@ def test_manifest_digest_binds_raw_hash_mapping_parser_policy_and_derived_plan()
         source_path=CHECKPOINT_V2_PATH,
         record_kind="candidate",
         source_record_id="candidate-001",
+        owner_actor_id="kivra:genesis",
         derived_record_sha256="4" * 64,
         idempotency_key="genesis-import-v1:candidate-001",
     )
