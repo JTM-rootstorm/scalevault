@@ -130,7 +130,9 @@ def prepare_embedding_bundle(
 
     staging = Path(tempfile.mkdtemp(prefix=".embedding-bundle-", dir=model_root))
     try:
-        os.chown(staging, -1, model_root.stat().st_gid)
+        model_group = model_root.stat().st_gid
+        if staging.stat().st_gid != model_group:
+            os.chown(staging, -1, model_group)
         staging.chmod(0o2750)
         for role, source in source_values.items():
             target = staging / _DESTINATION_NAMES[role]

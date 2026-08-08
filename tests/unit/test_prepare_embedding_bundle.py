@@ -30,9 +30,16 @@ def _sources(root: Path) -> BundleSources:
     return BundleSources(**values)
 
 
-def test_prepare_bundle_is_canonical_complete_and_refuses_overwrite(tmp_path: Path) -> None:
+def test_prepare_bundle_is_canonical_complete_and_refuses_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     model_root = tmp_path / "models"
     model_root.mkdir()
+
+    def unexpected_chown(*_args: object) -> None:
+        raise AssertionError("matching inherited group must not trigger chown")
+
+    monkeypatch.setattr("scripts.prepare_embedding_bundle.os.chown", unexpected_chown)
     destination = prepare_embedding_bundle(
         model_root=model_root,
         sources=_sources(tmp_path / "sources"),
