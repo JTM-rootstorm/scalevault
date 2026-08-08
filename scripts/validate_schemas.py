@@ -16,10 +16,22 @@ from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker  # type: ignore[import-untyped]
 from referencing import Registry, Resource
 from referencing.exceptions import Unresolvable
+from rfc8785 import dumps as canonical_json_bytes
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_DIRECTORY = REPOSITORY_ROOT / "schemas"
 FIXTURE_DIRECTORY = REPOSITORY_ROOT / "tests" / "contract" / "fixtures" / "json_schemas"
+SELECTION_POLICY_PATH = (
+    REPOSITORY_ROOT
+    / "services"
+    / "memory-node"
+    / "src"
+    / "kivra_memory"
+    / "policy"
+    / "profiles"
+    / "selection-v1.json"
+)
+SELECTION_POLICY_SHA256 = "b12dd83889d2a273e260c5b990eea5a0b6531ab38be76fca47642f471d2bf85e"
 
 Schema = dict[str, Any]
 RFC3339_DATE_TIME = re.compile(
@@ -117,7 +129,11 @@ def validate_representative_instances(
     schema_documents: dict[Path, Schema], registry: Registry[Any]
 ) -> None:
     for path, schema in schema_documents.items():
-        fixture_path = FIXTURE_DIRECTORY / path.name
+        fixture_path = (
+            SELECTION_POLICY_PATH
+            if path.name == "memory-selection-policy-v1.schema.json"
+            else FIXTURE_DIRECTORY / path.name
+        )
         if not fixture_path.is_file():
             raise RuntimeError(f"{path}: representative fixture is missing: {fixture_path}")
 
@@ -133,6 +149,10 @@ def validate_representative_instances(
 
         if path.name == "memory-event.schema.json":
             validate_event_payload_identity(instance, fixture_path)
+        elif path.name == "memory-selection-policy-v1.schema.json":
+            digest = hashlib.sha256(canonical_json_bytes(instance)).hexdigest()
+            if digest != SELECTION_POLICY_SHA256:
+                raise ValueError(f"{fixture_path}: selection policy digest does not match ADR 0013")
 
 
 def validate_event_payload_identity(instance: Schema, fixture_path: Path) -> None:

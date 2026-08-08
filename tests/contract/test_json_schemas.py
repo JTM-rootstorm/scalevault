@@ -7,12 +7,16 @@ from typing import Any
 import pytest
 from jsonschema import ValidationError  # type: ignore[import-untyped]
 from kivra_memory.domain.events import MemoryEvent
+from kivra_memory.policy import SELECTION_V1_PROFILE_SHA256, SelectionPolicyProfile
 from kivra_memory.retrieval.budgeting import estimate_utf8_upper_bound
 from kivra_memory.retrieval.contracts import ContextPackResult
 from kivra_memory.retrieval.ranking import RRF_V1_PROFILE_SHA256
+from kivra_memory.seeding.contracts import PrivateSeedBundle
 
 from scripts.validate_schemas import (
     FIXTURE_DIRECTORY,
+    SELECTION_POLICY_PATH,
+    SELECTION_POLICY_SHA256,
     build_registry,
     load_schema,
     load_schema_documents,
@@ -24,7 +28,81 @@ from scripts.validate_schemas import (
 
 
 def test_repository_schemas_and_representative_instances_are_valid() -> None:
-    assert validate_repository() == 6
+    assert validate_repository() == 8
+
+
+def test_selection_policy_schema_matches_the_canonical_profile() -> None:
+    schema_documents = load_schema_documents()
+    schema_path = next(
+        path for path in schema_documents if path.name == "memory-selection-policy-v1.schema.json"
+    )
+    profile = load_schema(SELECTION_POLICY_PATH)
+    registry = build_registry(schema_documents)
+
+    validator_for(schema_documents[schema_path], registry).validate(profile)
+    SelectionPolicyProfile.model_validate_json(SELECTION_POLICY_PATH.read_text(encoding="utf-8"))
+    assert SELECTION_V1_PROFILE_SHA256 == SELECTION_POLICY_SHA256
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda profile: profile.update({"rules": []}),
+        lambda profile: profile["precedence"].reverse(),
+        lambda profile: profile["basis_rules"][0].update({"candidate_ttl_days": 10}),
+        lambda profile: profile["signal_guardrails"][0].update({"expression": "scope == global"}),
+    ],
+)
+def test_selection_policy_rejects_drift_and_expression_language(
+    mutation: Callable[[dict[str, Any]], object],
+) -> None:
+    schema_documents = load_schema_documents()
+    schema_path = next(
+        path for path in schema_documents if path.name == "memory-selection-policy-v1.schema.json"
+    )
+    profile = load_schema(SELECTION_POLICY_PATH)
+    mutation(profile)
+    registry = build_registry(schema_documents)
+
+    with pytest.raises(ValidationError):
+        validator_for(schema_documents[schema_path], registry).validate(profile)
+
+
+def test_private_seed_fixture_matches_strict_operator_local_contract() -> None:
+    fixture = FIXTURE_DIRECTORY / "private-seed-v1.schema.json"
+
+    bundle = PrivateSeedBundle.model_validate_json(fixture.read_text(encoding="utf-8"))
+    assert bundle.contract_version == "scalevault-private-seed-v1"
+    assert bundle.records[0].selector.tenant == "local_operator"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda bundle: bundle["records"][0]["selector"].update(
+            {"tenant": "019b0080-0000-7000-8000-000000000102"}
+        ),
+        lambda bundle: bundle["records"][0]["memory"].update({"visibility": "public_seed"}),
+        lambda bundle: bundle["records"][0]["memory"].update({"scope": "scene_local"}),
+        lambda bundle: bundle.update({"reviewed": True}),
+        lambda bundle: bundle["records"][0]["memory"].update(
+            {"authority_class": "explicit_user_statement"}
+        ),
+    ],
+)
+def test_private_seed_rejects_deployment_identity_and_self_asserted_trust(
+    mutation: Callable[[dict[str, Any]], object],
+) -> None:
+    schema_documents = load_schema_documents()
+    schema_path = next(
+        path for path in schema_documents if path.name == "private-seed-v1.schema.json"
+    )
+    bundle = load_schema(FIXTURE_DIRECTORY / schema_path.name)
+    mutation(bundle)
+    registry = build_registry(schema_documents)
+
+    with pytest.raises(ValidationError):
+        validator_for(schema_documents[schema_path], registry).validate(bundle)
 
 
 def test_dangling_local_reference_is_rejected() -> None:
@@ -224,6 +302,8 @@ def test_event_operation_vocabulary_includes_every_replayable_change() -> None:
     assert set(schema["$defs"]["operation"]["enum"]) == {
         "observed",
         "remembered",
+        "candidate_promoted",
+        "candidate_expired",
         "revised",
         "evidence_attached",
         "evidence_redacted",

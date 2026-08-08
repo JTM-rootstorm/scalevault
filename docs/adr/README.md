@@ -18,6 +18,7 @@ documentation and do not change these decisions implicitly.
 | [0010](0010-mcp-mutation-command-contract.md) | Accepted | Freeze mutation tools, typed command semantics, fine-grained scopes, concurrency behavior, and the durable storage boundary. |
 | [0011](0011-mcp-read-retrieval-and-status-contract.md) | Accepted | Freeze exact-branch read and status tools, privacy-safe results, hybrid ranking, and bounded context output. |
 | [0012](0012-versioned-local-embedding-model.md) | Accepted | Use a pinned local 384-dimensional MiniLM model with versioned derived storage and explicit activation. |
+| [0013](0013-versioned-selection-policy-and-lifecycle.md) | Accepted | Use a hashed declarative selection profile, immutable decisions, replayable candidate lifecycle, and operator-local private seeds. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries

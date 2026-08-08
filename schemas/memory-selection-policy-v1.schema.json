@@ -1,0 +1,334 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/memory-selection-policy-v1.schema.json",
+    "title": "ScaleVault memory selection profile v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "policy_id",
+        "profile_version",
+        "precedence",
+        "default_outcome",
+        "default_reason_code",
+        "basis_rules",
+        "signal_guardrails"
+    ],
+    "properties": {
+        "policy_id": { "const": "scalevault-memory-selection" },
+        "profile_version": { "const": "selection-v1" },
+        "precedence": {
+            "const": ["structural", "hard_guardrail", "evidence", "basis", "qualification"]
+        },
+        "default_outcome": { "const": "reject" },
+        "default_reason_code": { "const": "no_matching_rule" },
+        "basis_rules": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/basis_rule" },
+            "minItems": 1,
+            "maxItems": 32
+        },
+        "signal_guardrails": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/signal_guardrail" },
+            "minItems": 1,
+            "maxItems": 16
+        }
+    },
+    "$defs": {
+        "rule_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]*$",
+            "maxLength": 128
+        },
+        "selection_basis": {
+            "enum": [
+                "routine_banter",
+                "explicit_user_correction",
+                "explicit_user_preference",
+                "explicit_user_permission",
+                "verified_project_decision",
+                "assistant_observation",
+                "assistant_interpretation",
+                "imported_legacy",
+                "meaningful_episodic_anchor",
+                "explicit_user_request"
+            ]
+        },
+        "policy_reason_code": {
+            "enum": [
+                "no_matching_rule",
+                "routine_banter_omitted",
+                "explicit_user_correction",
+                "explicit_user_preference",
+                "explicit_user_permission",
+                "verified_project_decision",
+                "assistant_observation_candidate",
+                "assistant_interpretation_candidate",
+                "imported_legacy_candidate",
+                "meaningful_episodic_anchor",
+                "explicit_user_request",
+                "reason_required",
+                "evidence_required",
+                "authority_not_established",
+                "basis_category_incompatible",
+                "category_ontology_incompatible",
+                "roleplay_literalization",
+                "roleplay_scope_forbidden",
+                "roleplay_visibility_forbidden",
+                "epistemic_qualification_required",
+                "sentience_overclaim"
+            ]
+        },
+        "category": {
+            "enum": [
+                "stable_fact",
+                "user_preference",
+                "assistant_preference_like_pattern",
+                "boundary_or_permission",
+                "interaction_convention",
+                "relationship_pattern",
+                "emergent_tendency",
+                "episodic_anchor",
+                "project_decision",
+                "project_state",
+                "procedure",
+                "open_question",
+                "interpretation",
+                "external_fact"
+            ]
+        },
+        "ontology": {
+            "enum": [
+                "literal_user_fact",
+                "literal_technical_fact",
+                "assistant_self_description",
+                "observed_assistant_behavior",
+                "interaction_convention",
+                "fictional_or_roleplayed_scene",
+                "hypothesis",
+                "uncertain"
+            ]
+        },
+        "scope": {
+            "enum": ["global", "persona", "relationship", "project", "episodic", "scene_local"]
+        },
+        "visibility": {
+            "enum": ["private_root", "restricted", "shareable", "public_seed"]
+        },
+        "authority_class": {
+            "enum": [
+                "explicit_user_correction",
+                "explicit_user_statement",
+                "verified_project_source",
+                "assistant_observation",
+                "assistant_interpretation",
+                "external_source",
+                "imported_legacy_memory"
+            ]
+        },
+        "epistemic_qualifier": {
+            "enum": [
+                "roleplay_not_literal",
+                "assistant_pattern_not_subjective_experience",
+                "single_episode_not_stable_pattern",
+                "subjective_experience_unresolved",
+                "imported_source_unreconciled"
+            ]
+        },
+        "evidence_kind": {
+            "enum": [
+                "user_statement",
+                "user_correction",
+                "project_source",
+                "assistant_observation",
+                "import_manifest",
+                "conversation_episode",
+                "user_confirmation"
+            ]
+        },
+        "evidence_trust": { "enum": ["trusted", "corroborated", "unverified"] },
+        "evidence_requirement": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kinds", "trusts", "minimum"],
+            "properties": {
+                "kinds": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/evidence_kind" },
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "uniqueItems": true
+                },
+                "trusts": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/evidence_trust" },
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "uniqueItems": true
+                },
+                "minimum": { "type": "integer", "minimum": 1, "maximum": 64 }
+            }
+        },
+        "basis_rule": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "rule_id",
+                "basis",
+                "outcome",
+                "reason_code",
+                "allowed_categories",
+                "required_authority",
+                "evidence_requirement",
+                "required_qualifiers",
+                "requires_interpretation_limits",
+                "candidate_ttl_days"
+            ],
+            "properties": {
+                "rule_id": { "$ref": "#/$defs/rule_id" },
+                "basis": { "$ref": "#/$defs/selection_basis" },
+                "outcome": { "enum": ["omit", "candidate", "active"] },
+                "reason_code": { "$ref": "#/$defs/policy_reason_code" },
+                "allowed_categories": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/category" },
+                    "maxItems": 16,
+                    "uniqueItems": true
+                },
+                "required_authority": {
+                    "oneOf": [{ "$ref": "#/$defs/authority_class" }, { "type": "null" }]
+                },
+                "evidence_requirement": {
+                    "oneOf": [
+                        { "$ref": "#/$defs/evidence_requirement" },
+                        { "type": "null" }
+                    ]
+                },
+                "required_qualifiers": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/epistemic_qualifier" },
+                    "maxItems": 16,
+                    "uniqueItems": true
+                },
+                "requires_interpretation_limits": { "type": "boolean" },
+                "candidate_ttl_days": {
+                    "oneOf": [
+                        { "type": "integer", "minimum": 1, "maximum": 3650 },
+                        { "type": "null" }
+                    ]
+                }
+            },
+            "allOf": [
+                {
+                    "if": {
+                        "properties": { "outcome": { "const": "candidate" } },
+                        "required": ["outcome"]
+                    },
+                    "then": {
+                        "properties": {
+                            "candidate_ttl_days": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3650
+                            }
+                        }
+                    },
+                    "else": {
+                        "properties": { "candidate_ttl_days": { "type": "null" } }
+                    }
+                }
+            ]
+        },
+        "signal_guardrail": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "rule_id",
+                "signal",
+                "allowed_categories",
+                "allowed_ontologies",
+                "allowed_scopes",
+                "allowed_visibilities",
+                "required_qualifiers",
+                "requires_interpretation_limits",
+                "force_candidate",
+                "forced_candidate_ttl_days",
+                "violation_code"
+            ],
+            "properties": {
+                "rule_id": { "$ref": "#/$defs/rule_id" },
+                "signal": {
+                    "enum": [
+                        "roleplayed_scene",
+                        "assistant_preference_like",
+                        "subjective_experience_claim"
+                    ]
+                },
+                "allowed_categories": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/category" },
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "uniqueItems": true
+                },
+                "allowed_ontologies": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/ontology" },
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "uniqueItems": true
+                },
+                "allowed_scopes": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/scope" },
+                    "minItems": 1,
+                    "maxItems": 6,
+                    "uniqueItems": true
+                },
+                "allowed_visibilities": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/visibility" },
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "uniqueItems": true
+                },
+                "required_qualifiers": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/epistemic_qualifier" },
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "uniqueItems": true
+                },
+                "requires_interpretation_limits": { "type": "boolean" },
+                "force_candidate": { "type": "boolean" },
+                "forced_candidate_ttl_days": {
+                    "oneOf": [
+                        { "type": "integer", "minimum": 1, "maximum": 3650 },
+                        { "type": "null" }
+                    ]
+                },
+                "violation_code": { "$ref": "#/$defs/policy_reason_code" }
+            },
+            "allOf": [
+                {
+                    "if": {
+                        "properties": { "force_candidate": { "const": true } },
+                        "required": ["force_candidate"]
+                    },
+                    "then": {
+                        "properties": {
+                            "forced_candidate_ttl_days": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3650
+                            }
+                        }
+                    },
+                    "else": {
+                        "properties": { "forced_candidate_ttl_days": { "type": "null" } }
+                    }
+                }
+            ]
+        }
+    }
+}

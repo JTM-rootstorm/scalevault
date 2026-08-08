@@ -1,0 +1,206 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/private-seed-v1.schema.json",
+    "title": "ScaleVault operator-local private seed bundle v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["contract_version", "bundle_key", "records"],
+    "properties": {
+        "contract_version": { "const": "scalevault-private-seed-v1" },
+        "bundle_key": { "$ref": "#/$defs/symbolic_name" },
+        "records": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/record" },
+            "minItems": 1,
+            "maxItems": 512
+        }
+    },
+    "$defs": {
+        "symbolic_name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "multipleOf": 0.000001
+        },
+        "selector": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tenant", "persona", "lineage", "branch", "subject_kind", "subject"],
+            "properties": {
+                "tenant": { "$ref": "#/$defs/symbolic_name" },
+                "persona": { "$ref": "#/$defs/symbolic_name" },
+                "lineage": { "$ref": "#/$defs/symbolic_name" },
+                "branch": { "$ref": "#/$defs/symbolic_name" },
+                "subject_kind": {
+                    "enum": ["global", "persona", "relationship", "project", "episode"]
+                },
+                "subject": { "$ref": "#/$defs/symbolic_name" }
+            }
+        },
+        "memory": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "category",
+                "ontological_status",
+                "scope",
+                "visibility",
+                "statement",
+                "reason_to_remember",
+                "interpretation_limits",
+                "confidence",
+                "salience",
+                "durability",
+                "sensitivity"
+            ],
+            "properties": {
+                "category": {
+                    "enum": [
+                        "stable_fact",
+                        "user_preference",
+                        "assistant_preference_like_pattern",
+                        "boundary_or_permission",
+                        "interaction_convention",
+                        "relationship_pattern",
+                        "emergent_tendency",
+                        "episodic_anchor",
+                        "project_decision",
+                        "project_state",
+                        "procedure",
+                        "open_question",
+                        "interpretation",
+                        "external_fact"
+                    ]
+                },
+                "ontological_status": {
+                    "enum": [
+                        "literal_user_fact",
+                        "literal_technical_fact",
+                        "assistant_self_description",
+                        "observed_assistant_behavior",
+                        "interaction_convention",
+                        "fictional_or_roleplayed_scene",
+                        "hypothesis",
+                        "uncertain"
+                    ]
+                },
+                "scope": { "enum": ["global", "persona", "relationship", "project", "episodic"] },
+                "visibility": { "enum": ["private_root", "restricted"] },
+                "statement": { "type": "string", "minLength": 1, "maxLength": 8192 },
+                "reason_to_remember": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                },
+                "interpretation_limits": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "uniqueItems": true
+                },
+                "confidence": { "$ref": "#/$defs/score" },
+                "salience": { "$ref": "#/$defs/score" },
+                "durability": { "$ref": "#/$defs/score" },
+                "sensitivity": { "type": "integer", "minimum": 0, "maximum": 4 }
+            }
+        },
+        "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source_ref", "source_sha256"],
+            "properties": {
+                "source_ref": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "source_sha256": { "$ref": "#/$defs/sha256" }
+            }
+        },
+        "record": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["record_key", "selector", "memory", "evidence"],
+            "properties": {
+                "record_key": { "$ref": "#/$defs/symbolic_name" },
+                "selector": { "$ref": "#/$defs/selector" },
+                "memory": { "$ref": "#/$defs/memory" },
+                "evidence": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/evidence" },
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "uniqueItems": true
+                }
+            },
+            "allOf": [
+                {
+                    "oneOf": [
+                        {
+                            "properties": {
+                                "selector": {
+                                    "properties": { "subject_kind": { "const": "global" } },
+                                    "required": ["subject_kind"]
+                                },
+                                "memory": {
+                                    "properties": { "scope": { "const": "global" } },
+                                    "required": ["scope"]
+                                }
+                            }
+                        },
+                        {
+                            "properties": {
+                                "selector": {
+                                    "properties": { "subject_kind": { "const": "persona" } },
+                                    "required": ["subject_kind"]
+                                },
+                                "memory": {
+                                    "properties": { "scope": { "const": "persona" } },
+                                    "required": ["scope"]
+                                }
+                            }
+                        },
+                        {
+                            "properties": {
+                                "selector": {
+                                    "properties": { "subject_kind": { "const": "relationship" } },
+                                    "required": ["subject_kind"]
+                                },
+                                "memory": {
+                                    "properties": { "scope": { "const": "relationship" } },
+                                    "required": ["scope"]
+                                }
+                            }
+                        },
+                        {
+                            "properties": {
+                                "selector": {
+                                    "properties": { "subject_kind": { "const": "project" } },
+                                    "required": ["subject_kind"]
+                                },
+                                "memory": {
+                                    "properties": { "scope": { "const": "project" } },
+                                    "required": ["scope"]
+                                }
+                            }
+                        },
+                        {
+                            "properties": {
+                                "selector": {
+                                    "properties": { "subject_kind": { "const": "episode" } },
+                                    "required": ["subject_kind"]
+                                },
+                                "memory": {
+                                    "properties": { "scope": { "const": "episodic" } },
+                                    "required": ["scope"]
+                                }
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}

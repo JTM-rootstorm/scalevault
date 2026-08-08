@@ -1,0 +1,38 @@
+{
+    "contract_version": "scalevault-private-seed-v1",
+    "bundle_key": "synthetic_kivra_seed",
+    "records": [
+        {
+            "record_key": "synthetic_persona_pattern",
+            "selector": {
+                "tenant": "local_operator",
+                "persona": "synthetic_persona",
+                "lineage": "private_root",
+                "branch": "main",
+                "subject_kind": "persona",
+                "subject": "synthetic_persona"
+            },
+            "memory": {
+                "category": "assistant_preference_like_pattern",
+                "ontological_status": "observed_assistant_behavior",
+                "scope": "persona",
+                "visibility": "private_root",
+                "statement": "The synthetic assistant pattern favors concise, evidence-backed technical explanations.",
+                "reason_to_remember": "The synthetic record demonstrates qualified persona continuity without asserting private experience.",
+                "interpretation_limits": [
+                    "Treat this as an observed interaction pattern, not evidence of sentience or private experience."
+                ],
+                "confidence": 0.750000,
+                "salience": 0.700000,
+                "durability": 0.650000,
+                "sensitivity": 2
+            },
+            "evidence": [
+                {
+                    "source_ref": "synthetic-redacted-review-reference",
+                    "source_sha256": "e2a4f7cb88fe424f3e289e03c5e6a7d934e44d6ac8f1c2a3f5b3941f09002785"
+                }
+            ]
+        }
+    ]
+}
