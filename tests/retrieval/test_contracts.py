@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from kivra_memory.domain.enums import EventOperation
 from kivra_memory.retrieval.contracts import (
     ContextPackQuery,
     MemoryGetQuery,
@@ -55,25 +56,24 @@ def test_context_pack_exposes_requested_memory_scopes_at_top_level() -> None:
     assert "requested_memory_scopes" in query.model_fields_set
 
 
-def test_memory_get_has_bounded_related_flags() -> None:
+def test_memory_get_exposes_only_implemented_conflict_expansion() -> None:
     query = MemoryGetQuery.model_validate(
         {
             **common(),
             "memory_id": uid(8),
-            "include_revisions": True,
-            "include_links": True,
             "include_conflicts": True,
-            "related_limit": 10,
         }
     )
 
-    assert query.include_revisions and query.related_limit == 10
+    assert query.include_conflicts is True
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        MemoryGetQuery.model_validate({**common(), "memory_id": uid(8), "include_evidence": True})
 
 
-def test_timeline_requires_exactly_one_window_or_anchor() -> None:
-    with pytest.raises(ValidationError, match="exactly one"):
+def test_timeline_requires_one_explicit_bounded_time_window() -> None:
+    with pytest.raises(ValidationError, match="Field required"):
         MemoryTimelineQuery.model_validate(common())
-    with pytest.raises(ValidationError, match="exactly one"):
+    with pytest.raises(ValidationError, match="Extra inputs"):
         MemoryTimelineQuery.model_validate(
             {
                 **common(),
@@ -81,16 +81,20 @@ def test_timeline_requires_exactly_one_window_or_anchor() -> None:
                 "anchor_event_id": uid(9),
             }
         )
-    assert MemoryTimelineQuery.model_validate(
-        {**common(), "anchor_memory_id": uid(8)}
-    ).anchor_memory_id == uid(8)
+    query = MemoryTimelineQuery.model_validate(
+        {
+            **common(),
+            "window": TimeWindow(starts_at=NOW, ends_at=NOW + timedelta(hours=1)),
+        }
+    )
+    assert query.window.starts_at == NOW
 
 
 def test_selection_history_record_exposes_events_not_identity_or_payload() -> None:
     record = SelectionEventRecord(
         event_id=uid(8),
         sequence=1,
-        operation="remembered",
+        operation=EventOperation.REMEMBERED,
         memory_id=uid(9),
         created_at=NOW,
     )
@@ -102,4 +106,4 @@ def test_selection_history_record_exposes_events_not_identity_or_payload() -> No
         "memory_id",
         "created_at",
     }
-    assert record.operation == "remembered"
+    assert record.operation is EventOperation.REMEMBERED

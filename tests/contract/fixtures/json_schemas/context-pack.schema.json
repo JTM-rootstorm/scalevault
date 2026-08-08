@@ -20,6 +20,7 @@
                 "visibility": "private_root",
                 "status": "active",
                 "statement": "Synthetic persona fixture.",
+                "reason_to_remember": "Synthetic reason fixture.",
                 "interpretation_limits": ["Synthetic contract data only."],
                 "authority_class": "assistant_observation",
                 "valid_from": null,
@@ -92,8 +93,8 @@
         "budget": {
             "estimator": "utf8-bytes-upper-bound-v1",
             "requested_units": 8192,
-            "used_units": 1755,
-            "serialized_bytes": 1755,
+            "used_units": 2488,
+            "serialized_bytes": 2488,
             "byte_ceiling": 262144,
             "truncated": false,
             "omission_reasons": []

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from kivra_memory.domain.enums import TransportKind
+from kivra_memory.retrieval.contracts import ReadResultMetadata, ReadWarningCode
 
 
 class TransportStatusQuery(BaseModel):
@@ -14,16 +15,14 @@ class TransportStatusQuery(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    contract_version: Literal["mcp-read-v1"] = "mcp-read-v1"
+    contract_version: Literal["mcp-read-v1"]
 
 
-class TransportStatusResult(BaseModel):
+class TransportStatusPayload(BaseModel):
     """Coarse transport health without routing or credential metadata."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    ok: Literal[True] = True
-    contract_version: Literal["mcp-read-v1"] = "mcp-read-v1"
     transport_kind: TransportKind
     binding_state: Literal["active"] = "active"
     installation_state: Literal["not_applicable", "active"]
@@ -31,4 +30,21 @@ class TransportStatusResult(BaseModel):
     freshness: Literal["never", "recent", "stale"]
 
 
-__all__ = ["TransportStatusQuery", "TransportStatusResult"]
+class TransportStatusResult(BaseModel):
+    """Closed read success envelope for the caller's current transport."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    ok: Literal[True] = True
+    contract_version: Literal["mcp-read-v1"] = "mcp-read-v1"
+    tool: Literal["memory_transport_status"] = "memory_transport_status"
+    result: TransportStatusPayload
+    warnings: tuple[ReadWarningCode, ...] = Field(default=(), max_length=8)
+    metadata: ReadResultMetadata = ReadResultMetadata()
+
+
+__all__ = [
+    "TransportStatusPayload",
+    "TransportStatusQuery",
+    "TransportStatusResult",
+]

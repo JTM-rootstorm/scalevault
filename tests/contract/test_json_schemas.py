@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from jsonschema import ValidationError  # type: ignore[import-untyped]
 from kivra_memory.domain.events import MemoryEvent
+from kivra_memory.retrieval.budgeting import estimate_utf8_upper_bound
 from kivra_memory.retrieval.contracts import ContextPackResult
 from kivra_memory.retrieval.ranking import RRF_V1_PROFILE_SHA256
 
@@ -97,6 +98,9 @@ def test_context_pack_fixture_matches_transport_neutral_read_contract() -> None:
     result = ContextPackResult.model_validate_json(fixture_path.read_text(encoding="utf-8"))
     assert result.metadata.retrieval is not None
     assert result.metadata.retrieval.sha256 == RRF_V1_PROFILE_SHA256
+    assert result.metadata.budget.used_units == estimate_utf8_upper_bound(result)
+    schema, _, registry = _context_pack_contract()
+    validator_for(schema, registry).validate(result.model_dump(mode="json"))
 
 
 @pytest.mark.parametrize(

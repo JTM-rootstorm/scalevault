@@ -16,13 +16,13 @@ from kivra_memory.retrieval.contracts import (
     BudgetMetadata,
     ConflictGroup,
     ContextPack,
+    ContextPackMetadata,
     ContextPackResult,
     ContextSection,
     ExclusionSummary,
     MemoryHit,
     OmissionReason,
     ProvenanceRecord,
-    ReadResultMetadata,
     ReadWarningCode,
     RetrievalProfileInfo,
 )
@@ -160,7 +160,8 @@ def _result_with_size(
         result = ContextPackResult(
             result=pack,
             warnings=warnings,
-            metadata=ReadResultMetadata(
+            metadata=ContextPackMetadata(
+                pagination=None,
                 retrieval=retrieval,
                 budget=BudgetMetadata(
                     requested_units=requested_units,

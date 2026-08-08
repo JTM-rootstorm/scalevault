@@ -104,6 +104,7 @@
                 "visibility",
                 "status",
                 "statement",
+                "reason_to_remember",
                 "interpretation_limits",
                 "authority_class",
                 "valid_from",
@@ -173,6 +174,12 @@
                 "visibility": {"enum": ["private_root", "restricted", "shareable", "public_seed"]},
                 "status": {"enum": ["candidate", "active", "disputed"]},
                 "statement": {"type": "string", "minLength": 1, "maxLength": 8192},
+                "reason_to_remember": {
+                    "oneOf": [
+                        {"type": "string", "minLength": 1, "maxLength": 4096},
+                        {"type": "null"}
+                    ]
+                },
                 "interpretation_limits": {
                     "type": "array",
                     "items": {"type": "string", "minLength": 1, "maxLength": 1024},

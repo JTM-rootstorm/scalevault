@@ -355,9 +355,11 @@ def _job_types(
 def test_create_and_revision_duplicate_scheduling_is_content_sensitive() -> None:
     created = memory().model_copy(update={"revision": 1})
     create_payload = MemoryCreatedPayload(memory=created)
-    assert _job_types(
-        _mock_command(RememberCommand), create_payload
-    ) == ["embed_memory", "check_duplicates", "export_git_batch"]
+    assert _job_types(_mock_command(RememberCommand), create_payload) == [
+        "embed_memory",
+        "check_duplicates",
+        "export_git_batch",
+    ]
 
     revised = memory().model_copy(update={"revision": 4})
     revision_payload = MemoryTransitionPayload(previous_revision=3, memory=revised)

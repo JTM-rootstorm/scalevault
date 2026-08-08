@@ -1,7 +1,8 @@
-"""MCP adapters for the transport-neutral memory mutation commands."""
+"""Strict MCP adapters for transport-neutral memory reads and mutations."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Any, Literal, Protocol, cast, overload
 from uuid import UUID
@@ -11,6 +12,13 @@ from mcp.server.fastmcp.tools import Tool
 from mcp.types import ContentBlock, ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool, StrictStr, ValidationError
 
+from kivra_memory.application.status import (
+    IngressStatusQuery,
+    IngressStatusResult,
+    StatusResponse,
+    TransportStatusQuery,
+    TransportStatusResult,
+)
 from kivra_memory.domain.commands import (
     BoundedMetadata,
     BoundedReason,
@@ -41,6 +49,28 @@ from kivra_memory.domain.enums import (
     OntologicalStatus,
     SubjectKind,
 )
+from kivra_memory.retrieval.budgeting import HARD_RESPONSE_BYTE_CEILING
+from kivra_memory.retrieval.contracts import (
+    ContextPackQuery,
+    ContextPackResult,
+    DirectReadQuery,
+    MemoryConflictsQuery,
+    MemoryConflictsResult,
+    MemoryGetQuery,
+    MemoryGetResult,
+    MemoryLineageQuery,
+    MemoryLineageResult,
+    MemorySearchQuery,
+    MemorySearchResult,
+    MemorySelectionHistoryQuery,
+    MemorySelectionHistoryResult,
+    MemoryTimelineQuery,
+    MemoryTimelineResult,
+    QueryPrincipal,
+    ReadError,
+    ReadErrorBody,
+    ReadResponse,
+)
 
 SERVER_INSTRUCTIONS = (
     "Use this server as the authoritative shared continuity store for the Kivra persona. "
@@ -63,6 +93,7 @@ CanonicalUUID7 = Annotated[
     StrictStr,
     Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"),
 ]
+_CANONICAL_UUID7_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 
 
 class _WireModel(BaseModel):
@@ -158,8 +189,78 @@ class MutationExecutor(Protocol):
     def __call__(self, command: DirectMutationCommand, /) -> Awaitable[MutationResponse]: ...
 
 
+type ReadQuery = DirectReadQuery | IngressStatusQuery | TransportStatusQuery
+type AnyReadResponse = ReadResponse | StatusResponse
+
+
+class ReadPrincipalResolver(Protocol):
+    """Resolve authenticated read authority for each individual MCP request."""
+
+    def __call__(self, context: object, /) -> Awaitable[QueryPrincipal | ReadError]: ...
+
+
+class ReadExecutor(Protocol):
+    """Execute an authorized semantic or status read without transport concerns."""
+
+    def __call__(
+        self,
+        principal: QueryPrincipal,
+        query: ReadQuery,
+        /,
+    ) -> Awaitable[AnyReadResponse]: ...
+
+
 class _MutationToolResponse(RootModel[MutationResponse]):
     """Expose the domain response union as an unwrapped structured MCP object."""
+
+
+class _ContextPackToolResponse(RootModel[ContextPackResult | ReadError]):
+    pass
+
+
+class _MemorySearchToolResponse(RootModel[MemorySearchResult | ReadError]):
+    pass
+
+
+class _MemoryGetToolResponse(RootModel[MemoryGetResult | ReadError]):
+    pass
+
+
+class _MemoryTimelineToolResponse(RootModel[MemoryTimelineResult | ReadError]):
+    pass
+
+
+class _MemoryConflictsToolResponse(RootModel[MemoryConflictsResult | ReadError]):
+    pass
+
+
+class _MemoryLineageToolResponse(RootModel[MemoryLineageResult | ReadError]):
+    pass
+
+
+class _MemorySelectionHistoryToolResponse(RootModel[MemorySelectionHistoryResult | ReadError]):
+    pass
+
+
+class _IngressStatusToolResponse(RootModel[IngressStatusResult | ReadError]):
+    pass
+
+
+class _TransportStatusToolResponse(RootModel[TransportStatusResult | ReadError]):
+    pass
+
+
+type ReadToolResponseModel = type[
+    _ContextPackToolResponse
+    | _MemorySearchToolResponse
+    | _MemoryGetToolResponse
+    | _MemoryTimelineToolResponse
+    | _MemoryConflictsToolResponse
+    | _MemoryLineageToolResponse
+    | _MemorySelectionHistoryToolResponse
+    | _IngressStatusToolResponse
+    | _TransportStatusToolResponse
+]
 
 
 def _error_response(code: Literal["invalid_input", "internal_error"]) -> _MutationToolResponse:
@@ -174,27 +275,78 @@ def _error_response(code: Literal["invalid_input", "internal_error"]) -> _Mutati
     )
 
 
+def _read_error(
+    code: Literal["invalid_input", "dependency_unavailable", "internal_error"],
+) -> ReadError:
+    return ReadError(error=ReadErrorBody(code=code, message=ReadErrorBody.SAFE_MESSAGES[code]))
+
+
 class _SanitizedFastMCP(FastMCP[None]):
     """Prevent SDK validation failures from reflecting caller payloads."""
+
+    _validation_error_payloads: dict[str, Callable[[], dict[str, Any]]]
+    _read_dispatches: dict[
+        str,
+        Callable[[dict[str, Any], object], Awaitable[dict[str, Any]]],
+    ]
+
+    def register_validation_error_payload(
+        self,
+        tool_names: Sequence[str],
+        factory: Callable[[], dict[str, Any]],
+    ) -> None:
+        if not hasattr(self, "_validation_error_payloads"):
+            self._validation_error_payloads = {}
+        for tool_name in tool_names:
+            self._validation_error_payloads[tool_name] = factory
+
+    def _validation_error_payload(self, tool_name: str) -> dict[str, Any]:
+        factories = cast(
+            dict[str, Callable[[], dict[str, Any]]],
+            getattr(self, "_validation_error_payloads", {}),
+        )
+        factory = factories.get(tool_name)
+        if factory is not None:
+            return factory()
+        return cast(
+            dict[str, Any],
+            _error_response("invalid_input").model_dump(mode="json"),
+        )
+
+    def register_read_dispatch(
+        self,
+        tool_name: str,
+        dispatch: Callable[[dict[str, Any], object], Awaitable[dict[str, Any]]],
+    ) -> None:
+        if not hasattr(self, "_read_dispatches"):
+            self._read_dispatches = {}
+        self._read_dispatches[tool_name] = dispatch
 
     async def call_tool(
         self,
         name: str,
         arguments: dict[str, Any],
     ) -> Sequence[ContentBlock] | dict[str, Any]:
+        dispatches = cast(
+            dict[str, Callable[[dict[str, Any], object], Awaitable[dict[str, Any]]]],
+            getattr(self, "_read_dispatches", {}),
+        )
+        read_dispatch = dispatches.get(name)
+        if read_dispatch is not None:
+            try:
+                return await read_dispatch(arguments, self.get_context())
+            except Exception:
+                return _read_error("internal_error").model_dump(mode="json")
         try:
             tool = self._tool_manager.get_tool(name)
             if tool is None:
-                return cast(
-                    dict[str, Any],
-                    _error_response("invalid_input").model_dump(mode="json"),
-                )
+                return self._validation_error_payload(name)
             # Validate the untouched JSON shape before FastMCP's compatibility
             # pre-parser can turn JSON strings into objects or arrays.
             tool.fn_metadata.arg_model.model_validate(arguments)
             return await super().call_tool(name, arguments)
         except Exception:
-            return cast(dict[str, Any], _error_response("invalid_input").model_dump(mode="json"))
+            return self._validation_error_payload(name)
 
 
 async def dependency_unavailable_executor(
@@ -210,6 +362,188 @@ async def dependency_unavailable_executor(
             message=MutationErrorBody.SAFE_MESSAGES["dependency_unavailable"],
         ),
     )
+
+
+async def dependency_unavailable_read_principal_resolver(
+    context: object,
+) -> QueryPrincipal | ReadError:
+    """Fail closed when no request-scoped authenticated principal is available."""
+
+    del context
+    return _read_error("dependency_unavailable")
+
+
+async def dependency_unavailable_read_executor(
+    principal: QueryPrincipal,
+    query: ReadQuery,
+) -> AnyReadResponse:
+    """Fail closed when no authenticated read engine adapter is available."""
+
+    del principal, query
+    return _read_error("dependency_unavailable")
+
+
+_UUID_INPUT_FIELDS = frozenset(
+    {
+        "persona_id",
+        "branch_id",
+        "logical_session_id",
+        "memory_id",
+        "anchor_memory_id",
+        "anchor_event_id",
+        "conflict_id",
+        "subject_id",
+        "subject_ids",
+        "ingress_id",
+    }
+)
+
+
+def _require_canonical_uuid7_inputs(value: object) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in _UUID_INPUT_FIELDS and item is not None:
+                items = item if isinstance(item, list) else [item]
+                for identifier in items:
+                    if not isinstance(identifier, str):
+                        raise ValueError("identifier must be a canonical UUIDv7 string")
+                    parsed = UUID(identifier)
+                    if parsed.version != 7 or str(parsed) != identifier:
+                        raise ValueError("identifier must be a canonical UUIDv7 string")
+            _require_canonical_uuid7_inputs(item)
+    elif isinstance(value, list):
+        for item in value:
+            _require_canonical_uuid7_inputs(item)
+
+
+def _require_explicit_object_fields(schema: dict[str, Any]) -> None:
+    """Mark every modeled output property required while preserving nullability."""
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        schema["required"] = list(properties)
+    for value in schema.values():
+        if isinstance(value, dict):
+            _require_explicit_object_fields(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _require_explicit_object_fields(item)
+
+
+def _advertise_canonical_uuid7(schema: dict[str, Any]) -> None:
+    if schema.get("format") == "uuid" and schema.get("type") == "string":
+        schema["pattern"] = _CANONICAL_UUID7_PATTERN
+    for value in schema.values():
+        if isinstance(value, dict):
+            _advertise_canonical_uuid7(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _advertise_canonical_uuid7(item)
+
+
+def _read_tool(
+    *,
+    name: str,
+    title: str,
+    description: str,
+    query_model: type[BaseModel],
+    response_model: ReadToolResponseModel,
+) -> Tool:
+    async def placeholder(**arguments: Any) -> Any:
+        del arguments
+        raise RuntimeError("read dispatch is not installed")
+
+    placeholder.__annotations__["return"] = response_model
+    tool = Tool.from_function(
+        placeholder,
+        name=name,
+        title=title,
+        description=description,
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    tool.parameters = query_model.model_json_schema(by_alias=True)
+    _advertise_canonical_uuid7(tool.parameters)
+    output_schema = tool.output_schema
+    if output_schema is not None:
+        _require_explicit_object_fields(output_schema)
+        _advertise_canonical_uuid7(output_schema)
+    return tool
+
+
+def _read_tool_specs() -> list[tuple[str, str, str, type[BaseModel], ReadToolResponseModel]]:
+    return [
+        (
+            "memory_context_pack",
+            "Retrieve context pack",
+            "Build a bounded continuity context pack for the authenticated caller.",
+            ContextPackQuery,
+            _ContextPackToolResponse,
+        ),
+        (
+            "memory_search",
+            "Search memories",
+            "Search eligible memories with bounded filters and pagination.",
+            MemorySearchQuery,
+            _MemorySearchToolResponse,
+        ),
+        (
+            "memory_get",
+            "Get memory",
+            "Retrieve one eligible memory and explicitly requested related records.",
+            MemoryGetQuery,
+            _MemoryGetToolResponse,
+        ),
+        (
+            "memory_timeline",
+            "Retrieve memory timeline",
+            "Retrieve a bounded exact-branch event timeline.",
+            MemoryTimelineQuery,
+            _MemoryTimelineToolResponse,
+        ),
+        (
+            "memory_conflicts",
+            "Retrieve memory conflicts",
+            "Retrieve bounded open conflict groups for an explicit selector.",
+            MemoryConflictsQuery,
+            _MemoryConflictsToolResponse,
+        ),
+        (
+            "memory_lineage",
+            "Retrieve branch lineage",
+            "Retrieve the exact branch lineage visible to the authenticated caller.",
+            MemoryLineageQuery,
+            _MemoryLineageToolResponse,
+        ),
+        (
+            "memory_selection_history",
+            "Retrieve selection history",
+            "Retrieve bounded event-only selection history.",
+            MemorySelectionHistoryQuery,
+            _MemorySelectionHistoryToolResponse,
+        ),
+        (
+            "memory_ingress_status",
+            "Retrieve ingress status",
+            "Retrieve a privacy-safe lifecycle projection for one ingress item.",
+            IngressStatusQuery,
+            _IngressStatusToolResponse,
+        ),
+        (
+            "memory_transport_status",
+            "Retrieve transport status",
+            "Retrieve coarse status for the authenticated caller's current transport.",
+            TransportStatusQuery,
+            _TransportStatusToolResponse,
+        ),
+    ]
 
 
 def _strict_tool(
@@ -589,7 +923,7 @@ def create_mutation_mcp(
         ),
     ]
 
-    return _SanitizedFastMCP(
+    server = _SanitizedFastMCP(
         name="ScaleVault Memory Node",
         instructions=SERVER_INSTRUCTIONS,
         tools=tools,
@@ -597,11 +931,115 @@ def create_mutation_mcp(
         json_response=True,
         stateless_http=True,
     )
+    server.register_validation_error_payload(
+        [tool.name for tool in tools],
+        lambda: cast(
+            dict[str, Any],
+            _error_response("invalid_input").model_dump(mode="json"),
+        ),
+    )
+    return server
+
+
+def create_mcp(
+    mutation_executor: MutationExecutor = dependency_unavailable_executor,
+    read_principal_resolver: ReadPrincipalResolver = (
+        dependency_unavailable_read_principal_resolver
+    ),
+    read_executor: ReadExecutor = dependency_unavailable_read_executor,
+) -> FastMCP[None]:
+    """Create the complete stateless MCP surface with request-scoped read authority."""
+
+    specs = _read_tool_specs()
+    read_tools = [
+        _read_tool(
+            name=name,
+            title=title,
+            description=description,
+            query_model=query_model,
+            response_model=response_model,
+        )
+        for name, title, description, query_model, response_model in specs
+    ]
+    mutation_server = create_mutation_mcp(mutation_executor)
+    mutation_tools = mutation_server._tool_manager.list_tools()
+    server = _SanitizedFastMCP(
+        name="ScaleVault Memory Node",
+        instructions=SERVER_INSTRUCTIONS,
+        tools=[*read_tools, *mutation_tools],
+        streamable_http_path="/mcp",
+        json_response=True,
+        stateless_http=True,
+    )
+
+    server.register_validation_error_payload(
+        [tool.name for tool in read_tools],
+        lambda: _read_error("invalid_input").model_dump(mode="json"),
+    )
+    server.register_validation_error_payload(
+        [tool.name for tool in mutation_tools],
+        lambda: cast(
+            dict[str, Any],
+            _error_response("invalid_input").model_dump(mode="json"),
+        ),
+    )
+
+    for tool, spec in zip(read_tools, specs, strict=True):
+        _, _, _, query_model, response_model = spec
+
+        async def dispatch(
+            arguments: dict[str, Any],
+            context: object,
+            *,
+            _query_model: type[BaseModel] = query_model,
+            _response_model: ReadToolResponseModel = response_model,
+        ) -> dict[str, Any]:
+            try:
+                _require_canonical_uuid7_inputs(arguments)
+                query = cast(
+                    ReadQuery,
+                    _query_model.model_validate_json(
+                        json.dumps(arguments, allow_nan=False, separators=(",", ":"))
+                    ),
+                )
+            except Exception:
+                return _read_error("invalid_input").model_dump(mode="json")
+
+            try:
+                principal = await read_principal_resolver(context)
+            except Exception:
+                return _read_error("internal_error").model_dump(mode="json")
+            if isinstance(principal, ReadError):
+                return principal.model_dump(mode="json")
+            if not isinstance(principal, QueryPrincipal):
+                return _read_error("internal_error").model_dump(mode="json")
+
+            try:
+                response = await read_executor(principal, query)
+                validated = _response_model.model_validate(response)
+            except Exception:
+                return _read_error("internal_error").model_dump(mode="json")
+            payload = cast(dict[str, Any], validated.model_dump(mode="json"))
+            serialized = json.dumps(
+                payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+            ).encode("utf-8")
+            if len(serialized) > HARD_RESPONSE_BYTE_CEILING:
+                return _read_error("internal_error").model_dump(mode="json")
+            return payload
+
+        server.register_read_dispatch(tool.name, dispatch)
+
+    return server
 
 
 __all__ = [
     "SERVER_INSTRUCTIONS",
     "MutationExecutor",
+    "ReadExecutor",
+    "ReadPrincipalResolver",
+    "create_mcp",
     "create_mutation_mcp",
     "dependency_unavailable_executor",
+    "dependency_unavailable_read_executor",
+    "dependency_unavailable_read_principal_resolver",
 ]

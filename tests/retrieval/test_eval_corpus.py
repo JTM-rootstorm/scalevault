@@ -90,7 +90,6 @@ def _query(*, filters: MemoryFilters | None = None) -> MemorySearchQuery:
         query="synthetic retrieval evaluation",
         filters=filters or MemoryFilters(),
         limit=20,
-        include_evidence=False,
         explain=True,
     )
 

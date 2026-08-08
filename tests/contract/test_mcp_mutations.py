@@ -235,13 +235,13 @@ async def test_mutation_server_discovery_is_exact_and_self_contained() -> None:
     assert initialized.serverInfo.name == "ScaleVault Memory Node"
     assert initialized.instructions == SERVER_INSTRUCTIONS
     assert initialized.instructions.startswith(INSTRUCTION_PREFIX)
-    assert [tool.name for tool in listed.tools] == TOOL_NAMES
+    assert [tool.name for tool in listed.tools][-len(TOOL_NAMES) :] == TOOL_NAMES
 
 
 async def test_mutation_schemas_keep_identity_out_of_top_level_arguments() -> None:
     async with mcp_session(mutation_app()) as session:
         await session.initialize()
-        tools = (await session.list_tools()).tools
+        tools = [tool for tool in (await session.list_tools()).tools if tool.name in TOOL_NAMES]
 
     forbidden = {
         "tenant_id",

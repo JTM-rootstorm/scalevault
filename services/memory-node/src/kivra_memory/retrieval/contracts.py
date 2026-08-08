@@ -6,10 +6,18 @@ from datetime import datetime
 from typing import Annotated, ClassVar, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from kivra_memory.domain.enums import (
     AuthorityClass,
+    EventOperation,
     MemoryCategory,
     MemoryScope,
     MemoryVisibility,
@@ -17,7 +25,7 @@ from kivra_memory.domain.enums import (
     SubjectKind,
 )
 from kivra_memory.domain.identifiers import require_uuid7
-from kivra_memory.domain.values import normalize_utc_datetime
+from kivra_memory.domain.values import format_utc_datetime, normalize_utc_datetime
 
 ReadContractVersion = Literal["mcp-read-v1"]
 SafePositiveInteger = Annotated[int, Field(ge=1, le=(1 << 53) - 1)]
@@ -94,11 +102,12 @@ class QueryPrincipal(ReadModel):
     allowed_visibilities: frozenset[MemoryVisibility]
     max_sensitivity: Annotated[int, Field(ge=0, le=4)]
     allow_candidates: bool = False
+    ingress_id: UUID | None = None
 
-    @field_validator("tenant_id", "actor_id", "client_id", "transport_binding_id")
+    @field_validator("tenant_id", "actor_id", "client_id", "transport_binding_id", "ingress_id")
     @classmethod
-    def validate_identifier(cls, value: UUID, info: object) -> UUID:
-        return _uuid7(value, str(getattr(info, "field_name", "identifier")))  # type: ignore[return-value]
+    def validate_identifier(cls, value: UUID | None, info: object) -> UUID | None:
+        return _uuid7(value, str(getattr(info, "field_name", "identifier")))
 
 
 class ReadContext(ReadModel):
@@ -161,7 +170,6 @@ class ContextPackQuery(SemanticReadQuery):
     query: BoundedQuery
     requested_memory_scopes: frozenset[MemoryScope] = frozenset()
     token_budget: Annotated[int, Field(ge=256, le=1_000_000)]
-    include_evidence: bool = False
 
 
 class MemorySearchQuery(SemanticReadQuery):
@@ -170,8 +178,6 @@ class MemorySearchQuery(SemanticReadQuery):
     query: BoundedQuery
     filters: MemoryFilters = MemoryFilters()
     limit: Annotated[int, Field(ge=1, le=100)] = 20
-    cursor: OpaqueCursor | None = None
-    include_evidence: bool = False
     explain: bool = True
 
 
@@ -179,11 +185,7 @@ class MemoryGetQuery(SemanticReadQuery):
     OPERATION: ClassVar[ReadOperation] = "get"
 
     memory_id: UUID
-    include_revisions: bool = False
-    include_evidence: bool = False
-    include_links: bool = False
     include_conflicts: bool = False
-    related_limit: Annotated[int, Field(ge=1, le=100)] = 20
 
     @field_validator("memory_id")
     @classmethod
@@ -210,49 +212,28 @@ class TimeWindow(ReadModel):
 class MemoryTimelineQuery(SemanticReadQuery):
     OPERATION: ClassVar[ReadOperation] = "timeline"
 
-    window: TimeWindow | None = None
-    anchor_memory_id: UUID | None = None
-    anchor_event_id: UUID | None = None
-    anchor_radius: Annotated[int, Field(ge=1, le=100)] = 20
+    window: TimeWindow
     filters: MemoryFilters = MemoryFilters()
     limit: Annotated[int, Field(ge=1, le=200)] = 50
-    cursor: OpaqueCursor | None = None
-
-    @field_validator("anchor_memory_id", "anchor_event_id")
-    @classmethod
-    def validate_anchor(cls, value: UUID | None) -> UUID | None:
-        return _uuid7(value, "anchor_id")
-
-    @model_validator(mode="after")
-    def validate_window(self) -> MemoryTimelineQuery:
-        modes = sum(
-            value is not None
-            for value in (self.window, self.anchor_memory_id, self.anchor_event_id)
-        )
-        if modes != 1:
-            raise ValueError("timeline requires exactly one window or anchor")
-        return self
 
 
 class MemoryConflictsQuery(SemanticReadQuery):
     OPERATION: ClassVar[ReadOperation] = "conflicts"
 
-    conflict_id: UUID | None = None
     query: BoundedQuery | None = None
     subject_id: UUID | None = None
     state: Literal["open"] = "open"
     limit: Annotated[int, Field(ge=1, le=100)] = 20
-    cursor: OpaqueCursor | None = None
 
-    @field_validator("conflict_id", "subject_id")
+    @field_validator("subject_id")
     @classmethod
     def validate_subject_id(cls, value: UUID | None) -> UUID | None:
-        return _uuid7(value, "conflict_or_subject_id")
+        return _uuid7(value, "subject_id")
 
     @model_validator(mode="after")
     def require_selector(self) -> MemoryConflictsQuery:
-        if self.query is None and self.subject_id is None and self.conflict_id is None:
-            raise ValueError("conflict reads require a conflict, query, or subject")
+        if self.query is None and self.subject_id is None:
+            raise ValueError("conflict reads require a query or subject")
         return self
 
 
@@ -263,31 +244,7 @@ class MemoryLineageQuery(SemanticReadQuery):
 class MemorySelectionHistoryQuery(SemanticReadQuery):
     OPERATION: ClassVar[ReadOperation] = "selection_history"
 
-    starts_at: datetime | None = None
-    ends_at: datetime | None = None
-    operations: Annotated[
-        frozenset[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]],
-        Field(max_length=32),
-    ] = frozenset()
     limit: Annotated[int, Field(ge=1, le=200)] = 50
-    cursor: OpaqueCursor | None = None
-
-    @field_validator("starts_at", "ends_at")
-    @classmethod
-    def normalize_time(cls, value: datetime | None) -> datetime | None:
-        if value is None:
-            return None
-        return normalize_utc_datetime(value)
-
-    @model_validator(mode="after")
-    def validate_window(self) -> MemorySelectionHistoryQuery:
-        if (
-            self.starts_at is not None
-            and self.ends_at is not None
-            and self.ends_at < self.starts_at
-        ):
-            raise ValueError("history end must not precede its start")
-        return self
 
 
 type SemanticReadRequest = (
@@ -361,6 +318,10 @@ class UntrustedEvidenceExcerpt(ReadModel):
             return None
         return normalize_utc_datetime(value)
 
+    @field_serializer("occurred_at", when_used="json")
+    def serialize_occurred_at(self, value: datetime | None) -> str | None:
+        return format_utc_datetime(value) if value is not None else None
+
 
 class MemoryHit(ReadModel):
     memory_id: UUID
@@ -398,6 +359,10 @@ class MemoryHit(ReadModel):
         if value is None:
             return None
         return normalize_utc_datetime(value)
+
+    @field_serializer("valid_from", "valid_to", "observed_at", when_used="json")
+    def serialize_time(self, value: datetime | None) -> str | None:
+        return format_utc_datetime(value) if value is not None else None
 
     @model_validator(mode="after")
     def validate_hit(self) -> MemoryHit:
@@ -501,7 +466,7 @@ class ContextPack(ReadModel):
 class TimelineEvent(ReadModel):
     event_id: UUID
     sequence: SafePositiveInteger
-    operation: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
+    operation: EventOperation
     memory_id: UUID | None = None
     created_at: datetime
 
@@ -514,6 +479,10 @@ class TimelineEvent(ReadModel):
     @classmethod
     def normalize_created_at(cls, value: datetime) -> datetime:
         return normalize_utc_datetime(value)
+
+    @field_serializer("created_at", when_used="json")
+    def serialize_created_at(self, value: datetime) -> str:
+        return format_utc_datetime(value)
 
 
 class BranchView(ReadModel):
@@ -541,7 +510,7 @@ class SelectionEventRecord(ReadModel):
 
     event_id: UUID
     sequence: SafePositiveInteger
-    operation: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
+    operation: EventOperation
     memory_id: UUID | None = None
     created_at: datetime
 
@@ -554,6 +523,10 @@ class SelectionEventRecord(ReadModel):
     @classmethod
     def normalize_created_at(cls, value: datetime) -> datetime:
         return normalize_utc_datetime(value)
+
+    @field_serializer("created_at", when_used="json")
+    def serialize_created_at(self, value: datetime) -> str:
+        return format_utc_datetime(value)
 
 
 class ChannelState(ReadModel):
@@ -606,6 +579,8 @@ class BudgetMetadata(ReadModel):
 
     @model_validator(mode="after")
     def validate_budget(self) -> BudgetMetadata:
+        if len(set(self.omission_reasons)) != len(self.omission_reasons):
+            raise ValueError("budget omission reasons must be unique")
         if self.used_units > self.requested_units:
             raise ValueError("read result exceeds its requested budget")
         if self.used_units != self.serialized_bytes:
@@ -636,9 +611,15 @@ class ReadResultMetadata(ReadModel):
     budget: BudgetMetadata | None = None
 
 
+class ContextPackMetadata(ReadResultMetadata):
+    pagination: None
+    retrieval: RetrievalProfileInfo
+    budget: BudgetMetadata
+
+
 class MemorySearchPage(ReadModel):
     query_id: UUID
-    hits: tuple[MemoryHit, ...]
+    hits: Annotated[tuple[MemoryHit, ...], Field(max_length=100)]
 
     @field_validator("query_id")
     @classmethod
@@ -648,17 +629,15 @@ class MemorySearchPage(ReadModel):
 
 class MemoryGetPayload(ReadModel):
     memory: MemoryHit
-    revision_events: tuple[TimelineEvent, ...] = ()
-    links: tuple[Annotated[str, Field(min_length=1, max_length=512)], ...] = ()
-    conflicts: tuple[ConflictGroup, ...] = ()
+    conflicts: Annotated[tuple[ConflictGroup, ...], Field(max_length=100)] = ()
 
 
 class MemoryTimelinePayload(ReadModel):
-    events: tuple[TimelineEvent, ...]
+    events: Annotated[tuple[TimelineEvent, ...], Field(max_length=200)]
 
 
 class MemoryConflictsPayload(ReadModel):
-    conflicts: tuple[ConflictGroup, ...]
+    conflicts: Annotated[tuple[ConflictGroup, ...], Field(max_length=100)]
 
 
 class MemoryLineagePayload(ReadModel):
@@ -666,7 +645,7 @@ class MemoryLineagePayload(ReadModel):
 
 
 class MemorySelectionHistoryPayload(ReadModel):
-    events: tuple[SelectionEventRecord, ...]
+    events: Annotated[tuple[SelectionEventRecord, ...], Field(max_length=200)]
 
 
 class ReadResultBase(ReadModel):
@@ -684,10 +663,18 @@ class ReadResultBase(ReadModel):
     warnings: Annotated[tuple[ReadWarningCode, ...], Field(max_length=8)] = ()
     metadata: ReadResultMetadata
 
+    @field_validator("warnings")
+    @classmethod
+    def validate_warnings(cls, value: tuple[ReadWarningCode, ...]) -> tuple[ReadWarningCode, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("read warnings must be unique")
+        return value
+
 
 class ContextPackResult(ReadResultBase):
     tool: Literal["memory_context_pack"] = "memory_context_pack"
     result: ContextPack
+    metadata: ContextPackMetadata
 
 
 class MemorySearchResult(ReadResultBase):

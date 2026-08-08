@@ -68,19 +68,22 @@ limits and collections are bounded by the canonical Pydantic models.
 
 | Tool | Required and optional input |
 |---|---|
-| `memory_context_pack` | `query`, `persona_id`, `branch_id`, optional `project_ref`, `relationship_ref`, `logical_session_id`, `requested_memory_scopes`, `token_budget`, and `include_evidence` defaulting to false. |
-| `memory_search` | `query`, `persona_id`, `branch_id`, optional closed filters for subject, category, ontology, semantic scope, visibility, lifecycle status, and time; bounded `limit`, opaque `cursor`, and `include_evidence` defaulting to false. |
-| `memory_get` | `memory_id`, `persona_id`, and `branch_id`, plus bounded flags for revisions, evidence, links, and conflicts. The target must match the requested persona and exact branch. |
-| `memory_timeline` | `persona_id`, `branch_id`, and exactly one bounded time window or memory/event anchor window; optional closed filters, `limit`, and opaque `cursor`. |
-| `memory_conflicts` | `persona_id`, `branch_id`, optional `conflict_id`, `subject_id`, query, and state filter; bounded `limit` and opaque `cursor`. The default state is `open`. |
+| `memory_context_pack` | `query`, `persona_id`, `branch_id`, optional `project_ref`, `relationship_ref`, `logical_session_id`, `requested_memory_scopes`, and `token_budget`. |
+| `memory_search` | `query`, `persona_id`, `branch_id`, optional closed filters for subject, category, ontology, semantic scope, visibility, lifecycle status, and time, bounded `limit`, and `explain`. |
+| `memory_get` | `memory_id`, `persona_id`, and `branch_id`, plus `include_conflicts`. The target must match the requested persona and exact branch. |
+| `memory_timeline` | `persona_id`, `branch_id`, one bounded time window, optional closed filters, and bounded `limit`. |
+| `memory_conflicts` | `persona_id`, `branch_id`, either `subject_id` or query, the open state filter, and bounded `limit`. |
 | `memory_lineage` | `persona_id` and `branch_id`; no traversal selector exists in v1. |
-| `memory_selection_history` | `persona_id`, `branch_id`, optional accepted event-operation and time filters, bounded `limit`, and opaque `cursor`. |
+| `memory_selection_history` | `persona_id`, `branch_id`, and bounded `limit`. |
 | `memory_ingress_status` | One opaque `ingress_id`; no repository or provider coordinate is accepted. |
 | `memory_transport_status` | No installation selector. Status is derived from the authenticated principal's current transport binding. |
 
-Opaque cursors bind the authenticated tenant, normalized query, filters, sort,
-and retrieval profile. A cursor from another query or principal fails as
-`invalid_cursor`; it never contains readable memory or infrastructure content.
+Pagination cursors, anchor windows, expanded revision/link reads, and evidence
+hydration are deferred from the first pre-release contract. The v1 schema does
+not advertise selectors that the application cannot honor. A future cursor
+contract must bind the authenticated tenant, normalized query, filters, sort,
+and retrieval profile and must never contain readable memory or infrastructure
+content.
 
 Retrieval cues and negative retrieval cues are not fields in the accepted event
 or projection contract and are deferred. Milestone 4 does not infer them from
@@ -100,11 +103,13 @@ bounded scores, authority class, validity times, and safe event provenance. It
 does not expose tenant, actor, client, transport-binding, installation,
 fingerprint, content-key, private route, or arbitrary metadata fields.
 
-Evidence is returned only when requested and authorized. It is a separately
-typed and visibly labelled untrusted-data collection, never concatenated into a
-canonical statement or instruction field. Tombstoned content, redacted
-evidence, and cryptographically erased payloads are not reconstructed from the
-event log by online read tools.
+The context-pack result reserves a bounded, separately typed evidence
+collection whose entries are visibly labelled as untrusted data. Milestone 4
+does not expose an evidence selector or hydrate evidence into that collection;
+it remains empty until a later contract defines an explicit authorization
+grant. Evidence is never concatenated into a canonical statement or instruction
+field. Tombstoned content, redacted evidence, and cryptographically erased
+payloads are not reconstructed from the event log by online read tools.
 
 `memory_selection_history` reports only recorded accepted events and their
 payload-safe outcomes. It does not claim to report choices to omit content,
