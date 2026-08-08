@@ -60,7 +60,7 @@ def principal(*, ingress_id: UUID | None = None) -> CommandPrincipal:
         actor_id=uid(2),
         client_id=uid(3),
         transport_binding_id=uid(4),
-        scopes=frozenset({"memory.write.revise"}),
+        scopes=frozenset({"memory.write.revise", "memory.write.legacy_v1"}),
         ingress_id=ingress_id,
     )
 
@@ -184,7 +184,7 @@ def test_revise_after_image_preserves_server_owned_and_lifecycle_fields() -> Non
     assert revised.memory_id == current.memory_id
     assert revised.subject_id == current.subject_id
     assert revised.content_protection == current.content_protection
-    assert revised.publication_approved_at == current.publication_approved_at
+    assert revised.publication_approved_at is None
     assert revised.normalized_fingerprint != current.normalized_fingerprint
 
 
@@ -215,14 +215,14 @@ async def test_transport_provenance_does_not_create_a_provider_specific_execute_
 
 
 @pytest.mark.parametrize("command_type", [ObserveCommand, RememberCommand])
-def test_proposal_scope_allows_only_ingress_observe_and_remember(
+def test_proposal_scope_does_not_bypass_nomination_policy(
     command_type: type[ObserveCommand] | type[RememberCommand],
 ) -> None:
     context = principal(ingress_id=uid(30)).model_copy(
         update={"scopes": frozenset({"memory:propose"})}
     )
 
-    assert mutations_module._principal_authorized(context, proposal_command(command_type))
+    assert not mutations_module._principal_authorized(context, proposal_command(command_type))
 
 
 def test_proposal_scope_does_not_authorize_a_direct_principal() -> None:

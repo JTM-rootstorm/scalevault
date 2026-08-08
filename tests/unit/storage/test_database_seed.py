@@ -122,15 +122,25 @@ def test_seed_has_required_clients_bindings_and_fail_closed_authorization_shape(
     assert bindings["github_ingress"]["authorized_operations"] == {
         "operations": ["observed", "remembered"]
     }
-    assert bindings["direct_private"]["authorized_operations"] == {
-        "operations": [operation.value for operation in EventOperation]
-    }
+    direct_operations = cast(
+        list[str],
+        cast(dict[str, object], bindings["direct_private"]["authorized_operations"])[
+            "operations"
+        ],
+    )
+    assert {"candidate_promoted", "candidate_expired"}.isdisjoint(direct_operations)
     relay_operations = cast(
         list[str],
         cast(dict[str, object], bindings["relay"]["authorized_operations"])["operations"],
     )
     assert set(relay_operations).isdisjoint(
-        {"branch_created", "tombstoned", "payload_purge_completed"}
+        {
+            "branch_created",
+            "tombstoned",
+            "payload_purge_completed",
+            "candidate_promoted",
+            "candidate_expired",
+        }
     )
     assert {
         "observed",

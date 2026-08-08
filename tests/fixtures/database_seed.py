@@ -66,7 +66,15 @@ def seed_rows() -> SeedRows:
     github_binding_id = _seed_uuid(13)
     global_subject_id = _seed_uuid(14)
 
-    all_operations = [operation.value for operation in EventOperation]
+    ordinary_lifecycle_operations = {
+        EventOperation.CANDIDATE_PROMOTED,
+        EventOperation.CANDIDATE_EXPIRED,
+    }
+    direct_operations = [
+        operation
+        for operation in EventOperation
+        if operation not in ordinary_lifecycle_operations
+    ]
     relay_operations = [
         operation.value
         for operation in EventOperation
@@ -75,6 +83,7 @@ def seed_rows() -> SeedRows:
             EventOperation.BRANCH_CREATED,
             EventOperation.TOMBSTONED,
             EventOperation.PAYLOAD_PURGE_COMPLETED,
+            *ordinary_lifecycle_operations,
         }
     ]
     proposal_operations = [EventOperation.OBSERVED.value, EventOperation.REMEMBERED.value]
@@ -224,7 +233,9 @@ def seed_rows() -> SeedRows:
                 "transport_kind": "direct_private",
                 "disclosure_boundary": "private_node",
                 "installation_id": None,
-                "authorized_operations": {"operations": list(all_operations)},
+                "authorized_operations": {
+                    "operations": [operation.value for operation in direct_operations]
+                },
                 "created_at": _CREATED_AT,
                 "valid_until": None,
             },

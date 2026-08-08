@@ -73,6 +73,7 @@ from kivra_memory.storage.models import (
     MemoryContentKey,
     Persona,
     Subject,
+    TransportBinding,
 )
 from kivra_memory.storage.models import (
     MemoryEvent as MemoryEventRow,
@@ -134,16 +135,16 @@ _EVENT_OPERATIONS = {
 
 
 def _principal_authorized(principal: CommandPrincipal, command: DirectMutationCommand) -> bool:
-    """Apply exact mutation scopes, including the narrow proposal-ingress seam."""
+    """Apply exact mutation scopes; nominations own proposal ingress in M5."""
 
     required_scope = _SCOPES[command.OPERATION]
-    if required_scope in principal.scopes or "memory:write" in principal.scopes:
-        return True
-    return (
-        "memory:propose" in principal.scopes
-        and principal.ingress_id is not None
-        and isinstance(command, ObserveCommand | RememberCommand)
-    )
+    if command.OPERATION in {"observe", "remember", "revise"}:
+        return (
+            required_scope in principal.scopes
+            and "memory.write.legacy_v1" in principal.scopes
+            and principal.ingress_id is None
+        )
+    return required_scope in principal.scopes or "memory:write" in principal.scopes
 
 
 class _SafeFailure(Exception):
@@ -227,6 +228,10 @@ def _revised_memory(current: MemoryState, command: ReviseCommand, now: datetime)
         update={
             "fingerprint_version": 1,
             "normalized_fingerprint": fingerprint.sha256_hex,
+            # Any canonical revision invalidates a previous publication approval;
+            # re-approval is an explicit, separately authorized operation.
+            "publication_approved_at": None,
+            "publication_approved_by_actor_id": None,
         }
     )
 
@@ -397,6 +402,18 @@ class MutationEngine:
     ) -> MutationResult:
         if not _principal_authorized(principal, command):
             _fail("forbidden")
+
+        if command.OPERATION in {"observe", "remember", "revise"}:
+            binding_kind = await session.scalar(
+                select(TransportBinding.transport_kind).where(
+                    TransportBinding.tenant_id == principal.tenant_id,
+                    TransportBinding.transport_binding_id == principal.transport_binding_id,
+                    TransportBinding.actor_id == principal.actor_id,
+                    TransportBinding.client_id == principal.client_id,
+                )
+            )
+            if binding_kind not in {"direct_private", "internal_service"}:
+                _fail("forbidden")
 
         identity_result = await session.execute(
             select(Lineage.lineage_id, Lineage.sealed_at, Persona.retired_at, Branch)
