@@ -15,7 +15,9 @@ must be explicitly granted access to this private repository. See the
 connected-app creation, and pinned worker-fetch evidence.
 
 The repository's contract has since expanded beyond the original proposal-v1
-layout. Genesis checkpoint v2 and immutable checkpoint-v1 compatibility now
-require a version-aware importer and a fresh review of the default branch. See
+layout. Genesis checkpoint v2 and immutable checkpoint-v1 compatibility require
+a version-aware importer. The first real Genesis import is frozen at exact
+commit `7dc1cae4b9a99173d2d227be1dd1d10c7f267ce9`; the later authorization commit
+`f4338047f2f0e12d68b83aa6ffe3653bafeb1f2d` is not source input. See
 [GitHub ingress compatibility](ingress-compatibility.md). The existing probe and
-proposal client do not constitute acceptance of those newer formats.
+proposal client do not constitute an implementation of those newer formats.
