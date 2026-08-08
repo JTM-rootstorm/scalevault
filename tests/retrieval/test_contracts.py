@@ -7,8 +7,10 @@ from kivra_memory.domain.enums import EventOperation
 from kivra_memory.retrieval.contracts import (
     ContextPackQuery,
     MemoryGetQuery,
+    MemorySelectionDecisionsQuery,
     MemoryTimelineQuery,
     QueryPrincipal,
+    SelectionDecisionView,
     SelectionEventRecord,
     TimeWindow,
 )
@@ -107,3 +109,36 @@ def test_selection_history_record_exposes_events_not_identity_or_payload() -> No
         "created_at",
     }
     assert record.operation is EventOperation.REMEMBERED
+
+
+def test_selection_decisions_v2_is_additive_and_strict() -> None:
+    query = MemorySelectionDecisionsQuery.model_validate(
+        {
+            "contract_version": "mcp-read-v2",
+            "persona_id": uid(1),
+            "branch_id": uid(3),
+            "limit": 25,
+        }
+    )
+
+    assert query.contract_version == "mcp-read-v2"
+    with pytest.raises(ValidationError, match="Extra inputs"):
+        MemorySelectionDecisionsQuery.model_validate(
+            {
+                **query.model_dump(),
+                "tenant_id": uid(9),
+            }
+        )
+
+    assert set(SelectionDecisionView.model_fields) == {
+        "selection_sequence",
+        "decision_id",
+        "profile_version",
+        "profile_sha256",
+        "matched_rule_ids",
+        "outcome",
+        "reason_codes",
+        "memory_id",
+        "event_id",
+        "decided_at",
+    }

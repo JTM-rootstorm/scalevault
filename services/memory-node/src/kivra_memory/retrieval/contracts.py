@@ -26,8 +26,10 @@ from kivra_memory.domain.enums import (
 )
 from kivra_memory.domain.identifiers import require_uuid7
 from kivra_memory.domain.values import format_utc_datetime, normalize_utc_datetime
+from kivra_memory.policy import SelectionBasis
 
 ReadContractVersion = Literal["mcp-read-v1"]
+ReadContractVersionV2 = Literal["mcp-read-v2"]
 SafePositiveInteger = Annotated[int, Field(ge=1, le=(1 << 53) - 1)]
 BoundedQuery = Annotated[str, Field(min_length=1, max_length=8192)]
 UnitFloat = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
@@ -245,6 +247,44 @@ class MemorySelectionHistoryQuery(SemanticReadQuery):
     OPERATION: ClassVar[ReadOperation] = "selection_history"
 
     limit: Annotated[int, Field(ge=1, le=200)] = 50
+
+
+class MemorySelectionDecisionsQuery(ReadModel):
+    """Authorized audit query over immutable selection decisions."""
+
+    OPERATION: ClassVar[ReadOperation] = "selection_history"
+
+    contract_version: ReadContractVersionV2
+    persona_id: UUID
+    branch_id: UUID
+    logical_session_id: UUID | None = None
+    project_ref: Annotated[str | None, Field(min_length=1, max_length=1024)] = None
+    relationship_ref: Annotated[str | None, Field(min_length=1, max_length=1024)] = None
+    selection_bases: Annotated[frozenset[SelectionBasis], Field(max_length=10)] = frozenset()
+    requested_memory_scopes: Annotated[frozenset[MemoryScope], Field(max_length=6)] = frozenset()
+    requested_visibilities: Annotated[frozenset[MemoryVisibility], Field(max_length=4)] = (
+        frozenset()
+    )
+    requested_subject_ids: Annotated[tuple[UUID, ...], Field(max_length=128)] = ()
+    requested_subject_kinds: Annotated[frozenset[SubjectKind], Field(max_length=7)] = frozenset()
+    max_sensitivity: Annotated[int | None, Field(ge=0, le=4)] = None
+    cursor: OpaqueCursor | None = None
+    limit: Annotated[int, Field(ge=1, le=200)] = 50
+
+    @field_validator("persona_id", "branch_id", "logical_session_id")
+    @classmethod
+    def validate_identifier(cls, value: UUID | None, info: object) -> UUID | None:
+        return _uuid7(value, str(getattr(info, "field_name", "identifier")))
+
+    @field_validator("requested_subject_ids")
+    @classmethod
+    def validate_subject_ids(cls, value: tuple[UUID, ...]) -> tuple[UUID, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("requested subject identifiers must be unique")
+        return tuple(_uuid7(item, "requested_subject_id") for item in value)  # type: ignore[misc]
+
+
+type ReadQueryV2 = MemorySelectionDecisionsQuery
 
 
 type SemanticReadRequest = (
@@ -529,6 +569,49 @@ class SelectionEventRecord(ReadModel):
         return format_utc_datetime(value)
 
 
+class SelectionDecisionView(ReadModel):
+    """Content-free, authorization-filtered selection policy audit record."""
+
+    selection_sequence: SafePositiveInteger
+    decision_id: UUID
+    profile_version: Literal["selection-v1"] = "selection-v1"
+    profile_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    matched_rule_ids: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_.-]*$", max_length=128)], ...],
+        Field(max_length=16),
+    ]
+    outcome: Literal["omit", "reject", "candidate", "active", "promoted", "expired"]
+    reason_codes: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=128)], ...],
+        Field(max_length=8),
+    ]
+    memory_id: UUID | None
+    event_id: UUID | None
+    decided_at: datetime
+
+    @field_validator("decision_id", "memory_id", "event_id")
+    @classmethod
+    def validate_identifier(cls, value: UUID | None, info: object) -> UUID | None:
+        return _uuid7(value, str(getattr(info, "field_name", "identifier")))
+
+    @field_validator("decided_at")
+    @classmethod
+    def normalize_decided_at(cls, value: datetime) -> datetime:
+        return normalize_utc_datetime(value)
+
+    @field_serializer("decided_at", when_used="json")
+    def serialize_decided_at(self, value: datetime) -> str:
+        return format_utc_datetime(value)
+
+    @model_validator(mode="after")
+    def validate_codes(self) -> SelectionDecisionView:
+        if len(self.matched_rule_ids) != len(set(self.matched_rule_ids)):
+            raise ValueError("matched selection rules must be unique")
+        if len(self.reason_codes) != len(set(self.reason_codes)):
+            raise ValueError("selection reason codes must be unique")
+        return self
+
+
 class ChannelState(ReadModel):
     availability: Literal["available", "unavailable", "warming", "stale"]
     reason: (
@@ -648,6 +731,10 @@ class MemorySelectionHistoryPayload(ReadModel):
     events: Annotated[tuple[SelectionEventRecord, ...], Field(max_length=200)]
 
 
+class MemorySelectionDecisionsPayload(ReadModel):
+    decisions: Annotated[tuple[SelectionDecisionView, ...], Field(max_length=200)]
+
+
 class ReadResultBase(ReadModel):
     ok: Literal[True] = True
     contract_version: ReadContractVersion = "mcp-read-v1"
@@ -707,6 +794,15 @@ class MemorySelectionHistoryResult(ReadResultBase):
     result: MemorySelectionHistoryPayload
 
 
+class MemorySelectionDecisionsResult(ReadModel):
+    ok: Literal[True] = True
+    contract_version: ReadContractVersionV2 = "mcp-read-v2"
+    tool: Literal["memory_selection_decisions"] = "memory_selection_decisions"
+    result: MemorySelectionDecisionsPayload
+    warnings: tuple[()] = ()
+    metadata: ReadResultMetadata
+
+
 class ReadErrorBody(ReadModel):
     SAFE_MESSAGES: ClassVar[dict[str, str]] = {
         "invalid_input": "The read input is invalid.",
@@ -747,6 +843,15 @@ class ReadError(ReadModel):
     ok: Literal[False] = False
     contract_version: ReadContractVersion = "mcp-read-v1"
     error: ReadErrorBody
+
+
+class ReadErrorV2(ReadModel):
+    ok: Literal[False] = False
+    contract_version: ReadContractVersionV2 = "mcp-read-v2"
+    error: ReadErrorBody
+
+
+type ReadResponseV2 = MemorySelectionDecisionsResult | ReadErrorV2
 
 
 type SemanticReadResult = (

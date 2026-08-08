@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
@@ -10,7 +11,10 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kivra_memory.domain.enums import EventOperation, MemoryStatus
+from kivra_memory.domain.enums import (
+    EventOperation,
+    MemoryStatus,
+)
 from kivra_memory.domain.events import MemoryState
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.retrieval.budgeting import BudgetTooSmallError
@@ -37,20 +41,28 @@ from kivra_memory.retrieval.contracts import (
     MemorySearchPage,
     MemorySearchQuery,
     MemorySearchResult,
+    MemorySelectionDecisionsPayload,
+    MemorySelectionDecisionsQuery,
+    MemorySelectionDecisionsResult,
     MemorySelectionHistoryPayload,
     MemorySelectionHistoryQuery,
     MemorySelectionHistoryResult,
     MemoryTimelinePayload,
     MemoryTimelineQuery,
     MemoryTimelineResult,
+    PaginationMetadata,
     QueryPrincipal,
     ReadError,
     ReadErrorBody,
+    ReadErrorV2,
+    ReadQueryV2,
     ReadResponse,
+    ReadResponseV2,
     ReadResultMetadata,
     ReadWarningCode,
     RetrievalProfileInfo,
     ScoreModifiers,
+    SelectionDecisionView,
     SelectionEventRecord,
     TimelineEvent,
 )
@@ -77,6 +89,12 @@ from kivra_memory.storage.retrieval import (
 )
 from kivra_memory.storage.retrieval import (
     ResolvedReadContext as StorageReadContext,
+)
+from kivra_memory.storage.selection_history import (
+    SelectionDecisionRecord,
+    SelectionHistoryError,
+    SelectionHistoryFilters,
+    SelectionHistoryRepository,
 )
 
 _READABLE_STATUSES = frozenset({MemoryStatus.ACTIVE, MemoryStatus.DISPUTED})
@@ -152,6 +170,19 @@ type SessionFactory = Callable[[UUID], AbstractAsyncContextManager[AsyncSession]
 type RepositoryFactory = Callable[[AsyncSession], CandidateRepository]
 
 
+class SelectionHistoryReader(Protocol):
+    async def list_decisions(
+        self,
+        filters: SelectionHistoryFilters,
+        *,
+        before_sequence: int | None = None,
+        limit: int = 100,
+    ) -> tuple[SelectionDecisionRecord, ...]: ...
+
+
+type SelectionHistoryRepositoryFactory = Callable[[AsyncSession], SelectionHistoryReader]
+
+
 def _error(
     code: Literal[
         "invalid_input",
@@ -172,6 +203,71 @@ def _error(
             message=ReadErrorBody.SAFE_MESSAGES[code],
             retryable=retryable,
         )
+    )
+
+
+def _error_v2(
+    code: Literal[
+        "invalid_input",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "invalid_cursor",
+        "budget_too_small",
+        "dependency_unavailable",
+        "internal_error",
+    ],
+    *,
+    retryable: bool = False,
+) -> ReadErrorV2:
+    return ReadErrorV2(
+        error=ReadErrorBody(
+            code=code,
+            message=ReadErrorBody.SAFE_MESSAGES[code],
+            retryable=retryable,
+        )
+    )
+
+
+_SELECTION_CURSOR_PREFIX = b"selection-decisions-v2:"
+
+
+def _encode_selection_cursor(sequence: int) -> str:
+    payload = _SELECTION_CURSOR_PREFIX + str(sequence).encode("ascii")
+    return base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+
+
+def _decode_selection_cursor(cursor: str | None) -> int | None:
+    if cursor is None:
+        return None
+    try:
+        encoded = cursor.encode("ascii")
+        payload = base64.urlsafe_b64decode(encoded + b"=" * (-len(encoded) % 4))
+        if not payload.startswith(_SELECTION_CURSOR_PREFIX):
+            raise ValueError("invalid selection cursor")
+        sequence = int(payload.removeprefix(_SELECTION_CURSOR_PREFIX))
+    except (UnicodeError, ValueError):
+        raise ValueError("invalid selection cursor") from None
+    if sequence < 1:
+        raise ValueError("invalid selection cursor")
+    return sequence
+
+
+def _selection_decision(record: SelectionDecisionRecord) -> SelectionDecisionView:
+    return SelectionDecisionView(
+        selection_sequence=record.selection_sequence,
+        decision_id=record.decision_id,
+        profile_version="selection-v1",
+        profile_sha256=record.policy_sha256,
+        matched_rule_ids=record.matched_rule_ids,
+        outcome=cast(
+            Literal["omit", "reject", "candidate", "active", "promoted", "expired"],
+            record.outcome,
+        ),
+        reason_codes=record.reason_codes,
+        memory_id=record.memory_id,
+        event_id=record.event_id,
+        decided_at=record.decided_at,
     )
 
 
@@ -330,14 +426,24 @@ class QueryEngine:
         repository_factory: RepositoryFactory,
         *,
         query_embedder: QueryEmbedder | None = None,
+        selection_history_repository_factory: SelectionHistoryRepositoryFactory = (
+            SelectionHistoryRepository
+        ),
     ) -> None:
         self._session_factory = session_factory
         self._repository_factory = repository_factory
         self._query_embedder = query_embedder
+        self._selection_history_repository_factory = selection_history_repository_factory
 
-    async def execute(self, principal: QueryPrincipal, query: DirectReadQuery) -> ReadResponse:
-        if not operation_authorized(principal, query):
-            return _error("forbidden")
+    async def execute(
+        self, principal: QueryPrincipal, query: DirectReadQuery | ReadQueryV2
+    ) -> ReadResponse | ReadResponseV2:
+        if not operation_authorized(principal, cast(DirectReadQuery, query)):
+            return (
+                _error_v2("forbidden")
+                if isinstance(query, MemorySelectionDecisionsQuery)
+                else _error("forbidden")
+            )
         try:
             async with self._session_factory(principal.tenant_id) as session:
                 repository = self._repository_factory(session)
@@ -369,6 +475,14 @@ class QueryEngine:
                         iter(storage_context.relationship_subject_ids), None
                     ),
                 )
+                if isinstance(query, MemorySelectionDecisionsQuery):
+                    return await self._selection_decisions(
+                        session,
+                        principal,
+                        context,
+                        storage_context,
+                        query,
+                    )
                 requested = _query_filters(query)
                 try:
                     filters = _storage_filters(principal, context, storage_context, requested)
@@ -378,9 +492,84 @@ class QueryEngine:
                     repository, principal, context, filters, requested, query
                 )
         except (OSError, TimeoutError):
-            return _error("dependency_unavailable", retryable=True)
+            return (
+                _error_v2("dependency_unavailable", retryable=True)
+                if isinstance(query, MemorySelectionDecisionsQuery)
+                else _error("dependency_unavailable", retryable=True)
+            )
         except Exception:
-            return _error("internal_error")
+            return (
+                _error_v2("internal_error")
+                if isinstance(query, MemorySelectionDecisionsQuery)
+                else _error("internal_error")
+            )
+
+    async def _selection_decisions(
+        self,
+        session: AsyncSession,
+        principal: QueryPrincipal,
+        context: ResolvedReadContext,
+        anchors: StorageReadContext,
+        query: MemorySelectionDecisionsQuery,
+    ) -> ReadResponseV2:
+        try:
+            before_sequence = _decode_selection_cursor(query.cursor)
+        except ValueError:
+            return _error_v2("invalid_cursor")
+
+        scopes = principal.allowed_memory_scopes
+        if query.requested_memory_scopes:
+            scopes &= query.requested_memory_scopes
+        visibilities = principal.allowed_visibilities
+        if query.requested_visibilities:
+            visibilities &= query.requested_visibilities
+        if not scopes or not visibilities:
+            return _error_v2("forbidden")
+        max_sensitivity = principal.max_sensitivity
+        if query.max_sensitivity is not None:
+            max_sensitivity = min(max_sensitivity, query.max_sensitivity)
+        filters = SelectionHistoryFilters(
+            tenant_id=principal.tenant_id,
+            persona_id=query.persona_id,
+            lineage_id=context.lineage_id,
+            branch_id=context.branch_id,
+            allowed_scopes=scopes,
+            allowed_visibilities=visibilities,
+            max_sensitivity=max_sensitivity,
+            selection_bases=frozenset(item.value for item in query.selection_bases) or None,
+            requested_subject_ids=frozenset(query.requested_subject_ids) or None,
+            project_subject_ids=anchors.project_subject_ids,
+            relationship_subject_ids=anchors.relationship_subject_ids,
+            session_subject_ids=anchors.session_subject_ids,
+            allowed_subject_kinds=query.requested_subject_kinds or None,
+        )
+        repository = self._selection_history_repository_factory(session)
+        try:
+            records = await repository.list_decisions(
+                filters,
+                before_sequence=before_sequence,
+                limit=query.limit + 1,
+            )
+        except SelectionHistoryError:
+            return _error_v2("dependency_unavailable")
+        has_more = len(records) > query.limit
+        visible = records[: query.limit]
+        next_cursor = (
+            _encode_selection_cursor(visible[-1].selection_sequence)
+            if has_more and visible
+            else None
+        )
+        return MemorySelectionDecisionsResult(
+            result=MemorySelectionDecisionsPayload(
+                decisions=tuple(_selection_decision(record) for record in visible)
+            ),
+            metadata=ReadResultMetadata(
+                pagination=PaginationMetadata(
+                    next_cursor=next_cursor,
+                    has_more=has_more,
+                )
+            ),
+        )
 
     async def _dispatch(
         self,

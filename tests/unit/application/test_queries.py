@@ -4,9 +4,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import cast
+from typing import Any, cast
 
-from kivra_memory.application.queries import CandidateRepository, QueryEngine, _hit, _modifiers
+from kivra_memory.application.queries import (
+    CandidateRepository,
+    QueryEngine,
+    SelectionHistoryReader,
+    _hit,
+    _modifiers,
+)
 from kivra_memory.domain.enums import (
     AuthorityClass,
     MemoryCategory,
@@ -18,11 +24,18 @@ from kivra_memory.domain.enums import (
 )
 from kivra_memory.domain.events import MemoryState
 from kivra_memory.domain.identifiers import new_uuid7
+from kivra_memory.policy import SelectionBasis
 from kivra_memory.retrieval.contracts import (
     MemoryLineageQuery,
+    MemorySelectionDecisionsQuery,
     QueryPrincipal,
 )
 from kivra_memory.retrieval.ranking import RRF_V1_PROFILE, SourceRanking, weighted_rrf_v1
+from kivra_memory.storage.retrieval import ResolvedReadContext as StorageReadContext
+from kivra_memory.storage.selection_history import (
+    SelectionDecisionRecord,
+    SelectionHistoryFilters,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -159,3 +172,137 @@ def test_hit_preserves_reason_and_modifiers_use_checked_in_profile() -> None:
         == RRF_V1_PROFILE.authority_values[AuthorityClass.IMPORTED_LEGACY_MEMORY]
     )
     assert hit.reason_to_remember == state.reason_to_remember
+
+
+async def test_selection_decisions_use_immutable_authorized_history_and_opaque_cursor() -> None:
+    now = datetime.now(UTC)
+    persona_id = new_uuid7()
+    branch_id = new_uuid7()
+    lineage_id = new_uuid7()
+    project_subject_id = new_uuid7()
+
+    class Repository:
+        async def resolve_context(self, **_kwargs: object) -> StorageReadContext:
+            return StorageReadContext(
+                lineage_id=lineage_id,
+                branch_id=branch_id,
+                logical_session_id=None,
+                project_subject_ids=frozenset({project_subject_id}),
+                relationship_subject_ids=frozenset(),
+                session_subject_ids=frozenset(),
+            )
+
+    records = tuple(
+        SelectionDecisionRecord(
+            selection_sequence=sequence,
+            decision_id=new_uuid7(),
+            persona_id=persona_id,
+            policy_id="scalevault-memory-selection",
+            policy_version=1,
+            policy_sha256="a" * 64,
+            policy_rule_code="explicit_user_request",
+            matched_rule_ids=("basis.explicit_user_request",),
+            source_kind="live_interaction",
+            requested_operation="nominate",
+            outcome="active",
+            reason_codes=("explicit_user_request",),
+            selection_basis="explicit_user_request",
+            scope="project",
+            visibility="private_root",
+            sensitivity=0,
+            subject_id=project_subject_id,
+            subject_kind="project",
+            memory_id=new_uuid7(),
+            event_id=new_uuid7(),
+            decided_at=now,
+        )
+        for sequence in (2, 1)
+    )
+
+    class HistoryRepository:
+        def __init__(self) -> None:
+            self.calls: list[tuple[SelectionHistoryFilters, int | None, int]] = []
+
+        async def list_decisions(
+            self,
+            filters: SelectionHistoryFilters,
+            *,
+            before_sequence: int | None = None,
+            limit: int = 100,
+        ) -> tuple[SelectionDecisionRecord, ...]:
+            self.calls.append((filters, before_sequence, limit))
+            return records
+
+    history = HistoryRepository()
+
+    @asynccontextmanager
+    async def session_factory(_tenant_id: object) -> AsyncIterator[AsyncSession]:
+        yield cast(AsyncSession, object())
+
+    engine = QueryEngine(
+        session_factory,
+        lambda _session: cast(CandidateRepository, Repository()),
+        selection_history_repository_factory=lambda _session: cast(SelectionHistoryReader, history),
+    )
+    authority = principal("memory.read.selection_history")
+    query = MemorySelectionDecisionsQuery(
+        contract_version="mcp-read-v2",
+        persona_id=persona_id,
+        branch_id=branch_id,
+        selection_bases=frozenset({SelectionBasis.EXPLICIT_USER_REQUEST}),
+        requested_memory_scopes=frozenset({MemoryScope.PROJECT}),
+        limit=1,
+    )
+
+    result = await engine.execute(authority, query)
+
+    assert result.ok is True
+    assert result.contract_version == "mcp-read-v2"
+    assert len(result.result.decisions) == 1
+    assert result.metadata.pagination is not None
+    assert result.metadata.pagination.has_more is True
+    assert result.metadata.pagination.next_cursor is not None
+    filters, before_sequence, limit = history.calls[0]
+    assert filters.tenant_id == authority.tenant_id
+    assert filters.persona_id == persona_id
+    assert filters.lineage_id == lineage_id
+    assert filters.branch_id == branch_id
+    assert filters.selection_bases == frozenset({"explicit_user_request"})
+    assert before_sequence is None
+    assert limit == 2
+
+
+async def test_selection_decisions_reject_invalid_cursor_without_history_dispatch() -> None:
+    class Repository:
+        async def resolve_context(self, **kwargs: object) -> StorageReadContext:
+            return StorageReadContext(
+                lineage_id=new_uuid7(),
+                branch_id=cast(Any, kwargs["branch_id"]),
+                logical_session_id=None,
+                project_subject_ids=frozenset(),
+                relationship_subject_ids=frozenset(),
+                session_subject_ids=frozenset(),
+            )
+
+    @asynccontextmanager
+    async def session_factory(_tenant_id: object) -> AsyncIterator[AsyncSession]:
+        yield cast(AsyncSession, object())
+
+    engine = QueryEngine(
+        session_factory,
+        lambda _session: cast(CandidateRepository, Repository()),
+        selection_history_repository_factory=lambda _session: cast(
+            SelectionHistoryReader, object()
+        ),
+    )
+    query = MemorySelectionDecisionsQuery(
+        contract_version="mcp-read-v2",
+        persona_id=new_uuid7(),
+        branch_id=new_uuid7(),
+        cursor="not-a-valid-selection-cursor",
+    )
+
+    result = await engine.execute(principal("memory.read.selection_history"), query)
+
+    assert result.ok is False
+    assert result.error.code == "invalid_cursor"
