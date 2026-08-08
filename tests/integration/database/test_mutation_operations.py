@@ -370,9 +370,7 @@ async def test_all_non_create_operations_commit_atomic_projection_receipt_and_ou
                     )
                 )
             ).all()
-            create_payloads = [
-                (row.job_type, row.aggregate_id, row.payload) for row in create_jobs
-            ]
+            create_payloads = [(row.job_type, row.aggregate_id, row.payload) for row in create_jobs]
             for result in created:
                 assert result.memory_id is not None
                 expected_references = {
