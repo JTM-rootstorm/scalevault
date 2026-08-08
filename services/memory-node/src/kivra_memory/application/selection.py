@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import and_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -25,6 +25,7 @@ from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import (
     AuthorityClass,
     EventOperation,
+    MemoryScope,
     MemoryStatus,
     MemoryVisibility,
 )
@@ -51,10 +52,11 @@ from kivra_memory.policy import (
     PolicyOutcome,
     SelectionBasis,
     SelectionRequest,
+    content_signals_from_rule_ids,
     evaluate_promotion,
     evaluate_selection,
 )
-from kivra_memory.storage.event_store import append_memory_event
+from kivra_memory.storage.event_store import EventStoreError, append_memory_event
 from kivra_memory.storage.live_projection import (
     load_projection_state_for_update,
     stage_live_projection,
@@ -78,7 +80,7 @@ from kivra_memory.storage.models import (
     TransportBinding,
 )
 from kivra_memory.storage.outbox import OutboxReferenceValue, enqueue_outbox_job
-from kivra_memory.storage.projector import memory_row_to_state
+from kivra_memory.storage.projector import ProjectionPersistenceError, memory_row_to_state
 from kivra_memory.storage.selection_history import (
     SelectionHistoryError,
     append_selection_decision,
@@ -244,11 +246,41 @@ def _selection_request(
     )
 
 
+def _command_material(
+    principal: CommandPrincipal,
+    command: NominationCommandLike,
+) -> dict[str, object]:
+    """Return only authenticated wire-command material for idempotent replay."""
+
+    return {
+        "tenant_id": str(principal.tenant_id),
+        "actor_id": str(principal.actor_id),
+        "client_id": str(principal.client_id),
+        "idempotency_key": command.idempotency_key,
+        "persona_id": str(command.persona_id),
+        "branch_id": str(command.branch_id),
+        "reason": command.reason,
+        "proposal": command.proposal.model_dump(mode="json"),
+        "logical_session_id": (
+            str(command.logical_session_id) if command.logical_session_id is not None else None
+        ),
+    }
+
+
+def _command_digest(principal: CommandPrincipal, command: NominationCommandLike) -> bytes:
+    """Hash the stable command independently of resolver-owned trusted facts."""
+
+    return hashlib.sha256(canonical_json_bytes(_command_material(principal, command))).digest()
+
+
 def _input_digest(
+    principal: CommandPrincipal,
     command: NominationCommandLike,
     resolved: ResolvedNominationContext,
 ) -> bytes:
-    resolved_material = {
+    """Hash the full policy input, including ordered resolver-owned facts."""
+
+    resolved_material: dict[str, object] = {
         "source_kind": resolved.source_kind,
         "effective_authority_class": resolved.effective_authority_class.value,
         "content_signals": sorted(signal.value for signal in resolved.content_signals),
@@ -261,17 +293,7 @@ def _input_digest(
             for item in sorted(resolved.evidence, key=lambda item: item.evidence_key)
         ],
     }
-    material = {
-        "idempotency_key": command.idempotency_key,
-        "persona_id": str(command.persona_id),
-        "branch_id": str(command.branch_id),
-        "reason": command.reason,
-        "proposal": command.proposal.model_dump(mode="json"),
-        "logical_session_id": (
-            str(command.logical_session_id) if command.logical_session_id is not None else None
-        ),
-        "resolved": resolved_material,
-    }
+    material = {**_command_material(principal, command), "resolved": resolved_material}
     return hashlib.sha256(canonical_json_bytes(material)).digest()
 
 
@@ -281,6 +303,77 @@ def _policy_rule_code(decision: PolicyDecision, fallback: str = "already_covered
         if candidate and candidate[0].isalpha():
             return candidate[:64]
     return fallback
+
+
+def _replay_from_receipt(
+    receipt: CommandReceipt,
+    *,
+    command_digest: bytes,
+) -> SelectionResult:
+    """Verify all immutable receipt representations before returning a replay."""
+
+    canonical = bytes(receipt.result_canonical)
+    result_sha256 = bytes(receipt.result_sha256)
+    if (
+        bytes(receipt.command_sha256) != command_digest
+        or hashlib.sha256(canonical).digest() != result_sha256
+    ):
+        code = (
+            "idempotency_key_reused"
+            if bytes(receipt.command_sha256) != command_digest
+            else "dependency_unavailable"
+        )
+        raise SelectionExecutionError(code)
+    try:
+        if canonical_json_bytes(receipt.result) != canonical:
+            raise ValueError("receipt representations differ")
+        replay = SelectionResult.model_validate_json(canonical, strict=False)
+        if canonical_json_bytes(replay.model_dump(mode="json")) != canonical:
+            raise ValueError("receipt is not canonical")
+    except (ValidationError, ValueError, TypeError):
+        raise SelectionExecutionError("dependency_unavailable") from None
+    if (
+        replay.idempotent_replay
+        or replay.receipt_id != receipt.receipt_id
+        or replay.decision_id != receipt.selection_decision_id
+        or replay.event_id != receipt.event_id
+        or replay.memory_id != receipt.memory_id
+        or replay.revision != receipt.memory_revision
+    ):
+        raise SelectionExecutionError("dependency_unavailable")
+    return replay.model_copy(update={"idempotent_replay": True})
+
+
+def _validate_unsealed_identity(
+    *,
+    persona_retired_at: datetime | None,
+    lineage_sealed_at: datetime | None,
+    branch_sealed_at: datetime | None,
+) -> None:
+    """Fail closed when any mutable identity container is no longer writable."""
+
+    if (
+        persona_retired_at is not None
+        or lineage_sealed_at is not None
+        or branch_sealed_at is not None
+    ):
+        raise SelectionExecutionError("forbidden")
+
+
+def _validate_session_scope_anchors(
+    command: NominationCommandLike,
+    *,
+    subject_origin_session_id: UUID | None,
+) -> None:
+    """Bind scene-local and episodic nominations to one authenticated session."""
+
+    proposal = command.proposal
+    if proposal.scope in {MemoryScope.SCENE_LOCAL, MemoryScope.EPISODIC} and (
+        command.logical_session_id is None
+        or proposal.origin_session_id != command.logical_session_id
+        or subject_origin_session_id != command.logical_session_id
+    ):
+        raise SelectionExecutionError("forbidden")
 
 
 def _evidence_state(
@@ -414,35 +507,72 @@ class SelectionEngine:
     ) -> SelectionResult:
         if not self._authorized(principal):
             raise SelectionExecutionError("forbidden")
-        resolved = await self._resolve(principal, command)
-        request = _selection_request(command.proposal, resolved)
-        decision = evaluate_selection(request)
-        identifiers = _NominationIdentifiers(evidence_count=len(resolved.evidence))
-        input_digest = _input_digest(command, resolved)
-
-        async def attempt(session: AsyncSession) -> SelectionResult:
-            return await self._attempt(
-                session,
-                principal=principal,
-                command=command,
-                resolved=resolved,
-                policy_decision=decision,
-                input_digest=input_digest,
-                identifiers=identifiers,
-            )
-
         try:
+            command_digest = _command_digest(principal, command)
+
+            async def preflight(session: AsyncSession) -> SelectionResult | None:
+                receipt = await self._load_receipt(session, principal=principal, command=command)
+                return (
+                    _replay_from_receipt(receipt, command_digest=command_digest)
+                    if receipt is not None
+                    else None
+                )
+
+            replay = await run_serializable_transaction(
+                self._session_factory, principal.tenant_id, preflight
+            )
+            if replay is not None:
+                return replay
+
+            resolved = await self._resolve(principal, command)
+            request = _selection_request(command.proposal, resolved)
+            decision = evaluate_selection(request)
+            identifiers = _NominationIdentifiers(evidence_count=len(resolved.evidence))
+            input_digest = _input_digest(principal, command, resolved)
+
+            async def attempt(session: AsyncSession) -> SelectionResult:
+                return await self._attempt(
+                    session,
+                    principal=principal,
+                    command=command,
+                    resolved=resolved,
+                    policy_decision=decision,
+                    command_digest=command_digest,
+                    input_digest=input_digest,
+                    identifiers=identifiers,
+                )
+
             return await run_serializable_transaction(
                 self._session_factory, principal.tenant_id, attempt
             )
-        except (SelectionExecutionError, SelectionHistoryError):
+        except SelectionExecutionError:
             raise
         except SerializableTransactionError as error:
             raise SelectionExecutionError("serialization_exhausted") from error
-        except SQLAlchemyError as error:
-            raise SelectionExecutionError("dependency_unavailable") from error
-        except (ValueError, TypeError):
+        except (EventStoreError, ProjectionPersistenceError, SelectionHistoryError):
+            raise SelectionExecutionError("dependency_unavailable") from None
+        except SQLAlchemyError:
+            raise SelectionExecutionError("dependency_unavailable") from None
+        except (ValidationError, ValueError, TypeError, AttributeError):
             raise SelectionExecutionError("invalid_input") from None
+
+    @staticmethod
+    async def _load_receipt(
+        session: AsyncSession,
+        *,
+        principal: CommandPrincipal,
+        command: NominationCommandLike,
+    ) -> CommandReceipt | None:
+        return cast(
+            CommandReceipt | None,
+            await session.scalar(
+                select(CommandReceipt).where(
+                    CommandReceipt.tenant_id == principal.tenant_id,
+                    CommandReceipt.client_id == principal.client_id,
+                    CommandReceipt.idempotency_key == command.idempotency_key,
+                )
+            ),
+        )
 
     async def _resolve(
         self, principal: CommandPrincipal, command: NominationCommandLike
@@ -453,8 +583,8 @@ class SelectionEngine:
                 resolved = await resolver.resolve(principal, command)
             else:
                 resolved = await resolver(principal, command)
-        except Exception as error:
-            raise SelectionExecutionError("authority_unavailable") from error
+        except Exception:
+            raise SelectionExecutionError("authority_unavailable") from None
         if not isinstance(resolved, ResolvedNominationContext):
             raise SelectionExecutionError("authority_unavailable")
         return resolved
@@ -483,8 +613,8 @@ class SelectionEngine:
                 principal = await provider.resolve(nominator, command, memory_id)
             else:
                 principal = await provider(nominator, command, memory_id)
-        except Exception as error:
-            raise SelectionExecutionError("authority_unavailable") from error
+        except Exception:
+            raise SelectionExecutionError("authority_unavailable") from None
         if (
             not isinstance(principal, CommandPrincipal)
             or principal.tenant_id != nominator.tenant_id
@@ -533,12 +663,31 @@ class SelectionEngine:
         command: NominationCommandLike,
         resolved: ResolvedNominationContext,
         policy_decision: PolicyDecision,
+        command_digest: bytes,
         input_digest: bytes,
         identifiers: _NominationIdentifiers,
     ) -> SelectionResult:
+        # A committed receipt is terminal even if the mutable persona, lineage,
+        # branch, subject, or resolver state later changes. Serialize this check
+        # before consulting any of those resources, then keep the lock through
+        # the mutation transaction to close the preflight race.
+        await acquire_advisory_xact_locks(
+            session,
+            (
+                idempotency_advisory_lock_key(
+                    tenant_id=principal.tenant_id,
+                    client_id=principal.client_id,
+                    idempotency_key=command.idempotency_key,
+                ),
+            ),
+        )
+        receipt = await self._load_receipt(session, principal=principal, command=command)
+        if receipt is not None:
+            return _replay_from_receipt(receipt, command_digest=command_digest)
+
         identity = (
             await session.execute(
-                select(Lineage.lineage_id, Persona.retired_at, Branch)
+                select(Lineage.lineage_id, Lineage.sealed_at, Persona.retired_at, Branch)
                 .join(
                     Persona,
                     and_(
@@ -562,10 +711,12 @@ class SelectionEngine:
         ).one_or_none()
         if identity is None:
             raise SelectionExecutionError("not_found")
-        lineage_id, persona_retired_at, branch_row = identity
-        if persona_retired_at is not None or branch_row.sealed_at is not None:
-            raise SelectionExecutionError("forbidden")
-
+        lineage_id, lineage_sealed_at, persona_retired_at, branch_row = identity
+        _validate_unsealed_identity(
+            persona_retired_at=persona_retired_at,
+            lineage_sealed_at=lineage_sealed_at,
+            branch_sealed_at=branch_row.sealed_at,
+        )
         if command.logical_session_id is not None:
             session_exists = await session.scalar(
                 select(LogicalSession.session_id).where(
@@ -581,23 +732,34 @@ class SelectionEngine:
             if session_exists is None:
                 raise SelectionExecutionError("not_found")
 
-        # Serialize retries and exact subject/fingerprint duplicates before
-        # either receipt lookup or projection mutation.
+        proposal = command.proposal
+        subject = await session.scalar(
+            select(Subject).where(
+                Subject.tenant_id == principal.tenant_id,
+                Subject.lineage_id == lineage_id,
+                Subject.subject_id == proposal.subject_id,
+                Subject.kind == proposal.subject_kind.value,
+            )
+        )
+        if subject is None:
+            raise SelectionExecutionError("not_found")
+        _validate_session_scope_anchors(
+            command,
+            subject_origin_session_id=subject.origin_session_id,
+        )
+
+        # Serialize exact subject/fingerprint duplicates before projection
+        # mutation. The idempotency lock above remains held by this transaction.
         nomination_fingerprint = exact_memory_fingerprint(
-            statement=command.proposal.statement,
-            category=command.proposal.category,
-            ontological_status=command.proposal.ontological_status,
-            scope=command.proposal.scope,
-            interpretation_limits=command.proposal.interpretation_limits,
+            statement=proposal.statement,
+            category=proposal.category,
+            ontological_status=proposal.ontological_status,
+            scope=proposal.scope,
+            interpretation_limits=proposal.interpretation_limits,
         ).sha256_hex
         await acquire_advisory_xact_locks(
             session,
             (
-                idempotency_advisory_lock_key(
-                    tenant_id=principal.tenant_id,
-                    client_id=principal.client_id,
-                    idempotency_key=command.idempotency_key,
-                ),
                 advisory_lock_key(
                     tenant_id=principal.tenant_id,
                     lineage_id=lineage_id,
@@ -607,37 +769,6 @@ class SelectionEngine:
                 ),
             ),
         )
-
-        receipt = await session.scalar(
-            select(CommandReceipt).where(
-                CommandReceipt.tenant_id == principal.tenant_id,
-                CommandReceipt.client_id == principal.client_id,
-                CommandReceipt.idempotency_key == command.idempotency_key,
-            )
-        )
-        # `_input_digest` is already the canonical SHA-256 command digest; use
-        # the same bytes for the receipt, decision, and replay comparison.
-        command_digest = input_digest
-        if receipt is not None:
-            if bytes(receipt.command_sha256) != command_digest:
-                raise SelectionExecutionError("idempotency_key_reused")
-            try:
-                replay = SelectionResult.model_validate(receipt.result)
-            except (TypeError, ValueError):
-                raise SelectionExecutionError("dependency_unavailable") from None
-            return replay.model_copy(update={"idempotent_replay": True})
-
-        proposal = command.proposal
-        subject_exists = await session.scalar(
-            select(Subject.subject_id).where(
-                Subject.tenant_id == principal.tenant_id,
-                Subject.lineage_id == lineage_id,
-                Subject.subject_id == proposal.subject_id,
-                Subject.kind == proposal.subject_kind.value,
-            )
-        )
-        if subject_exists is None:
-            raise SelectionExecutionError("not_found")
 
         outcome = policy_decision.outcome
         event_id: UUID | None = None
@@ -702,23 +833,8 @@ class SelectionEngine:
                             lifecycle = CandidateLifecycleState(
                                 status=MemoryStatus.CANDIDATE,
                                 selection_basis=SelectionBasis(source.selection_basis),
-                                content_signals=frozenset(
-                                    signal
-                                    for signal in ContentSignal
-                                    if (
-                                        signal is ContentSignal.ROLEPLAYED_SCENE
-                                        and any(
-                                            "roleplay" in str(rule)
-                                            for rule in source.matched_rule_ids
-                                        )
-                                    )
-                                    or (
-                                        signal is ContentSignal.SUBJECTIVE_EXPERIENCE_CLAIM
-                                        and any(
-                                            "sentience" in str(rule)
-                                            for rule in source.matched_rule_ids
-                                        )
-                                    )
+                                content_signals=content_signals_from_rule_ids(
+                                    str(rule) for rule in source.matched_rule_ids
                                 ),
                                 evidence=stored_evidence + new_evidence,
                                 policy_profile_version="selection-v1",
