@@ -1,0 +1,71 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/chatgpt-memory-proposal-v1.schema.json",
+    "title": "ScaleVault ChatGPT memory proposal v1",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "proposal_id",
+        "installation_id",
+        "idempotency_key",
+        "operation",
+        "category",
+        "scope",
+        "statement",
+        "reason_to_remember",
+        "confidence",
+        "ontology",
+        "interpretation_limits",
+        "evidence_summary",
+        "created_at"
+    ],
+    "properties": {
+        "schema_version": { "const": 1 },
+        "proposal_id": { "type": "string", "format": "uuid" },
+        "installation_id": { "type": "string", "format": "uuid" },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "operation": { "enum": ["observe", "remember"] },
+        "category": {
+            "enum": [
+                "stable_fact",
+                "user_preference",
+                "assistant_preference_like_pattern",
+                "boundary_or_permission",
+                "interaction_convention",
+                "relationship_pattern",
+                "emergent_tendency",
+                "episodic_anchor",
+                "project_decision",
+                "project_state",
+                "procedure",
+                "open_question",
+                "interpretation",
+                "external_fact"
+            ]
+        },
+        "scope": { "enum": ["global", "persona", "relationship", "project", "episodic", "scene_local"] },
+        "statement": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "reason_to_remember": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "confidence": { "enum": ["explicit", "verified", "observed", "interpreted", "uncertain"] },
+        "ontology": {
+            "enum": [
+                "literal_user_fact",
+                "literal_technical_fact",
+                "assistant_self_description",
+                "observed_assistant_behavior",
+                "interaction_convention",
+                "fictional_or_roleplayed_scene",
+                "hypothesis",
+                "uncertain"
+            ]
+        },
+        "interpretation_limits": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "maxItems": 32
+        },
+        "evidence_summary": { "type": "string", "maxLength": 4096 },
+        "created_at": { "type": "string", "format": "date-time" }
+    }
+}
