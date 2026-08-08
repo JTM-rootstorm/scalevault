@@ -73,6 +73,7 @@ async def test_expiry_worker_passes_injected_time_and_accepts_stale_noop() -> No
         ("forbidden", "forbidden"),
         ("not_found", "not_found"),
         ("serialization_exhausted", "dependency_unavailable"),
+        ("validation_failed", "dependency_unavailable"),
     ],
 )
 async def test_expiry_worker_preserves_terminal_errors_and_sanitizes_retryable_failures(

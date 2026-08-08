@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -19,25 +19,27 @@ from kivra_memory.domain.enums import EventOperation, MemoryStatus, MemoryVisibi
 from kivra_memory.domain.events import (
     BranchState,
     CandidateLifecyclePayload,
+    EventContractError,
     MemoryEvent,
     MemoryStateV2,
     event_hash_fields,
 )
+from kivra_memory.domain.folding import FoldError
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.policy import (
     CandidateLifecycleState,
-    ContentSignal,
     EvidenceKind,
     EvidenceSummary,
     EvidenceTrust,
     ExpiryEvaluation,
     LifecycleAction,
     SelectionBasis,
+    content_signals_from_rule_ids,
     evaluate_expiry,
     evaluate_promotion,
 )
 from kivra_memory.policy.loader import SELECTION_V1
-from kivra_memory.storage.event_store import append_memory_event
+from kivra_memory.storage.event_store import EventStoreError, append_memory_event
 from kivra_memory.storage.live_projection import (
     load_projection_state_for_update,
     stage_live_projection,
@@ -45,14 +47,19 @@ from kivra_memory.storage.live_projection import (
 )
 from kivra_memory.storage.models import (
     Branch,
+    Lineage,
     Memory,
     MemoryEvidence,
+    Persona,
     SelectionDecision,
     TransportBinding,
 )
 from kivra_memory.storage.outbox import enqueue_outbox_job
-from kivra_memory.storage.projector import memory_row_to_state
-from kivra_memory.storage.selection_history import append_selection_decision
+from kivra_memory.storage.projector import ProjectionPersistenceError, memory_row_to_state
+from kivra_memory.storage.selection_history import (
+    SelectionHistoryError,
+    append_selection_decision,
+)
 from kivra_memory.storage.transactions import (
     SerializableTransactionError,
     run_serializable_transaction,
@@ -118,16 +125,6 @@ def _evidence(row: MemoryEvidence) -> EvidenceSummary:
         if row.trust_classification in {item.value for item in EvidenceTrust}
         else EvidenceTrust.UNVERIFIED,
     )
-
-
-def _signals(decision: SelectionDecision) -> frozenset[ContentSignal]:
-    values = set(decision.matched_rule_ids)
-    result: set[ContentSignal] = set()
-    if any("roleplay" in str(value) for value in values):
-        result.add(ContentSignal.ROLEPLAYED_SCENE)
-    if any("sentience" in str(value) for value in values):
-        result.add(ContentSignal.SUBJECTIVE_EXPERIENCE_CLAIM)
-    return frozenset(result)
 
 
 def _event(
@@ -241,8 +238,21 @@ class CandidateLifecycleEngine:
             raise
         except SerializableTransactionError as error:
             raise CandidateLifecycleExecutionError("serialization_exhausted") from error
-        except SQLAlchemyError as error:
-            raise CandidateLifecycleExecutionError("dependency_unavailable") from error
+        except SQLAlchemyError:
+            raise CandidateLifecycleExecutionError("dependency_unavailable") from None
+        except (
+            EventStoreError,
+            ProjectionPersistenceError,
+            SelectionHistoryError,
+            EventContractError,
+            FoldError,
+            ValidationError,
+            ValueError,
+            TypeError,
+        ):
+            # Validation layers can include untrusted fields in their detail.
+            # Collapse them at this boundary before a worker transports errors.
+            raise CandidateLifecycleExecutionError("validation_failed") from None
 
     async def _attempt(
         self,
@@ -291,6 +301,35 @@ class CandidateLifecycleEngine:
                 memory.revision,
                 "not_candidate",
             )
+        identity = (
+            await session.execute(
+                select(Lineage.sealed_at, Persona.retired_at, Branch.sealed_at)
+                .join(
+                    Persona,
+                    (Persona.tenant_id == Lineage.tenant_id)
+                    & (Persona.persona_id == Lineage.persona_id),
+                )
+                .join(
+                    Branch,
+                    (Branch.tenant_id == Lineage.tenant_id)
+                    & (Branch.lineage_id == Lineage.lineage_id),
+                )
+                .where(
+                    Lineage.tenant_id == principal.tenant_id,
+                    Lineage.lineage_id == memory.lineage_id,
+                    Branch.branch_id == memory.branch_id,
+                )
+            )
+        ).one_or_none()
+        if identity is None:
+            raise CandidateLifecycleExecutionError("not_found")
+        lineage_sealed_at, persona_retired_at, branch_sealed_at = identity
+        if (
+            lineage_sealed_at is not None
+            or persona_retired_at is not None
+            or branch_sealed_at is not None
+        ):
+            raise CandidateLifecycleExecutionError("forbidden")
         source = await session.scalar(
             select(SelectionDecision).where(
                 SelectionDecision.tenant_id == principal.tenant_id,
@@ -324,7 +363,9 @@ class CandidateLifecycleEngine:
         lifecycle = CandidateLifecycleState(
             status=MemoryStatus.CANDIDATE,
             selection_basis=SelectionBasis(source.selection_basis),
-            content_signals=_signals(source),
+            content_signals=content_signals_from_rule_ids(
+                rule_id for rule_id in source.matched_rule_ids if isinstance(rule_id, str)
+            ),
             evidence=evidence,
             policy_profile_version="selection-v1",
             policy_profile_sha256=bytes(source.policy_sha256).hex(),
@@ -355,13 +396,14 @@ class CandidateLifecycleEngine:
             event_operation = EventOperation.CANDIDATE_EXPIRED
             result_action = "expired"
         if action != LifecycleAction.PROMOTE.value and action != LifecycleAction.RETIRE.value:
-            return CandidateLifecycleResult(
+            return await self._record_policy_noop(
+                session=session,
+                principal=principal,
+                command=command,
+                source=source,
+                memory=memory,
                 operation=operation,
-                action="no_op",
-                decision_id=source.decision_id,
-                source_decision_id=source.decision_id,
-                memory_id=memory.memory_id,
-                revision=memory.revision,
+                identifiers=identifiers,
                 policy_sha256=decision.policy_profile_sha256,
                 reason_code=decision.reason_code.value,
             )
@@ -488,6 +530,74 @@ class CandidateLifecycleEngine:
             revision=after.revision,
             policy_sha256=decision.policy_profile_sha256,
             reason_code=decision.reason_code.value,
+        )
+
+    @staticmethod
+    async def _record_policy_noop(
+        *,
+        session: AsyncSession,
+        principal: CommandPrincipal,
+        command: CandidatePromotionCommand | CandidateExpiryCommand,
+        source: SelectionDecision,
+        memory: Memory,
+        operation: Literal["promote", "expire"],
+        identifiers: _LifecycleIdentifiers,
+        policy_sha256: str,
+        reason_code: str,
+    ) -> CandidateLifecycleResult:
+        """Record an evaluated no-op without mutable memory or event references.
+
+        Missing, stale, and non-candidate work is deliberately not ledgered:
+        it did not reach a policy evaluation.  This path is for a real policy
+        outcome only, and copies the source decision's authorization anchors
+        under the internal lifecycle principal.
+        """
+
+        decision = await append_selection_decision(
+            session,
+            lambda sequence: SelectionDecision(
+                selection_sequence=sequence,
+                decision_id=identifiers.decision_id,
+                tenant_id=principal.tenant_id,
+                lineage_id=memory.lineage_id,
+                branch_id=memory.branch_id,
+                persona_id=source.persona_id,
+                actor_id=principal.actor_id,
+                client_id=principal.client_id,
+                transport_binding_id=principal.transport_binding_id,
+                policy_id="scalevault-memory-selection",
+                policy_version=1,
+                policy_sha256=bytes.fromhex(policy_sha256),
+                policy_rule_code=reason_code,
+                input_sha256=hashlib.sha256(
+                    canonical_json_bytes(command.model_dump(mode="json"))
+                ).digest(),
+                source_kind=(
+                    "candidate_reassessment" if operation == "promote" else "candidate_expiry"
+                ),
+                requested_operation=operation,
+                outcome="omit",
+                reason_codes=[reason_code],
+                matched_rule_ids=[],
+                selection_basis=source.selection_basis,
+                scope=source.scope,
+                visibility=source.visibility,
+                sensitivity=source.sensitivity,
+                subject_id=source.subject_id,
+                subject_kind=source.subject_kind,
+                memory_id=None,
+                event_id=None,
+            ),
+        )
+        return CandidateLifecycleResult(
+            operation=operation,
+            action="no_op",
+            decision_id=decision.decision_id,
+            source_decision_id=source.decision_id,
+            memory_id=memory.memory_id,
+            revision=memory.revision,
+            policy_sha256=policy_sha256,
+            reason_code=reason_code,
         )
 
     @staticmethod
