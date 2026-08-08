@@ -23,6 +23,7 @@ from kivra_memory.domain.commands import (
 )
 from kivra_memory.domain.enums import (
     AuthorityClass,
+    EventOperation,
     MemoryCategory,
     MemoryScope,
     MemoryStatus,
@@ -34,12 +35,14 @@ from kivra_memory.domain.fingerprints import exact_memory_fingerprint
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import (
+    Client,
     CommandReceipt,
     IngressItem,
     Memory,
     MemoryEvent,
     OutboxJob,
     Subject,
+    TransportBinding,
 )
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -192,6 +195,51 @@ async def _counts(database: Database) -> tuple[int, int, int, int]:
         return cast(tuple[int, int, int, int], tuple(values))
 
 
+async def _second_direct_principal(database: Database) -> CommandPrincipal:
+    tenant_id = _seed_identifier("tenants", "tenant_id")
+    actor_id = cast(UUID, seed_rows()["transport_bindings"][0]["actor_id"])
+    client_id = new_uuid7()
+    binding_id = new_uuid7()
+    scopes = frozenset({"memory:write", "memory.write.legacy_v1", "memory.write.remember"})
+    async with database.tenant_session(tenant_id) as session:
+        session.add(
+            Client(
+                client_id=client_id,
+                tenant_id=tenant_id,
+                public_id=f"synthetic-second-direct-{client_id}",
+                display_name="Synthetic Second Direct Client",
+                kind="interactive",
+                transport_kind="direct_private",
+                scopes=sorted(scopes),
+                capability_profile={"profile": "private-read-write"},
+                created_at=_NOW,
+                revoked_at=None,
+            )
+        )
+        session.add(
+            TransportBinding(
+                transport_binding_id=binding_id,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                client_id=client_id,
+                transport_kind="direct_private",
+                disclosure_boundary="private_node",
+                installation_id=None,
+                authorized_operations={"operations": [EventOperation.REMEMBERED.value]},
+                created_at=_NOW,
+                valid_until=None,
+            )
+        )
+        await session.flush()
+    return CommandPrincipal(
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        client_id=client_id,
+        transport_binding_id=binding_id,
+        scopes=scopes,
+    )
+
+
 def _success(response: MutationResponse) -> MutationResult:
     assert isinstance(response, MutationResult), response
     return response
@@ -283,9 +331,10 @@ async def test_concurrent_exact_create_across_distinct_clients_has_one_live_fing
     _ = migrated_database
     statement = "Synthetic cross-client duplicate candidate."
     async with _seeded_engine(postgresql_server.database_url) as (database, engine):
+        second_direct = await _second_direct_principal(database)
         responses = await asyncio.gather(
             engine.execute(_principal(0), _remember("direct-duplicate", statement)),
-            engine.execute(_principal(1), _remember("relay-duplicate", statement)),
+            engine.execute(second_direct, _remember("second-direct-duplicate", statement)),
         )
         successes = [response for response in responses if isinstance(response, MutationResult)]
         failures = [response for response in responses if isinstance(response, MutationError)]
