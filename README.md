@@ -5,10 +5,10 @@ persona. The canonical Memory Node is designed around PostgreSQL-backed events
 and projections, with separate Go services for relay access and an outbound
 node agent.
 
-This repository currently contains the project foundation: service entry
-points, shared contracts, deployment examples, documentation boundaries, and a
-common verification command. Memory semantics and production transports will
-be implemented incrementally.
+This repository contains the project foundation plus the canonical PostgreSQL
+schema, immutable event engine, deterministic projection rebuild, and
+database-role bootstrap and validation suite. MCP memory tools, retrieval, and
+production mutation workers are implemented incrementally in later milestones.
 
 ## Components
 
@@ -83,13 +83,13 @@ JSON contracts.
 
 ## Current boundary
 
-The scaffold exposes liveness, readiness, and metrics endpoints. Readiness is
-dependency-aware and reports unavailable until a database check is configured
-and succeeds. MCP memory tools, persistence, relay forwarding, enrollment, and
-OAuth are deliberately not represented as complete.
+The API exposes liveness, schema- and extension-aware readiness, metrics, and
+the echo surface. The canonical database contracts and event replay engine are
+present, while user-facing MCP memory tools, retrieval, relay forwarding,
+enrollment, and OAuth are deliberately not represented as complete.
 
 Milestone status is tracked in the
-[dated Milestone 1 acceptance checklist](docs/milestone-1-acceptance-2026-08-03.md).
+[dated Milestone 2 acceptance checklist](docs/milestone-2-acceptance-2026-08-07.md).
 
 ScaleVault is licensed under the GNU Affero General Public License v3.0.
 
