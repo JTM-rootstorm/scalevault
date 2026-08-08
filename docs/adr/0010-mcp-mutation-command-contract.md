@@ -203,9 +203,10 @@ current or proposed claim. An authorized client may use a read tool to fetch
 content separately. `not_found` is also used where distinguishing absence from
 inaccessibility would disclose another tenant or scope.
 
-Unexpected internal failures expose only a correlation identifier and the
-generic `dependency_unavailable` or `internal_error` mapping; detailed
-exception data remains in privacy-safe operator telemetry.
+Unexpected internal failures expose only the generic `dependency_unavailable`
+or `internal_error` mapping; detailed exception data and internal correlation
+remain in privacy-safe operator telemetry. The v1 public error envelope has no
+correlation field.
 
 ### Idempotency and serializable retries
 
@@ -254,11 +255,19 @@ the v1 credential migration only, the existing `memory:write` scope is an
 explicit compatibility alias granting all eight scopes. New credentials must
 not be issued with that broad alias, and credential migration must replace it
 with the least set of dotted scopes. `memory:propose` remains an ingress-only
-capability and grants none of the MCP mutation tools.
+capability and grants none of the MCP mutation tools. Inside the shared command
+engine it authorizes only `observe` or `remember`, only when an authenticated
+principal carries a non-null validated ingress identifier; the event store
+still enforces the GitHub binding, installation, declared idempotency key, and
+validated ingress-row contract.
 
 Authentication, transport restrictions, branch visibility ceilings, sensitivity
 rules, and confirmation requirements are cumulative with scopes. A scope alone
 never bypasses ADR 0008 policy.
+
+Retire and forget commands reject a currently disputed memory with
+`conflict_state_changed`. The caller must resolve its open conflict first so a
+terminal transition cannot strand an unresolvable conflict set.
 
 ### Adapter-neutral command engine and ingress seam
 
