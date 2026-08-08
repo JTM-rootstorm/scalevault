@@ -238,6 +238,12 @@ def _memory_row(state: MemoryState, last_event_id: UUID) -> Memory:
     )
 
 
+def memory_state_to_row(state: MemoryState, *, last_event_id: UUID) -> Memory:
+    """Map a complete memory after-image to a projection row."""
+
+    return _memory_row(state, last_event_id)
+
+
 def _branch_rows(states: Mapping[UUID, BranchState]) -> tuple[Branch, ...]:
     """Map branches in deterministic parent-before-child order."""
 
@@ -316,6 +322,17 @@ def _link_row(
         unlinked_at=state.unlinked_at,
         metadata_=dict(state.metadata),
     )
+
+
+def link_state_to_row(
+    state: LinkState,
+    *,
+    created_event_id: UUID,
+    unlinked_event_id: UUID | None = None,
+) -> MemoryLink:
+    """Map a complete link after-image to a projection row."""
+
+    return _link_row(state, created_event_id, unlinked_event_id)
 
 
 def build_projection_rows(
@@ -496,7 +513,9 @@ async def rebuild_semantic_projections(
     return state
 
 
-def _memory_state(row: Memory) -> MemoryState:
+def memory_row_to_state(row: Memory) -> MemoryState:
+    """Convert one memory projection row to its validated domain after-image."""
+
     return MemoryState(
         memory_id=row.memory_id,
         tenant_id=row.tenant_id,
@@ -538,7 +557,9 @@ def _memory_state(row: Memory) -> MemoryState:
     )
 
 
-def _evidence_state(row: MemoryEvidence) -> EvidenceState:
+def evidence_row_to_state(row: MemoryEvidence) -> EvidenceState:
+    """Convert one evidence projection row to its validated domain after-image."""
+
     return EvidenceState(
         evidence_id=row.evidence_id,
         tenant_id=row.tenant_id,
@@ -559,7 +580,9 @@ def _evidence_state(row: MemoryEvidence) -> EvidenceState:
     )
 
 
-def _link_state(row: MemoryLink) -> LinkState:
+def link_row_to_state(row: MemoryLink) -> LinkState:
+    """Convert one link projection row to its validated domain after-image."""
+
     return LinkState(
         link_id=row.link_id,
         tenant_id=row.tenant_id,
@@ -585,12 +608,12 @@ def canonical_aggregate_bytes_from_rows(
 ) -> bytes:
     """Reconstruct and canonically serialize one persisted aggregate."""
 
-    memory_state = _memory_state(memory)
-    evidence_states = {_row.evidence_id: _evidence_state(_row) for _row in evidence}
-    link_states = {_row.link_id: _link_state(_row) for _row in links}
-    conflict_states = {_row.conflict_id: _conflict_state(_row) for _row in conflicts}
+    memory_state = memory_row_to_state(memory)
+    evidence_states = {_row.evidence_id: evidence_row_to_state(_row) for _row in evidence}
+    link_states = {_row.link_id: link_row_to_state(_row) for _row in links}
+    conflict_states = {_row.conflict_id: conflict_row_to_state(_row) for _row in conflicts}
     member_states = {
-        (_row.conflict_id, _row.memory_id): _conflict_member_state(_row)
+        (_row.conflict_id, _row.memory_id): conflict_member_row_to_state(_row)
         for _row in conflict_members
     }
     state = ProjectionState(
@@ -603,7 +626,9 @@ def canonical_aggregate_bytes_from_rows(
     return canonical_aggregate_bytes(state, memory_state.memory_id)
 
 
-def _conflict_state(row: MemoryConflict) -> ConflictState:
+def conflict_row_to_state(row: MemoryConflict) -> ConflictState:
+    """Convert one conflict projection row to its validated domain after-image."""
+
     return ConflictState(
         conflict_id=row.conflict_id,
         tenant_id=row.tenant_id,
@@ -620,7 +645,9 @@ def _conflict_state(row: MemoryConflict) -> ConflictState:
     )
 
 
-def _conflict_member_state(row: MemoryConflictMember) -> ConflictMemberState:
+def conflict_member_row_to_state(row: MemoryConflictMember) -> ConflictMemberState:
+    """Convert one conflict-member row to its validated domain after-image."""
+
     return ConflictMemberState(
         conflict_id=row.conflict_id,
         memory_id=row.memory_id,
