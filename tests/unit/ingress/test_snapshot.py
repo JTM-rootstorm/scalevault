@@ -12,6 +12,7 @@ from kivra_memory.ingress.snapshot import (
     GENESIS_SOURCE_SNAPSHOT_COMMIT,
     GenesisSnapshotSource,
     GitTreeEntry,
+    ImportPlanManifest,
     ManifestError,
     PlannedImportRecord,
     SnapshotError,
@@ -178,7 +179,7 @@ def _record(source_path: str = CHECKPOINT_V2_PATH) -> PlannedImportRecord:
 
 def _manifest(
     items: list[SnapshotSourceItem], records: list[PlannedImportRecord]
-) -> object:
+) -> ImportPlanManifest:
     return build_import_plan_manifest(
         items,
         records,
