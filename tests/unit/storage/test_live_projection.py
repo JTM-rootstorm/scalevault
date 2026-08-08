@@ -10,12 +10,14 @@ from kivra_memory.domain.enums import EventOperation, LinkType, MemoryStatus
 from kivra_memory.domain.events import (
     BranchCreatedPayload,
     BranchState,
+    CandidateLifecyclePayload,
     EvidenceState,
     LinkedPayload,
     LinkState,
     MemoryCreatedPayload,
     MemoryEvent,
     MemoryState,
+    MemoryStateV2,
     MemoryTransitionPayload,
     TombstonedPayload,
 )
@@ -318,6 +320,75 @@ async def test_load_projection_locks_link_endpoints_in_deterministic_order() -> 
     assert "ORDER BY memories.memory_id" in sql[0]
     assert "FOR UPDATE" in sql[0]
     assert "FOR UPDATE" in sql[1]
+
+
+@pytest.mark.asyncio
+async def test_candidate_promotion_locks_and_stages_policy_evidence() -> None:
+    base = memory_state()
+    candidate = MemoryStateV2.model_validate(
+        {
+            **base.model_dump(mode="python"),
+            "status": MemoryStatus.CANDIDATE,
+            "candidate_expires_at": NOW + timedelta(days=30),
+        }
+    )
+    promoted = MemoryStateV2.model_validate(
+        {
+            **base.model_dump(mode="python"),
+            "revision": 2,
+            "updated_at": NOW + timedelta(seconds=1),
+            "candidate_expires_at": None,
+        }
+    )
+    item = evidence_state(uid(50), candidate.memory_id).model_copy(
+        update={"created_at": NOW + timedelta(seconds=1)}
+    )
+    event = make_event(
+        sequence=2,
+        operation=EventOperation.CANDIDATE_PROMOTED,
+        payload=CandidateLifecyclePayload(
+            previous_revision=1,
+            memory=promoted,
+            selection_decision_id=uid(70),
+            policy_rule_code="trusted_confirmation",
+            evidence=(item,),
+        ),
+        memory_id=candidate.memory_id,
+        expected_revision=1,
+        created_at=NOW + timedelta(seconds=1),
+        schema_version=2,
+        payload_version=2,
+    )
+    session = _Session(
+        {
+            Memory: (memory_state_to_row(candidate, last_event_id=uid(80)),),
+            MemoryEvidence: (),
+        }
+    )
+
+    before = await load_projection_state_for_update(
+        cast(object, session),  # type: ignore[arg-type]
+        event=event,
+        branch=_branch_state(),
+    )
+    after = validate_live_event(before, event)
+    await stage_live_projection(
+        cast(object, session),  # type: ignore[arg-type]
+        before=before,
+        after=after,
+        event=event,
+    )
+
+    staged = [row for row in session.added if isinstance(row, MemoryEvidence)]
+    assert len(staged) == 1
+    assert staged[0].evidence_id == item.evidence_id
+    assert staged[0].source_event_id == event.event_id
+    evidence_select = next(
+        statement
+        for statement in session.statements
+        if isinstance(statement, Select) and "memory_evidence" in str(statement)
+    )
+    assert "FOR UPDATE" in str(evidence_select)
 
 
 @pytest.mark.asyncio

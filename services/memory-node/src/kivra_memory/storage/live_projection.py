@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.domain.events import (
     BranchState,
+    CandidateLifecyclePayload,
     ConflictOpenedPayload,
     ConflictResolvedPayload,
     ConflictState,
@@ -44,6 +45,7 @@ from kivra_memory.storage.projector import (
     conflict_member_row_to_state,
     conflict_row_to_state,
     evidence_row_to_state,
+    evidence_state_to_row,
     link_row_to_state,
     link_state_to_row,
     memory_row_to_state,
@@ -118,13 +120,27 @@ async def load_projection_state_for_update(
             memories = list(result.scalars().all())
 
         evidence: list[MemoryEvidence] = []
-        if isinstance(event.typed_payload(), TombstonedPayload):
+        typed_payload = event.typed_payload()
+        if isinstance(typed_payload, TombstonedPayload):
             result = await session.execute(
                 select(MemoryEvidence)
                 .where(
                     MemoryEvidence.tenant_id == event.tenant_id,
                     MemoryEvidence.lineage_id == event.lineage_id,
                     MemoryEvidence.memory_id.in_(memory_ids),
+                )
+                .order_by(MemoryEvidence.evidence_id)
+                .with_for_update()
+            )
+            evidence = list(cast(Sequence[MemoryEvidence], result.scalars().all()))
+        elif isinstance(typed_payload, CandidateLifecyclePayload) and typed_payload.evidence:
+            evidence_ids = _sorted_ids(item.evidence_id for item in typed_payload.evidence)
+            result = await session.execute(
+                select(MemoryEvidence)
+                .where(
+                    MemoryEvidence.tenant_id == event.tenant_id,
+                    MemoryEvidence.lineage_id == event.lineage_id,
+                    MemoryEvidence.evidence_id.in_(evidence_ids),
                 )
                 .order_by(MemoryEvidence.evidence_id)
                 .with_for_update()
@@ -287,6 +303,12 @@ async def stage_live_projection(
                     )
                     .values(**values)
                 )
+
+        if isinstance(payload, CandidateLifecyclePayload):
+            for evidence in payload.evidence:
+                if evidence.evidence_id in before.evidence:
+                    raise ProjectionPersistenceError("duplicate_evidence_after_image")
+                session.add(evidence_state_to_row(evidence, source_event_id=event.event_id))
 
         if isinstance(payload, LinkedPayload):
             link_state = after.links.get(link_id) if link_id is not None else None

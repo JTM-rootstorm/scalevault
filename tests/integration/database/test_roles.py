@@ -31,6 +31,7 @@ OWNER_ROLE = "kivra_memory_owner"
 MIGRATOR_ROLE = "kivra_memory_migrator"
 RUNTIME_ROLES = (
     "kivra_memory_api",
+    "kivra_memory_policy",
     "kivra_memory_worker",
     "kivra_memory_ingress",
     "kivra_memory_exporter",
@@ -228,6 +229,7 @@ def test_role_bootstrap_upgrades_m1_ownership_and_is_idempotent(
         ("kivra_memory_ingress", True, False, False, False, False, False, False),
         ("kivra_memory_migrator", True, False, False, False, False, False, False),
         ("kivra_memory_owner", False, False, False, False, False, False, False),
+        ("kivra_memory_policy", True, False, False, False, False, False, False),
         ("kivra_memory_worker", True, False, False, False, False, False, False),
     ]
 
@@ -277,6 +279,18 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
     (
         ("kivra_memory_api", "memory_events", "SELECT,INSERT", "UPDATE,DELETE,TRUNCATE"),
         ("kivra_memory_api", "memory_event_counter", "SELECT,UPDATE", "INSERT,DELETE"),
+        (
+            "kivra_memory_api",
+            "selection_decisions",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_api",
+            "selection_decision_counter",
+            "SELECT,UPDATE",
+            "INSERT,DELETE,TRUNCATE",
+        ),
         ("kivra_memory_api", "sessions", "SELECT,INSERT,UPDATE", "DELETE,TRUNCATE"),
         ("kivra_memory_api", "memories", "SELECT,INSERT,UPDATE", "DELETE,TRUNCATE"),
         ("kivra_memory_api", "memory_links", "SELECT,INSERT,UPDATE", "DELETE,TRUNCATE"),
@@ -299,6 +313,56 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
             "INSERT,UPDATE,DELETE,TRUNCATE",
         ),
         (
+            "kivra_memory_policy",
+            "selection_decisions",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_policy",
+            "selection_decision_counter",
+            "SELECT,UPDATE",
+            "INSERT,DELETE,TRUNCATE",
+        ),
+        ("kivra_memory_policy", "memory_events", "SELECT,INSERT", "UPDATE,DELETE,TRUNCATE"),
+        ("kivra_memory_policy", "memories", "SELECT,INSERT,UPDATE", "DELETE,TRUNCATE"),
+        (
+            "kivra_memory_policy",
+            "memory_evidence",
+            "SELECT,INSERT,UPDATE",
+            "DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_policy",
+            "memory_links",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_policy",
+            "memory_conflicts",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_policy",
+            "client_credentials",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_policy",
+            "memory_content_keys",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_policy",
+            "outbox_jobs",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
             "kivra_memory_api",
             "memory_content_keys",
             "SELECT",
@@ -312,6 +376,12 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
         ),
         ("kivra_memory_worker", "branches", "SELECT,INSERT", "UPDATE,DELETE,TRUNCATE"),
         ("kivra_memory_worker", "memory_events", "SELECT", "INSERT,UPDATE,DELETE,TRUNCATE"),
+        (
+            "kivra_memory_worker",
+            "selection_decisions",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
         ("kivra_memory_worker", "memories", "SELECT,INSERT,UPDATE,DELETE", "TRUNCATE"),
         (
             "kivra_memory_worker",
@@ -509,6 +579,40 @@ def test_column_grants_keep_ingress_validation_separate_from_api_processing(
         ).scalar_one()
 
 
+def test_policy_outbox_updates_are_lease_columns_only(
+    role_secured_database: AlembicRunner,
+) -> None:
+    allowed = {
+        "state",
+        "lease_owner",
+        "lease_expires_at",
+        "attempt_count",
+        "available_at",
+        "updated_at",
+        "completed_at",
+        "last_error_code",
+        "last_error_summary",
+    }
+    denied = {"job_type", "payload", "deduplication_key", "aggregate_type", "aggregate_id"}
+    with role_secured_database.engine.begin() as connection:
+        for column in allowed:
+            assert connection.execute(
+                text(
+                    "SELECT has_column_privilege("
+                    "'kivra_memory_policy', 'public.outbox_jobs', :column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
+        for column in denied:
+            assert not connection.execute(
+                text(
+                    "SELECT has_column_privilege("
+                    "'kivra_memory_policy', 'public.outbox_jobs', :column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
+
+
 def test_bootstrap_removes_existing_public_grants_and_uses_actual_outbox_sequence(
     postgresql_server: PostgreSQLTestServer,
     role_secured_database: AlembicRunner,
@@ -536,6 +640,10 @@ def test_bootstrap_removes_existing_public_grants_and_uses_actual_outbox_sequenc
         ).scalar_one()
         assert connection.execute(
             text("SELECT has_sequence_privilege('kivra_memory_worker', :sequence, 'USAGE')"),
+            {"sequence": sequence_name},
+        ).scalar_one()
+        assert connection.execute(
+            text("SELECT has_sequence_privilege('kivra_memory_policy', :sequence, 'USAGE')"),
             {"sequence": sequence_name},
         ).scalar_one()
         assert not connection.execute(

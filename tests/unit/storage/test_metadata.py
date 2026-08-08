@@ -29,6 +29,8 @@ EXPECTED_TABLES = {
     "outbox_jobs",
     "personas",
     "sessions",
+    "selection_decision_counter",
+    "selection_decisions",
     "subject_aliases",
     "subjects",
     "tenants",
@@ -44,6 +46,7 @@ def test_metadata_registers_the_complete_initial_contract() -> None:
         - {
             "alembic_compatibility",
             "memory_event_counter",
+            "selection_decision_counter",
         }
         == TENANT_TABLE_NAMES
     )
@@ -196,6 +199,76 @@ def test_event_envelope_and_transactional_counter_are_explicit() -> None:
     )
     counter = metadata.tables["memory_event_counter"]
     assert set(counter.c.keys()) == {"counter_id", "next_sequence"}
+
+
+def test_selection_decisions_are_bounded_immutable_and_authorization_anchored() -> None:
+    decision = metadata.tables["selection_decisions"]
+    assert set(decision.c.keys()) == {
+        "selection_sequence",
+        "decision_id",
+        "tenant_id",
+        "lineage_id",
+        "branch_id",
+        "persona_id",
+        "actor_id",
+        "client_id",
+        "transport_binding_id",
+        "policy_id",
+        "policy_version",
+        "policy_sha256",
+        "policy_rule_code",
+        "input_sha256",
+        "source_kind",
+        "requested_operation",
+        "outcome",
+        "reason_codes",
+        "matched_rule_ids",
+        "selection_basis",
+        "scope",
+        "visibility",
+        "sensitivity",
+        "subject_id",
+        "subject_kind",
+        "memory_id",
+        "event_id",
+        "decided_at",
+    }
+    assert decision.info["scalevault_immutable"] is True
+    assert decision.info["scalevault_tenant_owned"] is True
+    assert decision.c.selection_sequence.autoincrement is False
+    assert {index.name for index in decision.indexes} == {
+        "ix_selection_decisions_branch_sequence",
+        "ix_selection_decisions_memory",
+    }
+    checks = " ".join(
+        str(constraint.sqltext)
+        for constraint in decision.constraints
+        if isinstance(constraint, CheckConstraint)
+    )
+    assert "policy_id = 'scalevault-memory-selection'" in checks
+    assert "jsonb_array_length(reason_codes) BETWEEN 1 AND 8" in checks
+    assert "jsonb_array_length(matched_rule_ids) BETWEEN 0 AND 16" in checks
+    assert "outcome IN ('omit', 'reject')" in checks
+    assert "scope = 'scene_local' AND subject_kind = 'scene'" in checks
+
+    counter = metadata.tables["selection_decision_counter"]
+    assert set(counter.c.keys()) == {"counter_id", "next_sequence"}
+
+
+def test_receipts_support_selection_only_and_event_linked_terminal_results() -> None:
+    receipt = metadata.tables["command_receipts"]
+    assert receipt.c.event_id.nullable is True
+    assert receipt.c.selection_decision_id.nullable is True
+    shape = next(
+        constraint
+        for constraint in receipt.constraints
+        if isinstance(constraint, CheckConstraint)
+        and constraint.name == "ck_command_receipts_terminal_reference_shape"
+    )
+    assert "selection_decision_id IS NULL AND event_id IS NOT NULL" in str(shape.sqltext)
+    assert "event_id IS NULL AND memory_id IS NULL AND memory_revision IS NULL" in str(
+        shape.sqltext
+    )
 
 
 def test_ingress_provenance_is_immutable() -> None:

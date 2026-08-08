@@ -217,6 +217,12 @@ class Memory(Base):
             name="validity_order",
         ),
         CheckConstraint("updated_at >= created_at", name="update_order"),
+        CheckConstraint(
+            "(status = 'candidate' AND "
+            "(candidate_expires_at IS NULL OR candidate_expires_at > created_at)) OR "
+            "(status <> 'candidate' AND candidate_expires_at IS NULL)",
+            name="candidate_expiry_shape",
+        ),
         json_array_check("interpretation_limits", name="interpretation_limits_array"),
         CheckConstraint(
             "jsonb_array_length(interpretation_limits) <= 32",
@@ -247,6 +253,12 @@ class Memory(Base):
             "visibility",
         ),
         Index("ix_memories_subject", "tenant_id", "subject_id", "status"),
+        Index(
+            "ix_memories_candidate_expiry",
+            "tenant_id",
+            "candidate_expires_at",
+            postgresql_where=text("status = 'candidate' AND candidate_expires_at IS NOT NULL"),
+        ),
         Index("ix_memories_search_document", "search_document", postgresql_using="gin"),
         Index(
             "ix_memories_statement_trgm",
@@ -283,6 +295,7 @@ class Memory(Base):
     observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    candidate_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     search_document: Mapped[str] = mapped_column(
         TSVECTOR(),
         Computed(

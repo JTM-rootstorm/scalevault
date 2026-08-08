@@ -21,7 +21,7 @@ from .conftest import (
     installed_extensions,
 )
 
-EXPECTED_HEAD = "0002_hybrid_retrieval"
+EXPECTED_HEAD = "0003_selection_policy_lifecycle"
 revision_module = importlib.import_module("migrations.versions.0001_initial_domain")
 
 
@@ -113,11 +113,18 @@ def test_zero_to_head_and_full_round_trip(
             text("SELECT counter_id, next_sequence FROM memory_event_counter")
         ).one() == (1, 1)
         assert connection.execute(
+            text("SELECT counter_id, next_sequence FROM selection_decision_counter")
+        ).one() == (1, 1)
+        assert (
+            connection.execute(text("SELECT count(*) FROM selection_decisions")).scalar_one()
+            == 0
+        )
+        assert connection.execute(
             text(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (2, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (3, EXPECTED_HEAD, EXPECTED_HEAD)
 
     runner.downgrade("base")
     with runner.connect() as connection:
@@ -151,4 +158,50 @@ def test_existing_0001_database_upgrades_to_hybrid_retrieval(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (2, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (3, EXPECTED_HEAD, EXPECTED_HEAD)
+
+
+def test_existing_0002_database_upgrades_and_downgrades_policy_lifecycle(
+    bootstrapped_alembic_runner: AlembicRunner,
+) -> None:
+    runner = bootstrapped_alembic_runner
+    runner.upgrade("0002_hybrid_retrieval")
+    with runner.connect() as connection:
+        inspector = inspect(connection)
+        assert _current_revision(connection) == "0002_hybrid_retrieval"
+        assert "selection_decisions" not in inspector.get_table_names()
+        assert "candidate_expires_at" not in {
+            column["name"] for column in inspector.get_columns("memories")
+        }
+
+    runner.upgrade()
+    with runner.connect() as connection:
+        inspector = inspect(connection)
+        assert _current_revision(connection) == EXPECTED_HEAD
+        assert "selection_decisions" in inspector.get_table_names()
+        assert "selection_decision_counter" in inspector.get_table_names()
+        assert "candidate_expires_at" in {
+            column["name"] for column in inspector.get_columns("memories")
+        }
+        receipt_columns = {
+            column["name"]: bool(column["nullable"])
+            for column in inspector.get_columns("command_receipts")
+        }
+        assert receipt_columns["event_id"] is True
+        assert receipt_columns["selection_decision_id"] is True
+        assert _schema_differences(connection) == []
+
+    runner.downgrade("0002_hybrid_retrieval")
+    with runner.connect() as connection:
+        inspector = inspect(connection)
+        assert _current_revision(connection) == "0002_hybrid_retrieval"
+        assert "selection_decisions" not in inspector.get_table_names()
+        assert "candidate_expires_at" not in {
+            column["name"] for column in inspector.get_columns("memories")
+        }
+        receipt_columns = {
+            column["name"]: bool(column["nullable"])
+            for column in inspector.get_columns("command_receipts")
+        }
+        assert receipt_columns["event_id"] is False
+        assert "selection_decision_id" not in receipt_columns

@@ -24,10 +24,50 @@ from sqlalchemy.orm import Mapped, mapped_column
 from kivra_memory.storage.base import TENANT_OWNED_INFO_KEY, Base
 from kivra_memory.storage.models._shared import (
     MEMORY_OPERATIONS,
+    MEMORY_SCOPES,
+    MEMORY_VISIBILITIES,
     json_object_check,
     sha256_check,
     uuid_v7_check,
     values_check,
+)
+
+_SELECTION_BASES = (
+    "routine_banter",
+    "explicit_user_correction",
+    "explicit_user_preference",
+    "explicit_user_permission",
+    "verified_project_decision",
+    "assistant_observation",
+    "assistant_interpretation",
+    "imported_legacy",
+    "meaningful_episodic_anchor",
+    "explicit_user_request",
+)
+_SELECTION_SOURCE_KINDS = (
+    "live_interaction",
+    "reviewed_seed",
+    "github_proposal",
+    "candidate_reassessment",
+    "candidate_expiry",
+)
+_SELECTION_OPERATIONS = ("nominate", "promote", "expire")
+_SELECTION_OUTCOMES = (
+    "omit",
+    "reject",
+    "candidate",
+    "active",
+    "promoted",
+    "expired",
+)
+_SUBJECT_KINDS = (
+    "global",
+    "persona",
+    "relationship",
+    "project",
+    "episode",
+    "scene",
+    "concept",
 )
 
 
@@ -164,6 +204,21 @@ class MemoryEventCounter(Base):
     )
 
 
+class SelectionDecisionCounter(Base):
+    __tablename__ = "selection_decision_counter"
+    __table_args__ = (
+        CheckConstraint("counter_id = 1", name="singleton_id"),
+        CheckConstraint("next_sequence >= 1", name="next_sequence_positive"),
+    )
+
+    counter_id: Mapped[int] = mapped_column(
+        SmallInteger(), primary_key=True, server_default=text("1")
+    )
+    next_sequence: Mapped[int] = mapped_column(
+        BigInteger(), nullable=False, server_default=text("1")
+    )
+
+
 class MemoryEvent(Base):
     __tablename__ = "memory_events"
     __table_args__ = (
@@ -247,7 +302,8 @@ class MemoryEvent(Base):
             "(operation IN ('observed', 'remembered', 'evidence_attached', "
             "'evidence_redacted') AND memory_id IS NOT NULL AND expected_revision IS NULL) OR "
             "(operation IN ('revised', 'retired', 'visibility_changed', 'superseded', "
-            "'tombstoned', 'payload_purge_completed') AND memory_id IS NOT NULL AND "
+            "'tombstoned', 'payload_purge_completed', 'candidate_promoted', "
+            "'candidate_expired') AND memory_id IS NOT NULL AND "
             "expected_revision IS NOT NULL) OR "
             "(operation IN ('branch_created', 'linked', 'unlinked', 'conflict_opened', "
             "'conflict_resolved') AND memory_id IS NULL AND expected_revision IS NULL)",
@@ -318,6 +374,201 @@ class MemoryEvent(Base):
     )
 
 
+class SelectionDecision(Base):
+    __tablename__ = "selection_decisions"
+    __table_args__ = (
+        UniqueConstraint("decision_id", name="selection_decision_id"),
+        UniqueConstraint("tenant_id", "decision_id", name="tenant_selection_decision"),
+        UniqueConstraint(
+            "tenant_id",
+            "lineage_id",
+            "selection_sequence",
+            name="tenant_lineage_selection_sequence",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "lineage_id", "branch_id"],
+            ["branches.tenant_id", "branches.lineage_id", "branches.branch_id"],
+            name="branch",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "lineage_id", "persona_id"],
+            ["lineages.tenant_id", "lineages.lineage_id", "lineages.persona_id"],
+            name="lineage_persona",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "actor_id"],
+            ["actors.tenant_id", "actors.actor_id"],
+            name="actor",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "client_id"],
+            ["clients.tenant_id", "clients.client_id"],
+            name="client",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "transport_binding_id", "actor_id", "client_id"],
+            [
+                "transport_bindings.tenant_id",
+                "transport_bindings.transport_binding_id",
+                "transport_bindings.actor_id",
+                "transport_bindings.client_id",
+            ],
+            name="transport_binding",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "lineage_id", "subject_id", "subject_kind"],
+            [
+                "subjects.tenant_id",
+                "subjects.lineage_id",
+                "subjects.subject_id",
+                "subjects.kind",
+            ],
+            name="subject",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "lineage_id", "memory_id"],
+            ["memories.tenant_id", "memories.lineage_id", "memories.memory_id"],
+            name="memory",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "lineage_id", "event_id"],
+            ["memory_events.tenant_id", "memory_events.lineage_id", "memory_events.event_id"],
+            name="event",
+            ondelete="RESTRICT",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint("selection_sequence >= 1", name="selection_sequence_positive"),
+        CheckConstraint("policy_id = 'scalevault-memory-selection'", name="policy_id_value"),
+        CheckConstraint("policy_version = 1", name="policy_version_value"),
+        sha256_check("policy_sha256", name="policy_sha256_length"),
+        CheckConstraint(
+            "policy_rule_code ~ '^[a-z][a-z0-9_]{0,63}$'", name="policy_rule_code_safe"
+        ),
+        sha256_check("input_sha256", name="input_sha256_length"),
+        values_check("source_kind", _SELECTION_SOURCE_KINDS, name="source_kind_values"),
+        values_check(
+            "requested_operation", _SELECTION_OPERATIONS, name="requested_operation_values"
+        ),
+        values_check("outcome", _SELECTION_OUTCOMES, name="outcome_values"),
+        CheckConstraint(
+            "(requested_operation = 'nominate' AND "
+            "outcome IN ('omit', 'reject', 'candidate', 'active')) OR "
+            "(requested_operation = 'promote' AND "
+            "outcome IN ('omit', 'reject', 'promoted')) OR "
+            "(requested_operation = 'expire' AND "
+            "outcome IN ('omit', 'reject', 'expired'))",
+            name="operation_outcome_compatible",
+        ),
+        CheckConstraint(
+            "(source_kind IN ('live_interaction', 'reviewed_seed', 'github_proposal') "
+            "AND requested_operation = 'nominate') OR "
+            "(source_kind = 'candidate_reassessment' AND requested_operation = 'promote') OR "
+            "(source_kind = 'candidate_expiry' AND requested_operation = 'expire')",
+            name="source_operation_compatible",
+        ),
+        values_check("selection_basis", _SELECTION_BASES, name="selection_basis_values"),
+        values_check("scope", MEMORY_SCOPES, name="scope_values"),
+        values_check("visibility", MEMORY_VISIBILITIES, name="visibility_values"),
+        values_check("subject_kind", _SUBJECT_KINDS, name="subject_kind_values"),
+        CheckConstraint("sensitivity BETWEEN 0 AND 4", name="sensitivity_range"),
+        CheckConstraint(
+            "(scope = 'global' AND subject_kind = 'global') OR "
+            "(scope = 'persona' AND subject_kind = 'persona') OR "
+            "(scope = 'relationship' AND subject_kind = 'relationship') OR "
+            "(scope = 'project' AND subject_kind = 'project') OR "
+            "(scope = 'episodic' AND subject_kind = 'episode') OR "
+            "(scope = 'scene_local' AND subject_kind = 'scene')",
+            name="scope_subject_kind",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(reason_codes) = 'array' AND "
+            "jsonb_array_length(reason_codes) BETWEEN 1 AND 8",
+            name="reason_codes_shape",
+        ),
+        CheckConstraint(
+            "NOT jsonb_path_exists(reason_codes, "
+            '\'$[*] ? (@.type() != "string" || '
+            '!(@ like_regex "^[a-z][a-z0-9_]{0,63}$"))\')',
+            name="reason_codes_safe",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(matched_rule_ids) = 'array' AND "
+            "jsonb_array_length(matched_rule_ids) BETWEEN 0 AND 16",
+            name="matched_rule_ids_shape",
+        ),
+        CheckConstraint(
+            "NOT jsonb_path_exists(matched_rule_ids, "
+            '\'$[*] ? (@.type() != "string" || '
+            '!(@ like_regex "^[a-z][a-z0-9_.-]{0,127}$"))\')',
+            name="matched_rule_ids_safe",
+        ),
+        CheckConstraint(
+            "(outcome IN ('candidate', 'active', 'promoted', 'expired') "
+            "AND memory_id IS NOT NULL AND event_id IS NOT NULL) OR "
+            "(outcome IN ('omit', 'reject') "
+            "AND memory_id IS NULL AND event_id IS NULL)",
+            name="outcome_link_shape",
+        ),
+        uuid_v7_check("decision_id", name="decision_id_uuid_v7"),
+        Index(
+            "ix_selection_decisions_branch_sequence",
+            "tenant_id",
+            "lineage_id",
+            "branch_id",
+            text("selection_sequence DESC"),
+        ),
+        Index(
+            "ix_selection_decisions_memory",
+            "tenant_id",
+            "lineage_id",
+            "memory_id",
+            postgresql_where=text("memory_id IS NOT NULL"),
+        ),
+        {"info": {TENANT_OWNED_INFO_KEY: True, "scalevault_immutable": True}},
+    )
+
+    selection_sequence: Mapped[int] = mapped_column(
+        BigInteger(), primary_key=True, autoincrement=False
+    )
+    decision_id: Mapped[UUID] = mapped_column(nullable=False)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    lineage_id: Mapped[UUID] = mapped_column(nullable=False)
+    branch_id: Mapped[UUID] = mapped_column(nullable=False)
+    persona_id: Mapped[UUID] = mapped_column(nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(nullable=False)
+    client_id: Mapped[UUID] = mapped_column(nullable=False)
+    transport_binding_id: Mapped[UUID] = mapped_column(nullable=False)
+    policy_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_version: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
+    policy_sha256: Mapped[bytes] = mapped_column(LargeBinary(), nullable=False)
+    policy_rule_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_sha256: Mapped[bytes] = mapped_column(LargeBinary(), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    requested_operation: Mapped[str] = mapped_column(String(16), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason_codes: Mapped[list[object]] = mapped_column(JSONB, nullable=False)
+    matched_rule_ids: Mapped[list[object]] = mapped_column(JSONB, nullable=False)
+    selection_basis: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    visibility: Mapped[str] = mapped_column(String(16), nullable=False)
+    sensitivity: Mapped[int] = mapped_column(SmallInteger(), nullable=False)
+    subject_id: Mapped[UUID] = mapped_column(nullable=False)
+    subject_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    memory_id: Mapped[UUID | None] = mapped_column()
+    event_id: Mapped[UUID | None] = mapped_column()
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
 class CommandReceipt(Base):
     __tablename__ = "command_receipts"
     __table_args__ = (
@@ -333,6 +584,21 @@ class CommandReceipt(Base):
             ["clients.tenant_id", "clients.client_id"],
             name="client",
             ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "selection_decision_id"],
+            ["selection_decisions.tenant_id", "selection_decisions.decision_id"],
+            name="selection_decision",
+            ondelete="RESTRICT",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "(selection_decision_id IS NULL AND event_id IS NOT NULL) OR "
+            "(selection_decision_id IS NOT NULL AND "
+            "((event_id IS NOT NULL AND memory_id IS NOT NULL AND memory_revision IS NOT NULL) OR "
+            "(event_id IS NULL AND memory_id IS NULL AND memory_revision IS NULL)))",
+            name="terminal_reference_shape",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "event_id"],
@@ -359,7 +625,8 @@ class CommandReceipt(Base):
     client_id: Mapped[UUID] = mapped_column(nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     command_sha256: Mapped[bytes] = mapped_column(LargeBinary(), nullable=False)
-    event_id: Mapped[UUID] = mapped_column(nullable=False)
+    event_id: Mapped[UUID | None] = mapped_column()
+    selection_decision_id: Mapped[UUID | None] = mapped_column()
     memory_id: Mapped[UUID | None] = mapped_column()
     memory_revision: Mapped[int | None] = mapped_column(BigInteger())
     result: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)

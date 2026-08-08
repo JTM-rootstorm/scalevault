@@ -35,7 +35,7 @@ class _ReadinessConnection:
         self,
         *,
         version_table_exists: bool = True,
-        versions: tuple[str, ...] = ("0002_hybrid_retrieval",),
+        versions: tuple[str, ...] = ("0003_selection_policy_lifecycle",),
         extensions: Mapping[str, str] = MINIMUM_EXTENSION_VERSIONS,
     ) -> None:
         self._version_table_exists = version_table_exists

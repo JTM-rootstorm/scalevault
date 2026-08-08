@@ -24,6 +24,7 @@ from kivra_memory.domain.enums import (
 )
 from kivra_memory.domain.events import (
     BranchState,
+    CandidateLifecyclePayload,
     ConflictMemberState,
     ConflictOpenedPayload,
     ConflictResolvedPayload,
@@ -34,6 +35,7 @@ from kivra_memory.domain.events import (
     LinkState,
     MemoryCreatedPayload,
     MemoryState,
+    MemoryStateV2,
     MemoryTransitionPayload,
     SupersededPayload,
     UnlinkedPayload,
@@ -161,6 +163,9 @@ def _derive_provenance(events: Sequence[DomainMemoryEvent]) -> _Provenance:
                 evidence_source[evidence.evidence_id] = event.event_id
         if isinstance(payload, MemoryTransitionPayload):
             memory_last[payload.memory.memory_id] = event.event_id
+        if isinstance(payload, CandidateLifecyclePayload):
+            for evidence in payload.evidence:
+                evidence_source[evidence.evidence_id] = event.event_id
         if isinstance(payload, EvidenceAttachedPayload):
             evidence_source[payload.evidence.evidence_id] = event.event_id
         if isinstance(payload, LinkedPayload | SupersededPayload):
@@ -223,6 +228,7 @@ def _memory_row(state: MemoryState, last_event_id: UUID) -> Memory:
         observed_at=state.observed_at,
         created_at=state.created_at,
         updated_at=state.updated_at,
+        candidate_expires_at=getattr(state, "candidate_expires_at", None),
         normalized_fingerprint=(
             bytes.fromhex(state.normalized_fingerprint)
             if state.normalized_fingerprint is not None
@@ -300,6 +306,12 @@ def _evidence_row(state: EvidenceState, source_event_id: UUID) -> MemoryEvidence
         created_at=state.created_at,
         metadata_=dict(state.metadata),
     )
+
+
+def evidence_state_to_row(state: EvidenceState, *, source_event_id: UUID) -> MemoryEvidence:
+    """Map policy-approved evidence to its projection row."""
+
+    return _evidence_row(state, source_event_id)
 
 
 def _link_row(
@@ -516,45 +528,49 @@ async def rebuild_semantic_projections(
 def memory_row_to_state(row: Memory) -> MemoryState:
     """Convert one memory projection row to its validated domain after-image."""
 
-    return MemoryState(
-        memory_id=row.memory_id,
-        tenant_id=row.tenant_id,
-        lineage_id=row.lineage_id,
-        branch_id=row.branch_id,
-        subject_id=row.subject_id,
-        subject_kind=SubjectKind(row.subject_kind),
-        revision=row.revision,
-        category=MemoryCategory(row.category),
-        ontological_status=OntologicalStatus(row.ontological_status),
-        scope=MemoryScope(row.scope),
-        visibility=MemoryVisibility(row.visibility),
-        status=MemoryStatus(row.status),
-        statement=row.statement,
-        reason_to_remember=row.reason_to_remember,
-        interpretation_limits=tuple(str(value) for value in row.interpretation_limits),
-        confidence=row.confidence,
-        salience=row.salience,
-        durability=row.durability,
-        sensitivity=row.sensitivity,
-        authority_class=AuthorityClass(row.authority_class),
-        valid_from=row.valid_from,
-        valid_to=row.valid_to,
-        observed_at=row.observed_at,
-        origin_session_id=row.origin_session_id,
-        publication_approved_at=row.publication_approved_at,
-        publication_approved_by_actor_id=row.publication_approved_by_actor_id,
-        content_protection=row.content_protection,  # type: ignore[arg-type]
-        content_key_id=row.content_key_id,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        fingerprint_version=row.fingerprint_version,
-        normalized_fingerprint=(
+    state_type = MemoryStateV2 if row.candidate_expires_at is not None else MemoryState
+    values: dict[str, object] = {
+        "memory_id": row.memory_id,
+        "tenant_id": row.tenant_id,
+        "lineage_id": row.lineage_id,
+        "branch_id": row.branch_id,
+        "subject_id": row.subject_id,
+        "subject_kind": SubjectKind(row.subject_kind),
+        "revision": row.revision,
+        "category": MemoryCategory(row.category),
+        "ontological_status": OntologicalStatus(row.ontological_status),
+        "scope": MemoryScope(row.scope),
+        "visibility": MemoryVisibility(row.visibility),
+        "status": MemoryStatus(row.status),
+        "statement": row.statement,
+        "reason_to_remember": row.reason_to_remember,
+        "interpretation_limits": tuple(str(value) for value in row.interpretation_limits),
+        "confidence": row.confidence,
+        "salience": row.salience,
+        "durability": row.durability,
+        "sensitivity": row.sensitivity,
+        "authority_class": AuthorityClass(row.authority_class),
+        "valid_from": row.valid_from,
+        "valid_to": row.valid_to,
+        "observed_at": row.observed_at,
+        "origin_session_id": row.origin_session_id,
+        "publication_approved_at": row.publication_approved_at,
+        "publication_approved_by_actor_id": row.publication_approved_by_actor_id,
+        "content_protection": row.content_protection,
+        "content_key_id": row.content_key_id,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "fingerprint_version": row.fingerprint_version,
+        "normalized_fingerprint": (
             bytes(row.normalized_fingerprint).hex()
             if row.normalized_fingerprint is not None
             else None
         ),
-        metadata=dict(row.metadata_),
-    )
+        "metadata": dict(row.metadata_),
+    }
+    if state_type is MemoryStateV2:
+        values["candidate_expires_at"] = row.candidate_expires_at
+    return state_type.model_validate(values)
 
 
 def evidence_row_to_state(row: MemoryEvidence) -> EvidenceState:

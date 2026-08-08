@@ -82,6 +82,8 @@ MEMORY_OPERATIONS = (
     "branch_created",
     "visibility_changed",
     "payload_purge_completed",
+    "candidate_promoted",
+    "candidate_expired",
 )
 
 

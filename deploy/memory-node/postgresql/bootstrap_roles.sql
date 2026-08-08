@@ -46,6 +46,7 @@ BEGIN
             ('kivra_memory_owner', false),
             ('kivra_memory_migrator', true),
             ('kivra_memory_api', true),
+            ('kivra_memory_policy', true),
             ('kivra_memory_worker', true),
             ('kivra_memory_ingress', true),
             ('kivra_memory_exporter', true)
@@ -68,6 +69,8 @@ ALTER ROLE kivra_memory_migrator
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_api
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE kivra_memory_policy
+    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_worker
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_ingress
@@ -77,11 +80,13 @@ ALTER ROLE kivra_memory_exporter
 
 REVOKE kivra_memory_owner FROM
     kivra_memory_api,
+    kivra_memory_policy,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
 REVOKE kivra_memory_migrator FROM
     kivra_memory_api,
+    kivra_memory_policy,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
@@ -117,7 +122,7 @@ BEGIN
     EXECUTE format(
         'GRANT CONNECT ON DATABASE %I TO kivra_memory_migrator, '
         'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
-        'kivra_memory_exporter',
+        'kivra_memory_exporter, kivra_memory_policy',
         pg_catalog.current_database()
     );
 END
@@ -126,23 +131,27 @@ $bootstrap$;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON SCHEMA public FROM
     kivra_memory_api,
+    kivra_memory_policy,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
 GRANT USAGE ON SCHEMA public TO
     kivra_memory_migrator,
     kivra_memory_api,
+    kivra_memory_policy,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM
     kivra_memory_api,
+    kivra_memory_policy,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM
     kivra_memory_api,
+    kivra_memory_policy,
     kivra_memory_worker,
     kivra_memory_ingress,
     kivra_memory_exporter;
@@ -158,7 +167,7 @@ BEGIN
         EXECUTE
             'GRANT SELECT ON TABLE public.alembic_version TO '
             'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
-            'kivra_memory_exporter';
+            'kivra_memory_exporter, kivra_memory_policy';
     END IF;
 
     -- The API reads canonical state, appends events/receipts/outbox work,
@@ -169,6 +178,7 @@ BEGIN
         'client_credentials', 'transport_installations', 'transport_bindings',
         'personas', 'lineages', 'branches', 'sessions', 'subjects',
         'subject_aliases', 'ingress_items', 'memory_event_counter',
+        'selection_decision_counter', 'selection_decisions',
         'memory_events', 'command_receipts', 'memories', 'memory_evidence',
         'memory_links', 'memory_conflicts', 'memory_conflict_members',
         'memory_content_keys', 'embedding_models', 'memory_embeddings_v1', 'outbox_jobs',
@@ -182,7 +192,9 @@ BEGIN
             );
         END IF;
     END LOOP;
-    FOREACH table_name IN ARRAY ARRAY['memory_events', 'command_receipts', 'outbox_jobs']
+    FOREACH table_name IN ARRAY ARRAY[
+        'memory_events', 'command_receipts', 'selection_decisions', 'outbox_jobs'
+    ]
     LOOP
         IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
             EXECUTE format(
@@ -206,6 +218,9 @@ BEGIN
     IF pg_catalog.to_regclass('public.memory_event_counter') IS NOT NULL THEN
         GRANT UPDATE ON TABLE public.memory_event_counter TO kivra_memory_api;
     END IF;
+    IF pg_catalog.to_regclass('public.selection_decision_counter') IS NOT NULL THEN
+        GRANT UPDATE ON TABLE public.selection_decision_counter TO kivra_memory_api;
+    END IF;
     IF pg_catalog.to_regclass('public.sessions') IS NOT NULL THEN
         GRANT INSERT, UPDATE ON TABLE public.sessions TO kivra_memory_api;
     END IF;
@@ -218,6 +233,66 @@ BEGIN
             safe_diagnostic,
             processed_at
         ) ON TABLE public.ingress_items TO kivra_memory_api;
+    END IF;
+
+    -- Policy decisions use the same canonical event/projection transaction,
+    -- but this role cannot read credentials, content keys, ingress provenance,
+    -- embeddings, or archive state and cannot update immutable audit rows.
+    FOREACH table_name IN ARRAY ARRAY[
+        'alembic_compatibility', 'tenants', 'actors', 'clients',
+        'transport_installations', 'transport_bindings', 'personas', 'lineages',
+        'branches', 'sessions', 'subjects', 'memory_event_counter',
+        'selection_decision_counter', 'memory_events', 'command_receipts',
+        'selection_decisions', 'memories', 'memory_evidence', 'outbox_jobs'
+    ]
+    LOOP
+        IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
+            EXECUTE format(
+                'GRANT SELECT ON TABLE public.%I TO kivra_memory_policy',
+                table_name
+            );
+        END IF;
+    END LOOP;
+    FOREACH table_name IN ARRAY ARRAY[
+        'memory_events', 'command_receipts', 'selection_decisions', 'outbox_jobs'
+    ]
+    LOOP
+        IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
+            EXECUTE format(
+                'GRANT INSERT ON TABLE public.%I TO kivra_memory_policy',
+                table_name
+            );
+        END IF;
+    END LOOP;
+    FOREACH table_name IN ARRAY ARRAY[
+        'memories', 'memory_evidence'
+    ]
+    LOOP
+        IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
+            EXECUTE format(
+                'GRANT INSERT, UPDATE ON TABLE public.%I TO kivra_memory_policy',
+                table_name
+            );
+        END IF;
+    END LOOP;
+    IF pg_catalog.to_regclass('public.memory_event_counter') IS NOT NULL THEN
+        GRANT UPDATE ON TABLE public.memory_event_counter TO kivra_memory_policy;
+    END IF;
+    IF pg_catalog.to_regclass('public.selection_decision_counter') IS NOT NULL THEN
+        GRANT UPDATE ON TABLE public.selection_decision_counter TO kivra_memory_policy;
+    END IF;
+    IF pg_catalog.to_regclass('public.outbox_jobs') IS NOT NULL THEN
+        GRANT UPDATE (
+            state,
+            lease_owner,
+            lease_expires_at,
+            attempt_count,
+            available_at,
+            updated_at,
+            completed_at,
+            last_error_code,
+            last_error_summary
+        ) ON TABLE public.outbox_jobs TO kivra_memory_policy;
     END IF;
 
     -- Workers read event/domain state and exclusively maintain derived state,
@@ -406,7 +481,7 @@ BEGIN
             EXECUTE format(
                 'REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, '
                 'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
-                'kivra_memory_exporter',
+                'kivra_memory_exporter, kivra_memory_policy',
                 function_signature
             );
         END IF;
@@ -416,7 +491,7 @@ BEGIN
     -- remain executable only through their installed triggers.
     FOREACH runtime_role IN ARRAY ARRAY[
         'kivra_memory_api', 'kivra_memory_worker', 'kivra_memory_ingress',
-        'kivra_memory_exporter'
+        'kivra_memory_exporter', 'kivra_memory_policy'
     ]
     LOOP
         IF pg_catalog.to_regprocedure('public.scalevault_is_uuid_v7(uuid)') IS NOT NULL THEN
@@ -444,6 +519,10 @@ BEGIN
     IF sequence_name IS NOT NULL THEN
         EXECUTE format(
             'GRANT USAGE ON SEQUENCE %s TO kivra_memory_api, kivra_memory_worker',
+            sequence_name
+        );
+        EXECUTE format(
+            'GRANT USAGE ON SEQUENCE %s TO kivra_memory_policy',
             sequence_name
         );
     END IF;

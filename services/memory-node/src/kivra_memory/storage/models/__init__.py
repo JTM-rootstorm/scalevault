@@ -6,6 +6,8 @@ from kivra_memory.storage.models.events import (
     IngressItem,
     MemoryEvent,
     MemoryEventCounter,
+    SelectionDecision,
+    SelectionDecisionCounter,
 )
 from kivra_memory.storage.models.identity import (
     Actor,
@@ -68,6 +70,8 @@ __all__ = [
     "MemoryLink",
     "OutboxJob",
     "Persona",
+    "SelectionDecision",
+    "SelectionDecisionCounter",
     "Subject",
     "SubjectAlias",
     "Tenant",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
 import pytest
@@ -33,6 +33,7 @@ from kivra_memory.domain.events import (
     LinkState,
     MemoryCreatedPayload,
     MemoryState,
+    MemoryStateV2,
     OperationPayload,
     PayloadPurgeCompletedPayload,
     TombstonedPayload,
@@ -51,6 +52,8 @@ from kivra_memory.storage.projector import (
     canonical_aggregate_bytes_from_rows,
     event_row_to_domain,
     load_canonical_aggregate_bytes,
+    memory_row_to_state,
+    memory_state_to_row,
     rebuild_semantic_projections,
 )
 from sqlalchemy.exc import SQLAlchemyError
@@ -113,6 +116,36 @@ def memory_state(
     )
 
 
+def test_memory_projection_preserves_v1_shape_and_v2_candidate_deadline() -> None:
+    legacy = memory_state()
+    legacy_row = memory_state_to_row(legacy, last_event_id=uid(90))
+    assert legacy_row.candidate_expires_at is None
+    assert type(memory_row_to_state(legacy_row)) is MemoryState
+
+    candidate = MemoryStateV2.model_validate(
+        {
+            **legacy.model_dump(mode="python"),
+            "status": MemoryStatus.CANDIDATE,
+            "candidate_expires_at": NOW + timedelta(days=30),
+        }
+    )
+    candidate_row = memory_state_to_row(candidate, last_event_id=uid(91))
+    restored_candidate = memory_row_to_state(candidate_row)
+    assert isinstance(restored_candidate, MemoryStateV2)
+    assert restored_candidate.candidate_expires_at == NOW + timedelta(days=30)
+
+    promoted = MemoryStateV2.model_validate(
+        {
+            **legacy.model_dump(mode="python"),
+            "revision": 2,
+            "updated_at": LATER,
+            "candidate_expires_at": None,
+        }
+    )
+    promoted_row = memory_state_to_row(promoted, last_event_id=uid(92))
+    assert promoted_row.candidate_expires_at is None
+
+
 def make_event(
     *,
     sequence: int,
@@ -124,6 +157,8 @@ def make_event(
     lineage_id: UUID = LINEAGE_ID,
     branch_id: UUID = BRANCH_ID,
     created_at: datetime = NOW,
+    schema_version: Literal[1, 2] = 1,
+    payload_version: Literal[1, 2] = 1,
 ) -> DomainMemoryEvent:
     payload_value, payload_canonical, payload_sha256, command_sha256 = event_hash_fields(
         operation=operation,
@@ -136,10 +171,11 @@ def make_event(
         memory_id=memory_id,
         expected_revision=expected_revision,
         causation_event_id=None,
+        payload_version=payload_version,
     )
     return DomainMemoryEvent(
-        schema_version=1,
-        payload_version=1,
+        schema_version=schema_version,
+        payload_version=payload_version,
         sequence=sequence,
         event_id=uid(100 + sequence),
         tenant_id=tenant_id,

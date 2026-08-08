@@ -42,6 +42,11 @@ from kivra_memory.storage.models import (
 )
 from kivra_memory.storage.models import MemoryEvent as MemoryEventRow
 from kivra_memory.storage.projector import memory_row_to_state
+from kivra_memory.storage.selection_history import (
+    SelectionDecisionRecord,
+    SelectionHistoryFilters,
+    SelectionHistoryRepository,
+)
 
 CandidateChannel = Literal["lexical", "trigram", "vector"]
 
@@ -602,6 +607,37 @@ class RetrievalRepository:
         limit: int = 100,
     ) -> tuple[TimelineEntry, ...]:
         return await self.timeline(filters, before_sequence=before_sequence, limit=limit)
+
+    async def selection_history(
+        self,
+        filters: RetrievalFilters,
+        *,
+        persona_id: UUID,
+        selection_bases: frozenset[str] | None = None,
+        before_sequence: int | None = None,
+        limit: int = 100,
+    ) -> tuple[SelectionDecisionRecord, ...]:
+        """Read immutable decisions under the same hard authorization envelope."""
+
+        return await SelectionHistoryRepository(self._session).list_decisions(
+            SelectionHistoryFilters(
+                tenant_id=filters.tenant_id,
+                persona_id=persona_id,
+                lineage_id=filters.lineage_id,
+                branch_id=filters.branch_id,
+                allowed_scopes=filters.allowed_scopes,
+                allowed_visibilities=filters.allowed_visibilities,
+                max_sensitivity=filters.max_sensitivity,
+                requested_subject_ids=filters.requested_subject_ids,
+                project_subject_ids=filters.project_subject_ids,
+                relationship_subject_ids=filters.relationship_subject_ids,
+                session_subject_ids=filters.session_subject_ids,
+                allowed_subject_kinds=filters.allowed_subject_kinds,
+                selection_bases=selection_bases,
+            ),
+            before_sequence=before_sequence,
+            limit=limit,
+        )
 
     async def open_conflict_members(
         self, filters: RetrievalFilters, memory_ids: Sequence[UUID]
