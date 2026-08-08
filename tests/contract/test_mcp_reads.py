@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -30,12 +31,17 @@ from kivra_memory.retrieval.contracts import (
     MemorySearchPage,
     MemorySearchQuery,
     MemorySearchResult,
+    MemorySelectionDecisionsPayload,
+    MemorySelectionDecisionsQuery,
+    MemorySelectionDecisionsResult,
     MemorySelectionHistoryQuery,
     MemoryTimelineQuery,
     QueryPrincipal,
     ReadError,
     ReadErrorBody,
+    ReadErrorV2,
     ReadResultMetadata,
+    SelectionDecisionView,
 )
 from kivra_memory.transport.status import TransportStatusPayload
 from mcp import ClientSession
@@ -62,6 +68,7 @@ MUTATION_TOOL_NAMES = [
     "memory_retire",
     "memory_forget",
 ]
+M5_TOOL_NAMES = ["memory_selection_decisions", "memory_nominate"]
 
 
 def uid(value: int) -> UUID:
@@ -189,6 +196,45 @@ class TransportSuccessExecutor:
         )
 
 
+class DecisionsReadExecutor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[QueryPrincipal, object]] = []
+
+    async def __call__(self, authority: QueryPrincipal, query: object) -> ReadErrorV2:
+        self.calls.append((authority, query))
+        return ReadErrorV2(
+            error=ReadErrorBody(
+                code="not_found",
+                message=ReadErrorBody.SAFE_MESSAGES["not_found"],
+            )
+        )
+
+
+class DecisionsSuccessExecutor:
+    async def __call__(
+        self, authority: QueryPrincipal, query: object
+    ) -> MemorySelectionDecisionsResult:
+        del authority, query
+        return MemorySelectionDecisionsResult(
+            result=MemorySelectionDecisionsPayload(
+                decisions=(
+                    SelectionDecisionView(
+                        selection_sequence=1,
+                        decision_id=uid(30),
+                        profile_sha256="a" * 64,
+                        matched_rule_ids=("basis.explicit_user_request",),
+                        outcome="active",
+                        reason_codes=("explicit_user_request",),
+                        memory_id=uid(31),
+                        event_id=uid(32),
+                        decided_at=datetime(2026, 8, 8, 12, tzinfo=UTC),
+                    ),
+                )
+            ),
+            metadata=ReadResultMetadata(),
+        )
+
+
 class OversizedSearchExecutor:
     async def __call__(self, authority: QueryPrincipal, query: object) -> MemorySearchResult:
         del authority, query
@@ -242,7 +288,7 @@ async def test_production_discovery_lists_nine_reads_before_eight_mutations() ->
     assert initialized.instructions.startswith(
         "Use this server as the authoritative shared continuity store for the Kivra persona."
     )
-    assert [tool.name for tool in tools] == READ_TOOL_NAMES + MUTATION_TOOL_NAMES
+    assert [tool.name for tool in tools] == (READ_TOOL_NAMES + M5_TOOL_NAMES + MUTATION_TOOL_NAMES)
 
 
 async def test_read_schemas_are_closed_explicit_and_have_read_annotations() -> None:
@@ -276,6 +322,102 @@ async def test_read_schemas_are_closed_explicit_and_have_read_annotations() -> N
     ingress_uuid = tools[7].inputSchema["properties"]["ingress_id"]
     assert semantic_uuid["pattern"].startswith("^[0-9a-f]")
     assert ingress_uuid["pattern"].startswith("^[0-9a-f]")
+
+
+async def test_selection_decisions_is_strict_read_v2_and_dispatches_once() -> None:
+    resolver = RecordingResolver()
+    executor = DecisionsReadExecutor()
+    arguments = {
+        **common_arguments(),
+        "contract_version": "mcp-read-v2",
+        "selection_bases": ["explicit_user_request"],
+        "requested_memory_scopes": ["project"],
+        "limit": 5,
+    }
+    async with mcp_session(read_app(resolver, executor)) as session:
+        await session.initialize()
+        tools = (await session.list_tools()).tools
+        result = await session.call_tool("memory_selection_decisions", arguments)
+
+    tool = tools[9]
+    assert tool.name == "memory_selection_decisions"
+    assert tool.inputSchema["additionalProperties"] is False
+    assert tool.inputSchema["properties"]["contract_version"]["const"] == "mcp-read-v2"
+    assert tool.outputSchema is not None
+    decision_properties = tool.outputSchema["$defs"]["SelectionDecisionView"]["properties"]
+    assert set(decision_properties) == {
+        "selection_sequence",
+        "decision_id",
+        "profile_version",
+        "profile_sha256",
+        "matched_rule_ids",
+        "outcome",
+        "reason_codes",
+        "memory_id",
+        "event_id",
+        "decided_at",
+    }
+    assert tool.annotations is not None
+    assert tool.annotations.readOnlyHint is True
+    assert tool.annotations.destructiveHint is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["contract_version"] == "mcp-read-v2"
+    assert result.structuredContent["error"]["code"] == "not_found"
+    assert len(resolver.contexts) == 1
+    assert len(executor.calls) == 1
+    assert type(executor.calls[0][1]) is MemorySelectionDecisionsQuery
+
+
+async def test_selection_decisions_default_and_invalid_input_fail_closed() -> None:
+    arguments = {
+        **common_arguments(),
+        "contract_version": "mcp-read-v2",
+    }
+    async with mcp_session(read_app()) as session:
+        await session.initialize()
+        unavailable = await session.call_tool("memory_selection_decisions", arguments)
+
+    assert unavailable.structuredContent is not None
+    assert unavailable.structuredContent["contract_version"] == "mcp-read-v2"
+    assert unavailable.structuredContent["error"]["code"] == "dependency_unavailable"
+
+    resolver = RecordingResolver()
+    executor = DecisionsReadExecutor()
+    arguments["max_sensitivity"] = "4"
+    async with mcp_session(read_app(resolver, executor)) as session:
+        await session.initialize()
+        invalid = await session.call_tool("memory_selection_decisions", arguments)
+
+    assert invalid.structuredContent is not None
+    assert invalid.structuredContent["error"]["code"] == "invalid_input"
+    assert resolver.contexts == []
+    assert executor.calls == []
+
+
+async def test_selection_decisions_success_is_unwrapped_and_content_free() -> None:
+    async with mcp_session(read_app(RecordingResolver(), DecisionsSuccessExecutor())) as session:
+        await session.initialize()
+        result = await session.call_tool(
+            "memory_selection_decisions",
+            {**common_arguments(), "contract_version": "mcp-read-v2"},
+        )
+
+    assert result.structuredContent is not None
+    assert result.structuredContent["ok"] is True
+    assert "root" not in result.structuredContent
+    decision = result.structuredContent["result"]["decisions"][0]
+    assert set(decision) == {
+        "selection_sequence",
+        "decision_id",
+        "profile_version",
+        "profile_sha256",
+        "matched_rule_ids",
+        "outcome",
+        "reason_codes",
+        "memory_id",
+        "event_id",
+        "decided_at",
+    }
 
 
 @pytest.mark.parametrize(("tool_name", "arguments", "query_type"), READ_CASES)

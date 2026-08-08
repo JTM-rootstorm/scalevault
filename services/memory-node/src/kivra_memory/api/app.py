@@ -14,10 +14,12 @@ from pydantic_settings import SettingsError
 from kivra_memory import __version__
 from kivra_memory.api.mcp import (
     MutationExecutor,
+    NominationExecutor,
     ReadExecutor,
     ReadPrincipalResolver,
     create_mcp,
     dependency_unavailable_executor,
+    dependency_unavailable_nomination_executor,
     dependency_unavailable_read_executor,
     dependency_unavailable_read_principal_resolver,
 )
@@ -43,14 +45,16 @@ def create_app(
         dependency_unavailable_read_principal_resolver
     ),
     read_executor: ReadExecutor = dependency_unavailable_read_executor,
+    nomination_executor: NominationExecutor = dependency_unavailable_nomination_executor,
 ) -> FastAPI:
     """Create an application without storing authoritative process-local state."""
 
     runtime_settings = settings or get_settings()
     mcp_server = create_mcp(
-        mutation_executor,
-        read_principal_resolver,
-        read_executor,
+        mutation_executor=mutation_executor,
+        read_principal_resolver=read_principal_resolver,
+        read_executor=read_executor,
+        nomination_executor=nomination_executor,
     )
     mcp_application = mcp_server.streamable_http_app()
 

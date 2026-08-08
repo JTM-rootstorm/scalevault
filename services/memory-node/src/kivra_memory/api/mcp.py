@@ -4,14 +4,25 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Annotated, Any, Literal, Protocol, cast, overload
+from typing import Annotated, Any, ClassVar, Literal, Protocol, cast, overload
 from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.tools import Tool
 from mcp.types import ContentBlock, ToolAnnotations
-from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool, StrictStr, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    StrictBool,
+    StrictStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
+from kivra_memory.application.selection import NominationCommandLike, SelectionResult
 from kivra_memory.application.status import (
     IngressStatusQuery,
     IngressStatusResult,
@@ -49,6 +60,8 @@ from kivra_memory.domain.enums import (
     OntologicalStatus,
     SubjectKind,
 )
+from kivra_memory.domain.identifiers import require_uuid7
+from kivra_memory.policy import NominationProposal
 from kivra_memory.retrieval.budgeting import HARD_RESPONSE_BYTE_CEILING
 from kivra_memory.retrieval.contracts import (
     ContextPackQuery,
@@ -62,6 +75,8 @@ from kivra_memory.retrieval.contracts import (
     MemoryLineageResult,
     MemorySearchQuery,
     MemorySearchResult,
+    MemorySelectionDecisionsQuery,
+    MemorySelectionDecisionsResult,
     MemorySelectionHistoryQuery,
     MemorySelectionHistoryResult,
     MemoryTimelineQuery,
@@ -69,7 +84,10 @@ from kivra_memory.retrieval.contracts import (
     QueryPrincipal,
     ReadError,
     ReadErrorBody,
+    ReadErrorV2,
+    ReadQueryV2,
     ReadResponse,
+    ReadResponseV2,
 )
 
 SERVER_INSTRUCTIONS = (
@@ -183,14 +201,95 @@ ResolutionMembers = Annotated[
 ]
 
 
+class NominationWireRequest(BaseModel):
+    """Wire-only semantic proposal before authenticated policy enrichment."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    contract_version: Literal["mcp-mutation-v2"]
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=255)]
+    persona_id: UUID
+    branch_id: UUID
+    reason: Annotated[str, Field(min_length=1, max_length=4096)]
+    proposal: NominationProposal
+    logical_session_id: UUID | None = None
+
+    @classmethod
+    def _validate_uuid7(cls, value: UUID | None, field_name: str) -> UUID | None:
+        if value is not None:
+            require_uuid7(value, field_name=field_name)
+        return value
+
+    @field_validator("persona_id", "branch_id", "logical_session_id")
+    @classmethod
+    def validate_identifier(cls, value: UUID | None, info: object) -> UUID | None:
+        return cls._validate_uuid7(value, str(getattr(info, "field_name", "identifier")))
+
+
+class NominationErrorBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    SAFE_MESSAGES: ClassVar[dict[str, str]] = {
+        "invalid_input": "The nomination input is invalid.",
+        "unauthenticated": "Authentication is required.",
+        "forbidden": "The authenticated caller is not permitted to nominate memory.",
+        "idempotency_key_reused": "The idempotency key was already used for another request.",
+        "dependency_unavailable": "A required dependency is unavailable.",
+        "internal_error": "The nomination could not be completed.",
+    }
+
+    code: Literal[
+        "invalid_input",
+        "unauthenticated",
+        "forbidden",
+        "idempotency_key_reused",
+        "dependency_unavailable",
+        "internal_error",
+    ]
+    message: Annotated[str, Field(min_length=1, max_length=512)]
+    retryable: bool = False
+    retry_after_ms: Annotated[int | None, Field(ge=0, le=60_000)] = None
+    details: None = None
+
+    @model_validator(mode="after")
+    def validate_safe_error(self) -> NominationErrorBody:
+        if self.message != self.SAFE_MESSAGES[self.code]:
+            raise ValueError("nomination error must use its safe message")
+        if self.retry_after_ms is not None and not self.retryable:
+            raise ValueError("retry timing requires a retryable error")
+        return self
+
+
+class NominationError(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    ok: Literal[False] = False
+    contract_version: Literal["mcp-mutation-v2"] = "mcp-mutation-v2"
+    error: NominationErrorBody
+
+
+type NominationResponse = SelectionResult | NominationError
+
+
 class MutationExecutor(Protocol):
     """Authenticated, transport-neutral command invocation seam."""
 
     def __call__(self, command: DirectMutationCommand, /) -> Awaitable[MutationResponse]: ...
 
 
-type ReadQuery = DirectReadQuery | IngressStatusQuery | TransportStatusQuery
-type AnyReadResponse = ReadResponse | StatusResponse
+class NominationExecutor(Protocol):
+    """Authenticated enrichment and nomination orchestration seam."""
+
+    def __call__(
+        self,
+        context: object,
+        command: NominationCommandLike,
+        /,
+    ) -> Awaitable[NominationResponse]: ...
+
+
+type ReadQuery = DirectReadQuery | ReadQueryV2 | IngressStatusQuery | TransportStatusQuery
+type AnyReadResponse = ReadResponse | ReadResponseV2 | StatusResponse
 
 
 class ReadPrincipalResolver(Protocol):
@@ -212,6 +311,10 @@ class ReadExecutor(Protocol):
 
 class _MutationToolResponse(RootModel[MutationResponse]):
     """Expose the domain response union as an unwrapped structured MCP object."""
+
+
+class _NominationToolResponse(RootModel[NominationResponse]):
+    """Expose the nomination response union as an unwrapped structured MCP object."""
 
 
 class _ContextPackToolResponse(RootModel[ContextPackResult | ReadError]):
@@ -242,6 +345,12 @@ class _MemorySelectionHistoryToolResponse(RootModel[MemorySelectionHistoryResult
     pass
 
 
+class _MemorySelectionDecisionsToolResponse(
+    RootModel[MemorySelectionDecisionsResult | ReadErrorV2]
+):
+    pass
+
+
 class _IngressStatusToolResponse(RootModel[IngressStatusResult | ReadError]):
     pass
 
@@ -258,6 +367,7 @@ type ReadToolResponseModel = type[
     | _MemoryConflictsToolResponse
     | _MemoryLineageToolResponse
     | _MemorySelectionHistoryToolResponse
+    | _MemorySelectionDecisionsToolResponse
     | _IngressStatusToolResponse
     | _TransportStatusToolResponse
 ]
@@ -279,6 +389,23 @@ def _read_error(
     code: Literal["invalid_input", "dependency_unavailable", "internal_error"],
 ) -> ReadError:
     return ReadError(error=ReadErrorBody(code=code, message=ReadErrorBody.SAFE_MESSAGES[code]))
+
+
+def _read_error_v2(
+    code: Literal["invalid_input", "dependency_unavailable", "internal_error"],
+) -> ReadErrorV2:
+    return ReadErrorV2(error=ReadErrorBody(code=code, message=ReadErrorBody.SAFE_MESSAGES[code]))
+
+
+def _nomination_error(
+    code: Literal["invalid_input", "dependency_unavailable", "internal_error"],
+) -> NominationError:
+    return NominationError(
+        error=NominationErrorBody(
+            code=code,
+            message=NominationErrorBody.SAFE_MESSAGES[code],
+        )
+    )
 
 
 class _SanitizedFastMCP(FastMCP[None]):
@@ -364,6 +491,16 @@ async def dependency_unavailable_executor(
     )
 
 
+async def dependency_unavailable_nomination_executor(
+    context: object,
+    command: NominationCommandLike,
+) -> NominationResponse:
+    """Fail closed until authenticated enrichment and policy orchestration are injected."""
+
+    del context, command
+    return _nomination_error("dependency_unavailable")
+
+
 async def dependency_unavailable_read_principal_resolver(
     context: object,
 ) -> QueryPrincipal | ReadError:
@@ -394,6 +531,7 @@ _UUID_INPUT_FIELDS = frozenset(
         "conflict_id",
         "subject_id",
         "subject_ids",
+        "requested_subject_ids",
         "ingress_id",
     }
 )
@@ -414,6 +552,26 @@ def _require_canonical_uuid7_inputs(value: object) -> None:
     elif isinstance(value, list):
         for item in value:
             _require_canonical_uuid7_inputs(item)
+
+
+def _require_strict_nomination_scalars(arguments: dict[str, Any]) -> None:
+    proposal = arguments.get("proposal")
+    if not isinstance(proposal, dict):
+        raise ValueError("nomination proposal must be an object")
+    for field_name in ("confidence", "salience", "durability"):
+        value = proposal.get(field_name)
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError("nomination scores must be JSON numbers")
+    sensitivity = proposal.get("sensitivity")
+    if isinstance(sensitivity, bool) or not isinstance(sensitivity, int):
+        raise ValueError("nomination sensitivity must be a JSON integer")
+    for field_name in (
+        "interpretation_limits",
+        "epistemic_qualifiers",
+        "evidence_references",
+    ):
+        if not isinstance(proposal.get(field_name), list):
+            raise ValueError("nomination collections must be JSON arrays")
 
 
 def _require_explicit_object_fields(schema: dict[str, Any]) -> None:
@@ -543,7 +701,45 @@ def _read_tool_specs() -> list[tuple[str, str, str, type[BaseModel], ReadToolRes
             TransportStatusQuery,
             _TransportStatusToolResponse,
         ),
+        (
+            "memory_selection_decisions",
+            "Retrieve selection decisions",
+            "Retrieve bounded authorization-filtered selection policy decisions.",
+            MemorySelectionDecisionsQuery,
+            _MemorySelectionDecisionsToolResponse,
+        ),
     ]
+
+
+def _nomination_tool() -> Tool:
+    async def placeholder(**arguments: Any) -> Any:
+        del arguments
+        raise RuntimeError("nomination dispatch is not installed")
+
+    placeholder.__annotations__["return"] = _NominationToolResponse
+    tool = Tool.from_function(
+        placeholder,
+        name="memory_nominate",
+        title="Nominate memory",
+        description=(
+            "Submit semantic memory intent for authenticated evidence resolution and policy "
+            "selection."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+        structured_output=True,
+    )
+    tool.parameters = NominationWireRequest.model_json_schema(by_alias=True)
+    _advertise_canonical_uuid7(tool.parameters)
+    output_schema = tool.output_schema
+    if output_schema is not None:
+        _require_explicit_object_fields(output_schema)
+        _advertise_canonical_uuid7(output_schema)
+    return tool
 
 
 def _strict_tool(
@@ -947,6 +1143,7 @@ def create_mcp(
         dependency_unavailable_read_principal_resolver
     ),
     read_executor: ReadExecutor = dependency_unavailable_read_executor,
+    nomination_executor: NominationExecutor = dependency_unavailable_nomination_executor,
 ) -> FastMCP[None]:
     """Create the complete stateless MCP surface with request-scoped read authority."""
 
@@ -961,12 +1158,13 @@ def create_mcp(
         )
         for name, title, description, query_model, response_model in specs
     ]
+    nomination_tool = _nomination_tool()
     mutation_server = create_mutation_mcp(mutation_executor)
     mutation_tools = mutation_server._tool_manager.list_tools()
     server = _SanitizedFastMCP(
         name="ScaleVault Memory Node",
         instructions=SERVER_INSTRUCTIONS,
-        tools=[*read_tools, *mutation_tools],
+        tools=[*read_tools, nomination_tool, *mutation_tools],
         streamable_http_path="/mcp",
         json_response=True,
         stateless_http=True,
@@ -975,6 +1173,10 @@ def create_mcp(
     server.register_validation_error_payload(
         [tool.name for tool in read_tools],
         lambda: _read_error("invalid_input").model_dump(mode="json"),
+    )
+    server.register_validation_error_payload(
+        [nomination_tool.name],
+        lambda: _nomination_error("invalid_input").model_dump(mode="json"),
     )
     server.register_validation_error_payload(
         [tool.name for tool in mutation_tools],
@@ -986,6 +1188,7 @@ def create_mcp(
 
     for tool, spec in zip(read_tools, specs, strict=True):
         _, _, _, query_model, response_model = spec
+        is_v2 = tool.name == "memory_selection_decisions"
 
         async def dispatch(
             arguments: dict[str, Any],
@@ -993,6 +1196,7 @@ def create_mcp(
             *,
             _query_model: type[BaseModel] = query_model,
             _response_model: ReadToolResponseModel = response_model,
+            _is_v2: bool = is_v2,
         ) -> dict[str, Any]:
             try:
                 _require_canonical_uuid7_inputs(arguments)
@@ -1003,31 +1207,70 @@ def create_mcp(
                     ),
                 )
             except Exception:
-                return _read_error("invalid_input").model_dump(mode="json")
+                error = _read_error_v2("invalid_input") if _is_v2 else _read_error("invalid_input")
+                return error.model_dump(mode="json")
 
             try:
                 principal = await read_principal_resolver(context)
             except Exception:
-                return _read_error("internal_error").model_dump(mode="json")
+                error = (
+                    _read_error_v2("internal_error") if _is_v2 else _read_error("internal_error")
+                )
+                return error.model_dump(mode="json")
             if isinstance(principal, ReadError):
+                if _is_v2:
+                    return ReadErrorV2(error=principal.error).model_dump(mode="json")
                 return principal.model_dump(mode="json")
             if not isinstance(principal, QueryPrincipal):
-                return _read_error("internal_error").model_dump(mode="json")
+                error = (
+                    _read_error_v2("internal_error") if _is_v2 else _read_error("internal_error")
+                )
+                return error.model_dump(mode="json")
 
             try:
                 response = await read_executor(principal, query)
                 validated = _response_model.model_validate(response)
             except Exception:
-                return _read_error("internal_error").model_dump(mode="json")
+                error = (
+                    _read_error_v2("internal_error") if _is_v2 else _read_error("internal_error")
+                )
+                return error.model_dump(mode="json")
             payload = cast(dict[str, Any], validated.model_dump(mode="json"))
             serialized = json.dumps(
                 payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
             ).encode("utf-8")
             if len(serialized) > HARD_RESPONSE_BYTE_CEILING:
-                return _read_error("internal_error").model_dump(mode="json")
+                error = (
+                    _read_error_v2("internal_error") if _is_v2 else _read_error("internal_error")
+                )
+                return error.model_dump(mode="json")
             return payload
 
         server.register_read_dispatch(tool.name, dispatch)
+
+    async def dispatch_nomination(arguments: dict[str, Any], context: object) -> dict[str, Any]:
+        try:
+            _require_canonical_uuid7_inputs(arguments)
+            _require_strict_nomination_scalars(arguments)
+            command = NominationWireRequest.model_validate_json(
+                json.dumps(arguments, allow_nan=False, separators=(",", ":"))
+            )
+        except Exception:
+            return _nomination_error("invalid_input").model_dump(mode="json")
+        try:
+            response = await nomination_executor(context, command)
+            validated = _NominationToolResponse.model_validate(response)
+        except Exception:
+            return _nomination_error("internal_error").model_dump(mode="json")
+        payload = cast(dict[str, Any], validated.model_dump(mode="json"))
+        serialized = json.dumps(
+            payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+        ).encode("utf-8")
+        if len(serialized) > HARD_RESPONSE_BYTE_CEILING:
+            return _nomination_error("internal_error").model_dump(mode="json")
+        return payload
+
+    server.register_read_dispatch(nomination_tool.name, dispatch_nomination)
 
     return server
 
@@ -1035,11 +1278,16 @@ def create_mcp(
 __all__ = [
     "SERVER_INSTRUCTIONS",
     "MutationExecutor",
+    "NominationError",
+    "NominationExecutor",
+    "NominationResponse",
+    "NominationWireRequest",
     "ReadExecutor",
     "ReadPrincipalResolver",
     "create_mcp",
     "create_mutation_mcp",
     "dependency_unavailable_executor",
+    "dependency_unavailable_nomination_executor",
     "dependency_unavailable_read_executor",
     "dependency_unavailable_read_principal_resolver",
 ]
