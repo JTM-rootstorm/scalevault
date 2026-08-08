@@ -201,6 +201,34 @@ class MemoryState(ContractModel):
         return self
 
 
+class MemoryStateV2(MemoryState):
+    """V2 after-image carrying a candidate expiry deadline.
+
+    Keeping this field out of :class:`MemoryState` preserves the exact canonical
+    bytes of accepted v1 events. New candidate lifecycle events use payload v2.
+    """
+
+    candidate_expires_at: datetime | None
+
+    @field_validator("candidate_expires_at")
+    @classmethod
+    def normalize_candidate_expiry(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return _utc(value, "candidate_expires_at")
+
+    @model_validator(mode="after")
+    def validate_candidate_expiry(self) -> MemoryStateV2:
+        if self.status is MemoryStatus.CANDIDATE:
+            if self.candidate_expires_at is None:
+                raise ValueError("candidate memories require an expiry deadline in v2")
+            if self.candidate_expires_at <= self.created_at:
+                raise ValueError("candidate expiry deadline must follow memory creation")
+        elif self.candidate_expires_at is not None:
+            raise ValueError("only candidate memories may have a candidate expiry deadline")
+        return self
+
+
 class EvidenceState(ContractModel):
     """Complete evidence projection, including redaction state."""
 
@@ -379,9 +407,33 @@ class MemoryCreatedPayload(ContractModel):
     evidence: tuple[EvidenceState, ...] = ()
 
 
+class MemoryCreatedPayloadV2(MemoryCreatedPayload):
+    memory: MemoryStateV2
+
+
 class MemoryTransitionPayload(ContractModel):
     previous_revision: PositiveRevision
     memory: MemoryState
+
+
+class CandidateLifecyclePayload(MemoryTransitionPayload):
+    """Immutable policy decision for one candidate lifecycle transition."""
+
+    memory: MemoryStateV2
+    selection_decision_id: UUID
+    policy_rule_code: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
+    evidence: Annotated[tuple[EvidenceState, ...], Field(max_length=32)] = ()
+
+    @field_validator("selection_decision_id")
+    @classmethod
+    def validate_selection_decision_id(cls, value: UUID) -> UUID:
+        return _uuid7(value, "selection_decision_id")  # type: ignore[return-value]
+
+    @model_validator(mode="after")
+    def validate_evidence_ids(self) -> CandidateLifecyclePayload:
+        if len({item.evidence_id for item in self.evidence}) != len(self.evidence):
+            raise ValueError("candidate lifecycle evidence IDs must be unique")
+        return self
 
 
 class SupersededPayload(MemoryTransitionPayload):
@@ -480,7 +532,9 @@ class PayloadPurgeCompletedPayload(MemoryTransitionPayload):
 
 type OperationPayload = (
     MemoryCreatedPayload
+    | MemoryCreatedPayloadV2
     | MemoryTransitionPayload
+    | CandidateLifecyclePayload
     | SupersededPayload
     | EvidenceAttachedPayload
     | EvidenceRedactedPayload
@@ -494,28 +548,34 @@ type OperationPayload = (
 )
 
 
-PAYLOAD_MODELS: dict[EventOperation, type[ContractModel]] = {
-    EventOperation.OBSERVED: MemoryCreatedPayload,
-    EventOperation.REMEMBERED: MemoryCreatedPayload,
-    EventOperation.REVISED: MemoryTransitionPayload,
-    EventOperation.LINKED: LinkedPayload,
-    EventOperation.EVIDENCE_ATTACHED: EvidenceAttachedPayload,
-    EventOperation.EVIDENCE_REDACTED: EvidenceRedactedPayload,
-    EventOperation.UNLINKED: UnlinkedPayload,
-    EventOperation.CONFLICT_OPENED: ConflictOpenedPayload,
-    EventOperation.CONFLICT_RESOLVED: ConflictResolvedPayload,
-    EventOperation.SUPERSEDED: SupersededPayload,
-    EventOperation.RETIRED: MemoryTransitionPayload,
-    EventOperation.TOMBSTONED: TombstonedPayload,
-    EventOperation.BRANCH_CREATED: BranchCreatedPayload,
-    EventOperation.VISIBILITY_CHANGED: MemoryTransitionPayload,
-    EventOperation.PAYLOAD_PURGE_COMPLETED: PayloadPurgeCompletedPayload,
+PAYLOAD_MODELS: dict[tuple[EventOperation, int, int], type[ContractModel]] = {
+    (EventOperation.OBSERVED, 1, 1): MemoryCreatedPayload,
+    (EventOperation.OBSERVED, 2, 2): MemoryCreatedPayloadV2,
+    (EventOperation.REMEMBERED, 1, 1): MemoryCreatedPayload,
+    (EventOperation.REMEMBERED, 2, 2): MemoryCreatedPayloadV2,
+    (EventOperation.CANDIDATE_PROMOTED, 2, 2): CandidateLifecyclePayload,
+    (EventOperation.CANDIDATE_EXPIRED, 2, 2): CandidateLifecyclePayload,
+    (EventOperation.REVISED, 1, 1): MemoryTransitionPayload,
+    (EventOperation.LINKED, 1, 1): LinkedPayload,
+    (EventOperation.EVIDENCE_ATTACHED, 1, 1): EvidenceAttachedPayload,
+    (EventOperation.EVIDENCE_REDACTED, 1, 1): EvidenceRedactedPayload,
+    (EventOperation.UNLINKED, 1, 1): UnlinkedPayload,
+    (EventOperation.CONFLICT_OPENED, 1, 1): ConflictOpenedPayload,
+    (EventOperation.CONFLICT_RESOLVED, 1, 1): ConflictResolvedPayload,
+    (EventOperation.SUPERSEDED, 1, 1): SupersededPayload,
+    (EventOperation.RETIRED, 1, 1): MemoryTransitionPayload,
+    (EventOperation.TOMBSTONED, 1, 1): TombstonedPayload,
+    (EventOperation.BRANCH_CREATED, 1, 1): BranchCreatedPayload,
+    (EventOperation.VISIBILITY_CHANGED, 1, 1): MemoryTransitionPayload,
+    (EventOperation.PAYLOAD_PURGE_COMPLETED, 1, 1): PayloadPurgeCompletedPayload,
 }
 
 
 _CREATE_OPERATIONS = frozenset({EventOperation.OBSERVED, EventOperation.REMEMBERED})
 _TRANSITION_OPERATIONS = frozenset(
     {
+        EventOperation.CANDIDATE_PROMOTED,
+        EventOperation.CANDIDATE_EXPIRED,
         EventOperation.REVISED,
         EventOperation.SUPERSEDED,
         EventOperation.RETIRED,
@@ -560,11 +620,11 @@ def validate_event_envelope_shape(event: MemoryEvent) -> None:
 class MemoryEvent(ContractModel):
     """Immutable accepted event envelope with verified canonical payload bytes."""
 
-    EVENT_SCHEMA_VERSION: ClassVar[int] = 1
-    PAYLOAD_VERSION: ClassVar[int] = 1
+    EVENT_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({1, 2})
+    PAYLOAD_VERSIONS: ClassVar[frozenset[int]] = frozenset({1, 2})
 
-    schema_version: Literal[1]
-    payload_version: Literal[1]
+    schema_version: Literal[1, 2]
+    payload_version: Literal[1, 2]
     sequence: SafePositiveInteger
     event_id: UUID
     tenant_id: UUID
@@ -620,8 +680,12 @@ class MemoryEvent(ContractModel):
         return self
 
     def typed_payload(self) -> OperationPayload:
-        model = PAYLOAD_MODELS.get(self.operation)
-        if self.payload_version != self.PAYLOAD_VERSION or model is None:
+        model = PAYLOAD_MODELS.get((self.operation, self.schema_version, self.payload_version))
+        if (
+            self.schema_version not in self.EVENT_SCHEMA_VERSIONS
+            or self.payload_version not in self.PAYLOAD_VERSIONS
+            or model is None
+        ):
             raise EventContractError(
                 f"unsupported event payload: {self.operation.value} v{self.payload_version}"
             )

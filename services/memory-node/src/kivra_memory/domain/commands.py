@@ -428,6 +428,39 @@ class ForgetCommand(MutationCommand):
         return self
 
 
+class CandidateLifecycleCommand(CommandModel):
+    """Internal-only, content-free candidate lifecycle instruction.
+
+    This DTO is intentionally not an MCP mutation command. The policy worker
+    obtains the current memory under lock and constructs the immutable event
+    after-image itself.
+    """
+
+    OPERATION: ClassVar[str]
+
+    memory_id: UUID
+    expected_revision: SafePositiveInteger
+    selection_decision_id: UUID
+    policy_rule_code: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
+
+    @field_validator("memory_id", "selection_decision_id")
+    @classmethod
+    def validate_lifecycle_identifier(cls, value: UUID, info: object) -> UUID:
+        return _uuid7(value, str(getattr(info, "field_name", "identifier")))  # type: ignore[return-value]
+
+
+class CandidatePromotionCommand(CandidateLifecycleCommand):
+    """Internal policy instruction to promote one exact candidate revision."""
+
+    OPERATION: ClassVar[str] = "candidate_promote"
+
+
+class CandidateExpiryCommand(CandidateLifecycleCommand):
+    """Internal policy instruction to expire one exact candidate revision."""
+
+    OPERATION: ClassVar[str] = "candidate_expire"
+
+
 type DirectMutationCommand = (
     ObserveCommand
     | RememberCommand

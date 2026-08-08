@@ -32,8 +32,8 @@
         "created_at"
     ],
     "properties": {
-        "schema_version": { "const": 1 },
-        "payload_version": { "const": 1 },
+        "schema_version": { "enum": [1, 2] },
+        "payload_version": { "enum": [1, 2] },
         "sequence": { "$ref": "#/$defs/safe_positive_integer" },
         "event_id": { "$ref": "#/$defs/uuidv7" },
         "tenant_id": { "$ref": "#/$defs/uuidv7" },
@@ -68,6 +68,57 @@
         "created_at": { "$ref": "#/$defs/canonical_date_time" }
     },
     "allOf": [
+        {
+            "if": { "properties": { "schema_version": { "const": 1 } }, "required": ["schema_version"] },
+            "then": {
+                "properties": {
+                    "payload_version": { "const": 1 },
+                    "operation": {
+                        "enum": [
+                            "observed", "remembered", "revised", "evidence_attached",
+                            "evidence_redacted", "linked", "unlinked", "conflict_opened",
+                            "conflict_resolved", "superseded", "retired", "tombstoned",
+                            "branch_created", "visibility_changed", "payload_purge_completed"
+                        ]
+                    }
+                }
+            }
+        },
+        {
+            "if": { "properties": { "schema_version": { "const": 2 } }, "required": ["schema_version"] },
+            "then": {
+                "properties": {
+                    "payload_version": { "const": 2 },
+                    "operation": { "enum": ["observed", "remembered", "candidate_promoted", "candidate_expired"] }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": { "operation": { "enum": ["observed", "remembered"] }, "schema_version": { "const": 2 }, "payload_version": { "const": 2 } },
+                "required": ["operation", "schema_version", "payload_version"]
+            },
+            "then": {
+                "properties": {
+                    "memory_id": { "$ref": "#/$defs/uuidv7" },
+                    "expected_revision": { "type": "null" },
+                    "payload": { "$ref": "#/$defs/create_payload_v2" }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": { "operation": { "enum": ["candidate_promoted", "candidate_expired"] }, "schema_version": { "const": 2 }, "payload_version": { "const": 2 } },
+                "required": ["operation", "schema_version", "payload_version"]
+            },
+            "then": {
+                "properties": {
+                    "memory_id": { "$ref": "#/$defs/uuidv7" },
+                    "expected_revision": { "$ref": "#/$defs/safe_positive_integer" },
+                    "payload": { "$ref": "#/$defs/candidate_lifecycle_payload" }
+                }
+            }
+        },
         {
             "if": {
                 "properties": { "operation": { "enum": ["observed", "remembered"] } },
@@ -223,6 +274,8 @@
             "enum": [
                 "observed",
                 "remembered",
+                "candidate_promoted",
+                "candidate_expired",
                 "revised",
                 "evidence_attached",
                 "evidence_redacted",
@@ -251,6 +304,18 @@
                 }
             }
         },
+        "create_payload_v2": {
+            "allOf": [
+                { "$ref": "#/$defs/create_payload" },
+                {
+                    "properties": {
+                        "memory": {
+                            "required": ["candidate_expires_at"]
+                        }
+                    }
+                }
+            ]
+        },
         "state_change_payload": {
             "type": "object",
             "additionalProperties": false,
@@ -258,6 +323,33 @@
             "properties": {
                 "previous_revision": { "$ref": "#/$defs/safe_positive_integer" },
                 "memory": { "$ref": "https://schemas.scalevault.dev/memory-aggregate-v1.schema.json#/$defs/memory_state" }
+            }
+        },
+        "candidate_lifecycle_payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["previous_revision", "memory", "selection_decision_id", "policy_rule_code", "evidence"],
+            "properties": {
+                "previous_revision": { "$ref": "#/$defs/safe_positive_integer" },
+                "memory": {
+                    "allOf": [
+                        { "$ref": "https://schemas.scalevault.dev/memory-aggregate-v1.schema.json#/$defs/memory_state" },
+                        {
+                            "required": ["candidate_expires_at"],
+                            "properties": {
+                                "candidate_expires_at": { "type": "null" }
+                            }
+                        }
+                    ]
+                },
+                "selection_decision_id": { "$ref": "#/$defs/uuidv7" },
+                "policy_rule_code": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9_]*$" },
+                "evidence": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "uniqueItems": true,
+                    "items": { "$ref": "https://schemas.scalevault.dev/memory-aggregate-v1.schema.json#/$defs/evidence_state" }
+                }
             }
         },
         "superseded_payload": {

@@ -6,6 +6,8 @@ from uuid import UUID, uuid4
 
 import pytest
 from kivra_memory.domain.commands import (
+    CandidateExpiryCommand,
+    CandidatePromotionCommand,
     CommandHashBinding,
     ConflictErrorDetails,
     ConflictResolution,
@@ -288,6 +290,31 @@ def test_forget_requires_mode_bound_confirmation_literal() -> None:
             expected_revision=1,
             mode="hard",
             confirmation="confirm_logical_forget",
+        )
+
+
+@pytest.mark.parametrize("model", [CandidatePromotionCommand, CandidateExpiryCommand])
+def test_internal_candidate_lifecycle_commands_are_content_free_and_strict(
+    model: type[CandidatePromotionCommand] | type[CandidateExpiryCommand],
+) -> None:
+    command = model(
+        memory_id=uid(10),
+        expected_revision=2,
+        selection_decision_id=uid(11),
+        policy_rule_code="candidate_repeated_observation",
+    )
+
+    assert command.memory_id == uid(10)
+    assert command.expected_revision == 2
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        model.model_validate(
+            {
+                "memory_id": uid(10),
+                "expected_revision": 2,
+                "selection_decision_id": uid(11),
+                "policy_rule_code": "candidate_repeated_observation",
+                "statement": "must not cross the internal lifecycle boundary",
+            }
         )
 
 

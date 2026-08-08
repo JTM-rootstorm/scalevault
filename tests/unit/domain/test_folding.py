@@ -14,6 +14,7 @@ from kivra_memory.domain.events import (
     AffectedMemory,
     BranchCreatedPayload,
     BranchState,
+    CandidateLifecyclePayload,
     ConflictMemberState,
     ConflictOpenedPayload,
     ConflictState,
@@ -23,8 +24,10 @@ from kivra_memory.domain.events import (
     LinkedPayload,
     LinkState,
     MemoryCreatedPayload,
+    MemoryCreatedPayloadV2,
     MemoryEvent,
     MemoryState,
+    MemoryStateV2,
     MemoryTransitionPayload,
     PayloadPurgeCompletedPayload,
     TombstonedPayload,
@@ -40,7 +43,7 @@ from kivra_memory.domain.folding import (
     rebuild_tenant,
 )
 
-from .test_events import NOW, make_event, memory_state, uid
+from .test_events import NOW, candidate_memory_state, make_event, memory_state, uid
 
 LATER = NOW + timedelta(seconds=1)
 
@@ -49,6 +52,12 @@ def changed_memory(memory: MemoryState, **changes: object) -> MemoryState:
     document = memory.model_dump(mode="python")
     document.update(changes)
     return MemoryState.model_validate(document)
+
+
+def changed_candidate_memory(memory: MemoryStateV2, **changes: object) -> MemoryStateV2:
+    document = memory.model_dump(mode="python")
+    document.update(changes)
+    return MemoryStateV2.model_validate(document)
 
 
 def branch_event(
@@ -92,6 +101,43 @@ def remembered_event(memory: MemoryState, *, sequence: int = 2) -> MemoryEvent:
         branch_id=memory.branch_id,
         tenant_id=memory.tenant_id,
         lineage_id=memory.lineage_id,
+    )
+
+
+def observed_v2_event(memory: MemoryStateV2, *, sequence: int = 2) -> MemoryEvent:
+    return make_event(
+        sequence=sequence,
+        operation=EventOperation.OBSERVED,
+        payload=MemoryCreatedPayloadV2(memory=memory),
+        memory_id=memory.memory_id,
+        schema_version=2,
+        payload_version=2,
+    )
+
+
+def candidate_lifecycle_event(
+    *,
+    sequence: int,
+    operation: EventOperation,
+    before: MemoryStateV2,
+    after: MemoryStateV2,
+    evidence: tuple[EvidenceState, ...] = (),
+) -> MemoryEvent:
+    return make_event(
+        sequence=sequence,
+        operation=operation,
+        payload=CandidateLifecyclePayload(
+            previous_revision=before.revision,
+            memory=after,
+            selection_decision_id=uid(800 + sequence),
+            policy_rule_code="candidate_repeated_observation",
+            evidence=evidence,
+        ),
+        memory_id=before.memory_id,
+        expected_revision=before.revision,
+        created_at=after.updated_at,
+        schema_version=2,
+        payload_version=2,
     )
 
 
@@ -170,6 +216,140 @@ def test_fold_rejects_sequence_gap_and_stale_revision() -> None:
     )
     with pytest.raises(FoldError, match="stale_event_revision"):
         fold_event(state, stale)
+
+
+@pytest.mark.parametrize(
+    ("operation", "target_status"),
+    [
+        (EventOperation.CANDIDATE_PROMOTED, MemoryStatus.ACTIVE),
+        (EventOperation.CANDIDATE_EXPIRED, MemoryStatus.RETIRED),
+    ],
+)
+def test_candidate_lifecycle_events_require_candidate_and_clear_deadline(
+    operation: EventOperation, target_status: MemoryStatus
+) -> None:
+    candidate = candidate_memory_state()
+    after = changed_candidate_memory(
+        candidate,
+        revision=2,
+        status=target_status,
+        candidate_expires_at=None,
+        updated_at=LATER,
+    )
+    history = [branch_event(), observed_v2_event(candidate)]
+    event = candidate_lifecycle_event(
+        sequence=3,
+        operation=operation,
+        before=candidate,
+        after=after,
+    )
+
+    state = rebuild([*history, event])
+
+    assert state.memories[candidate.memory_id] == after
+
+
+@pytest.mark.parametrize(
+    ("operation", "target_status"),
+    [
+        (EventOperation.CANDIDATE_PROMOTED, MemoryStatus.RETIRED),
+        (EventOperation.CANDIDATE_EXPIRED, MemoryStatus.ACTIVE),
+    ],
+)
+def test_candidate_lifecycle_events_reject_wrong_target_status(
+    operation: EventOperation, target_status: MemoryStatus
+) -> None:
+    candidate = candidate_memory_state()
+    after = changed_candidate_memory(
+        candidate,
+        revision=2,
+        status=target_status,
+        candidate_expires_at=None,
+        updated_at=LATER,
+    )
+    state = rebuild([branch_event(), observed_v2_event(candidate)])
+    event = candidate_lifecycle_event(
+        sequence=3,
+        operation=operation,
+        before=candidate,
+        after=after,
+    )
+
+    with pytest.raises(FoldError, match="invalid_lifecycle"):
+        fold_event(state, event)
+
+
+def test_candidate_lifecycle_events_reject_an_active_memory() -> None:
+    active = memory_state()
+    after = MemoryStateV2.model_validate(
+        {
+            **active.model_dump(mode="python"),
+            "revision": 2,
+            "updated_at": LATER,
+            "candidate_expires_at": None,
+        }
+    )
+    state = rebuild([branch_event(), remembered_event(active)])
+    event = candidate_lifecycle_event(
+        sequence=3,
+        operation=EventOperation.CANDIDATE_PROMOTED,
+        before=after.model_copy(update={"revision": 1, "updated_at": NOW}),
+        after=after,
+    )
+
+    with pytest.raises(FoldError, match="candidate lifecycle requires a candidate"):
+        fold_event(state, event)
+
+
+def test_candidate_promotion_attaches_triggering_evidence_atomically() -> None:
+    candidate = candidate_memory_state()
+    after = changed_candidate_memory(
+        candidate,
+        revision=2,
+        status=MemoryStatus.ACTIVE,
+        candidate_expires_at=None,
+        updated_at=LATER,
+    )
+    triggering = evidence_state(uid(900), candidate.memory_id).model_copy(
+        update={"created_at": LATER}
+    )
+    event = candidate_lifecycle_event(
+        sequence=3,
+        operation=EventOperation.CANDIDATE_PROMOTED,
+        before=candidate,
+        after=after,
+        evidence=(triggering,),
+    )
+
+    state = rebuild([branch_event(), observed_v2_event(candidate), event])
+
+    assert state.memories[candidate.memory_id] == after
+    assert state.evidence[triggering.evidence_id] == triggering
+
+
+def test_candidate_expiry_rejects_attached_evidence() -> None:
+    candidate = candidate_memory_state()
+    after = changed_candidate_memory(
+        candidate,
+        revision=2,
+        status=MemoryStatus.RETIRED,
+        candidate_expires_at=None,
+        updated_at=LATER,
+    )
+    evidence = evidence_state(uid(901), candidate.memory_id).model_copy(
+        update={"created_at": LATER}
+    )
+    event = candidate_lifecycle_event(
+        sequence=3,
+        operation=EventOperation.CANDIDATE_EXPIRED,
+        before=candidate,
+        after=after,
+        evidence=(evidence,),
+    )
+    state = rebuild([branch_event(), observed_v2_event(candidate)])
+
+    with pytest.raises(FoldError, match="candidate expiry cannot attach evidence"):
+        fold_event(state, event)
 
 
 def test_fold_reuses_event_envelope_validation_for_unvalidated_copies() -> None:

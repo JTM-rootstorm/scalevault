@@ -123,6 +123,7 @@
                 "authority_class": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/authority_class" },
                 "valid_from": { "$ref": "#/$defs/nullable_canonical_date_time" },
                 "valid_to": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "candidate_expires_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
                 "observed_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
                 "origin_session_id": { "$ref": "#/$defs/nullable_uuidv7" },
                 "publication_approved_at": { "$ref": "#/$defs/nullable_canonical_date_time" },

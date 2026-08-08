@@ -8,6 +8,8 @@ from kivra_memory.domain.canonical_json import (
     sha256_digest,
 )
 from kivra_memory.domain.commands import (
+    CandidateExpiryCommand,
+    CandidatePromotionCommand,
     ForgetCommand,
     LinkCommand,
     MutationError,
@@ -27,6 +29,8 @@ from kivra_memory.domain.constraints import (
 from kivra_memory.domain.identifiers import is_uuid7, new_uuid7, require_uuid7
 
 __all__ = [
+    "CandidateExpiryCommand",
+    "CandidatePromotionCommand",
     "ForgetCommand",
     "LinkCommand",
     "MemoryConstraintContext",

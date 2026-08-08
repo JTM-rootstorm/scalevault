@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 import pytest
@@ -18,9 +20,12 @@ from kivra_memory.domain.enums import (
 from kivra_memory.domain.events import (
     BranchCreatedPayload,
     BranchState,
+    CandidateLifecyclePayload,
     MemoryCreatedPayload,
+    MemoryCreatedPayloadV2,
     MemoryEvent,
     MemoryState,
+    MemoryStateV2,
     MemoryTransitionPayload,
     OperationPayload,
     event_hash_fields,
@@ -41,6 +46,7 @@ DEFAULT_LINEAGE_ID = uid(2)
 DEFAULT_BRANCH_ID = uid(3)
 DEFAULT_SUBJECT_ID = uid(11)
 DEFAULT_CORRELATION_ID = uid(30)
+CONTRACT_FIXTURES = Path(__file__).parents[2] / "contract" / "fixtures" / "json_schemas"
 
 
 def memory_state(
@@ -95,6 +101,22 @@ def memory_state(
     )
 
 
+def candidate_memory_state(
+    *,
+    memory_id: UUID = DEFAULT_MEMORY_ID,
+    created_at: datetime = NOW,
+    expires_at: datetime = datetime(2026, 8, 4, 20, 0, tzinfo=UTC),
+) -> MemoryStateV2:
+    document = memory_state(
+        memory_id=memory_id,
+        status=MemoryStatus.CANDIDATE,
+        created_at=created_at,
+        updated_at=created_at,
+    ).model_dump(mode="python")
+    document["candidate_expires_at"] = expires_at
+    return MemoryStateV2.model_validate(document)
+
+
 def make_event(
     *,
     sequence: int,
@@ -108,6 +130,8 @@ def make_event(
     created_at: datetime = NOW,
     session_id: UUID | None = None,
     correlation_id: UUID = DEFAULT_CORRELATION_ID,
+    schema_version: Literal[1, 2] = 1,
+    payload_version: Literal[1, 2] = 1,
 ) -> MemoryEvent:
     payload_value, payload_canonical, payload_sha256, command_sha256 = event_hash_fields(
         operation=operation,
@@ -120,10 +144,11 @@ def make_event(
         memory_id=memory_id,
         expected_revision=expected_revision,
         causation_event_id=None,
+        payload_version=payload_version,
     )
     return MemoryEvent(
-        schema_version=1,
-        payload_version=1,
+        schema_version=schema_version,
+        payload_version=payload_version,
         sequence=sequence,
         event_id=uid(100 + sequence),
         tenant_id=tenant_id,
@@ -161,6 +186,110 @@ def test_event_round_trips_closed_payload_and_verifies_hashes() -> None:
 
     assert event.typed_payload() == MemoryCreatedPayload(memory=memory)
     event.verify_hashes()
+
+
+def test_legacy_v1_fixture_retains_its_canonical_bytes_and_replays() -> None:
+    event = MemoryEvent.model_validate_json(
+        (CONTRACT_FIXTURES / "memory-event.schema.json").read_text()
+    )
+
+    assert event.payload_version == 1
+    memory_payload = event.payload["memory"]
+    assert isinstance(memory_payload, dict)
+    assert "candidate_expires_at" not in memory_payload
+    event.verify_hashes()
+
+
+def test_v2_candidate_lifecycle_payload_round_trips_with_a_cleared_deadline() -> None:
+    candidate = candidate_memory_state()
+    promoted = MemoryStateV2.model_validate(
+        {
+            **candidate.model_dump(mode="python"),
+            "revision": 2,
+            "status": MemoryStatus.ACTIVE,
+            "candidate_expires_at": None,
+            "updated_at": NOW,
+        }
+    )
+    payload = CandidateLifecyclePayload(
+        previous_revision=1,
+        memory=promoted,
+        selection_decision_id=uid(31),
+        policy_rule_code="candidate_repeated_observation",
+    )
+    event = make_event(
+        sequence=1,
+        operation=EventOperation.CANDIDATE_PROMOTED,
+        payload=payload,
+        memory_id=candidate.memory_id,
+        expected_revision=1,
+        schema_version=2,
+        payload_version=2,
+    )
+
+    assert event.typed_payload() == payload
+    event.verify_hashes()
+
+
+def test_v2_nomination_supports_candidate_or_active_after_images() -> None:
+    candidate = candidate_memory_state()
+    active = MemoryStateV2.model_validate(
+        {**memory_state().model_dump(mode="python"), "candidate_expires_at": None}
+    )
+    for operation, memory in (
+        (EventOperation.OBSERVED, candidate),
+        (EventOperation.REMEMBERED, active),
+    ):
+        event = make_event(
+            sequence=1,
+            operation=operation,
+            payload=MemoryCreatedPayloadV2(memory=memory),
+            memory_id=memory.memory_id,
+            schema_version=2,
+            payload_version=2,
+        )
+
+        assert event.typed_payload() == MemoryCreatedPayloadV2(memory=memory)
+
+
+def test_v2_operation_rejects_legacy_envelope_versions() -> None:
+    candidate = candidate_memory_state()
+    promoted = MemoryStateV2.model_validate(
+        {
+            **candidate.model_dump(mode="python"),
+            "revision": 2,
+            "status": MemoryStatus.ACTIVE,
+            "candidate_expires_at": None,
+        }
+    )
+    payload = CandidateLifecyclePayload(
+        previous_revision=1,
+        memory=promoted,
+        selection_decision_id=uid(31),
+        policy_rule_code="candidate_repeated_observation",
+    )
+
+    with pytest.raises(ValidationError, match="unsupported event payload"):
+        make_event(
+            sequence=1,
+            operation=EventOperation.CANDIDATE_PROMOTED,
+            payload=payload,
+            memory_id=candidate.memory_id,
+            expected_revision=1,
+        )
+
+
+def test_v2_candidate_after_image_requires_a_deadline_and_clears_it_when_terminal() -> None:
+    candidate = candidate_memory_state()
+    missing_deadline = candidate.model_dump(mode="python")
+    missing_deadline.pop("candidate_expires_at")
+    with pytest.raises(ValidationError, match="Field required"):
+        MemoryStateV2.model_validate(missing_deadline)
+
+    invalid_terminal = candidate.model_dump(mode="python")
+    invalid_terminal["status"] = MemoryStatus.ACTIVE
+    with pytest.raises(ValidationError, match="only candidate memories"):
+        MemoryStateV2.model_validate(invalid_terminal)
 
 
 def test_event_rejects_payload_for_another_operation() -> None:

@@ -70,6 +70,7 @@
         "authority_class": { "$ref": "#/$defs/authority_class" },
         "valid_from": { "$ref": "#/$defs/nullable_canonical_date_time" },
         "valid_to": { "$ref": "#/$defs/nullable_canonical_date_time" },
+        "candidate_expires_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
         "observed_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
         "created_at": { "$ref": "#/$defs/canonical_date_time" },
         "updated_at": { "$ref": "#/$defs/canonical_date_time" },

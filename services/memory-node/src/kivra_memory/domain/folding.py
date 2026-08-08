@@ -13,6 +13,7 @@ from kivra_memory.domain.events import (
     AffectedMemory,
     BranchCreatedPayload,
     BranchState,
+    CandidateLifecyclePayload,
     ConflictMemberState,
     ConflictOpenedPayload,
     ConflictResolvedPayload,
@@ -194,6 +195,41 @@ def _check_revised_lifecycle(event: MemoryEvent, current: MemoryState, after: Me
     allowed = _REVISED_TRANSITIONS.get(current.status, frozenset())
     if after.status not in allowed:
         raise _fail(event, "invalid_lifecycle", "revised event has an invalid status transition")
+
+
+def _check_candidate_lifecycle(
+    event: MemoryEvent,
+    current: MemoryState,
+    payload: CandidateLifecyclePayload,
+    *,
+    required_status: MemoryStatus,
+) -> None:
+    if current.status is not MemoryStatus.CANDIDATE:
+        raise _fail(event, "invalid_lifecycle", "candidate lifecycle requires a candidate memory")
+    if payload.memory.status is not required_status:
+        raise _fail(
+            event,
+            "invalid_lifecycle",
+            f"candidate lifecycle requires {required_status.value}",
+        )
+    if payload.memory.candidate_expires_at is not None:
+        raise _fail(
+            event,
+            "invalid_lifecycle",
+            "candidate lifecycle must clear the expiry deadline",
+        )
+
+
+def _attach_candidate_lifecycle_evidence(
+    event: MemoryEvent,
+    payload: CandidateLifecyclePayload,
+    memories: dict[UUID, MemoryState],
+    evidence: dict[UUID, EvidenceState],
+) -> None:
+    if event.operation is EventOperation.CANDIDATE_EXPIRED and payload.evidence:
+        raise _fail(event, "invalid_lifecycle", "candidate expiry cannot attach evidence")
+    for item in payload.evidence:
+        _attach_evidence(event, EvidenceAttachedPayload(evidence=item), memories, evidence)
 
 
 def _replace_memory(
@@ -533,6 +569,30 @@ def _fold_event(
         case EventOperation.OBSERVED | EventOperation.REMEMBERED:
             assert isinstance(payload, MemoryCreatedPayload)
             _create_memory(event, payload, memories, evidence)
+        case EventOperation.CANDIDATE_PROMOTED:
+            assert isinstance(payload, CandidateLifecyclePayload)
+            current = memories.get(payload.memory.memory_id)
+            _replace_memory(event, memories, payload)
+            assert current is not None
+            _check_candidate_lifecycle(
+                event,
+                current,
+                payload,
+                required_status=MemoryStatus.ACTIVE,
+            )
+            _attach_candidate_lifecycle_evidence(event, payload, memories, evidence)
+        case EventOperation.CANDIDATE_EXPIRED:
+            assert isinstance(payload, CandidateLifecyclePayload)
+            current = memories.get(payload.memory.memory_id)
+            _replace_memory(event, memories, payload)
+            assert current is not None
+            _check_candidate_lifecycle(
+                event,
+                current,
+                payload,
+                required_status=MemoryStatus.RETIRED,
+            )
+            _attach_candidate_lifecycle_evidence(event, payload, memories, evidence)
         case EventOperation.REVISED:
             assert isinstance(payload, MemoryTransitionPayload)
             current = memories.get(payload.memory.memory_id)

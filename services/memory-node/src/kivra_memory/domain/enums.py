@@ -73,6 +73,8 @@ class AuthorityClass(StrEnum):
 class EventOperation(StrEnum):
     OBSERVED = "observed"
     REMEMBERED = "remembered"
+    CANDIDATE_PROMOTED = "candidate_promoted"
+    CANDIDATE_EXPIRED = "candidate_expired"
     REVISED = "revised"
     LINKED = "linked"
     CONFLICT_OPENED = "conflict_opened"
