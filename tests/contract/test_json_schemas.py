@@ -331,6 +331,36 @@ def test_event_payload_is_closed_for_its_operation() -> None:
         validator_for(schema_documents[event_path], registry).validate(event)
 
 
+def test_event_v2_candidate_lifecycle_requires_its_closed_versioned_payload() -> None:
+    schema_documents = load_schema_documents()
+    event_path = next(path for path in schema_documents if path.name == "memory-event.schema.json")
+    event = load_schema(FIXTURE_DIRECTORY / event_path.name)
+    after = deepcopy(event["payload"]["memory"])
+    after.update({"revision": 2, "status": "active", "candidate_expires_at": None})
+    event.update(
+        {
+            "schema_version": 2,
+            "payload_version": 2,
+            "operation": "candidate_promoted",
+            "expected_revision": 1,
+            "payload": {
+                "previous_revision": 1,
+                "memory": after,
+                "selection_decision_id": "01936d5a-8c4e-700c-8000-00000000000c",
+                "policy_rule_code": "candidate_repeated_observation",
+                "evidence": [],
+            },
+        }
+    )
+    registry = build_registry(schema_documents)
+    validator = validator_for(schema_documents[event_path], registry)
+
+    validator.validate(event)
+    event["schema_version"] = 1
+    with pytest.raises(ValidationError):
+        validator.validate(event)
+
+
 def test_event_fixture_canonical_payload_bytes_are_authoritative() -> None:
     fixture_path = FIXTURE_DIRECTORY / "memory-event.schema.json"
     event = load_schema(fixture_path)
