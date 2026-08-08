@@ -9,7 +9,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app
-from kivra_memory.api.mcp import SERVER_INSTRUCTIONS
+from kivra_memory.api.mcp import SERVER_INSTRUCTIONS, MutationExecutor
 from kivra_memory.config import Settings
 from kivra_memory.domain.commands import (
     DirectMutationCommand,
@@ -201,6 +201,12 @@ class RecordingExecutor:
         )
 
 
+class RaisingExecutor:
+    async def __call__(self, command: DirectMutationCommand) -> MutationResponse:
+        del command
+        raise RuntimeError("SENSITIVE_EXECUTOR_MARKER SQL SELECT private_memory")
+
+
 @asynccontextmanager
 async def mcp_session(app: FastAPI) -> AsyncIterator[ClientSession]:
     transport = ASGITransport(app=app)
@@ -216,7 +222,7 @@ async def mcp_session(app: FastAPI) -> AsyncIterator[ClientSession]:
         yield session
 
 
-def mutation_app(executor: RecordingExecutor | None = None) -> FastAPI:
+def mutation_app(executor: MutationExecutor | None = None) -> FastAPI:
     settings = Settings(environment="test")
     return create_app(settings, mutation_executor=executor) if executor else create_app(settings)
 
@@ -265,6 +271,43 @@ async def test_mutation_schemas_keep_identity_out_of_top_level_arguments() -> No
         assert properties["idempotency_key"]["minLength"] == 1
         assert properties["idempotency_key"]["maxLength"] == 255
         assert tool.outputSchema is not None
+        output_definitions = tool.outputSchema["$defs"]
+        assert set(output_definitions["MutationResult"]["required"]) == {
+            "ok",
+            "contract_version",
+            "operation",
+            "receipt_id",
+            "event_id",
+            "memory_id",
+            "revision",
+            "idempotent_replay",
+            "conflict_id",
+            "conflict_state",
+            "forget_state",
+            "warnings",
+        }
+        assert set(output_definitions["MutationError"]["required"]) == {
+            "ok",
+            "contract_version",
+            "error",
+        }
+        assert set(output_definitions["MutationErrorBody"]["required"]) == {
+            "code",
+            "message",
+            "retryable",
+            "retry_after_ms",
+            "details",
+        }
+        assert output_definitions["MutationResult"]["properties"]["ok"]["const"] is True
+        assert output_definitions["MutationError"]["properties"]["ok"]["const"] is False
+        assert (
+            output_definitions["MutationResult"]["properties"]["contract_version"]["const"]
+            == "mcp-mutation-v1"
+        )
+        assert (
+            output_definitions["MutationError"]["properties"]["contract_version"]["const"]
+            == "mcp-mutation-v1"
+        )
         assert tool.annotations is not None
         assert tool.annotations.readOnlyHint is False
         assert tool.annotations.idempotentHint is True
@@ -322,7 +365,9 @@ async def test_uuidv7_is_rejected_before_executor_invocation() -> None:
         await session.initialize()
         result = await session.call_tool("memory_retire", arguments)
 
-    assert result.isError is True
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["error"]["code"] == "invalid_input"
     assert executor.calls == []
 
 
@@ -349,5 +394,73 @@ async def test_unknown_top_level_fields_are_rejected_before_executor_invocation(
         await session.initialize()
         result = await session.call_tool("memory_retire", arguments)
 
-    assert result.isError is True
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["error"]["code"] == "invalid_input"
+    assert executor.calls == []
+
+
+async def test_executor_exception_returns_safe_internal_error_without_sensitive_text() -> None:
+    _, arguments, _ = mutation_arguments()[6]
+    async with mcp_session(mutation_app(RaisingExecutor())) as session:
+        await session.initialize()
+        result = await session.call_tool("memory_retire", arguments)
+
+    rendered = repr(result.model_dump(mode="json"))
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["error"]["code"] == "internal_error"
+    assert "SENSITIVE_EXECUTOR_MARKER" not in rendered
+    assert "private_memory" not in rendered
+
+
+async def test_malformed_nested_payload_returns_sanitized_structured_error() -> None:
+    executor = RecordingExecutor()
+    _, arguments, _ = mutation_arguments()[0]
+    arguments["memory"]["statement"] = "SENSITIVE_NESTED_MARKER"
+    arguments["memory"]["confidence"] = "not-a-number"
+    arguments["memory"]["metadata"] = {"sql": "SELECT SENSITIVE_NESTED_MARKER"}
+    async with mcp_session(mutation_app(executor)) as session:
+        await session.initialize()
+        result = await session.call_tool("memory_observe", arguments)
+
+    rendered = repr(result.model_dump(mode="json"))
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["error"]["code"] == "invalid_input"
+    assert "SENSITIVE_NESTED_MARKER" not in rendered
+    assert "not-a-number" not in rendered
+    assert executor.calls == []
+
+
+@pytest.mark.parametrize(
+    ("tool_index", "field_path", "invalid_value"),
+    [
+        (0, ("memory", "confidence"), "0.9"),
+        (0, ("memory", "sensitivity"), "0"),
+        (0, ("memory",), '{"statement":"SENSITIVE_JSON_STRING"}'),
+        (5, ("user_confirmed",), "true"),
+        (6, ("expected_revision",), "2"),
+        (6, ("memory_id",), str(uid(10)).upper()),
+    ],
+)
+async def test_noncanonical_json_scalars_and_uuid_spellings_never_reach_executor(
+    tool_index: int,
+    field_path: tuple[str, ...],
+    invalid_value: object,
+) -> None:
+    executor = RecordingExecutor()
+    tool_name, arguments, _ = mutation_arguments()[tool_index]
+    target = arguments
+    for field_name in field_path[:-1]:
+        target = target[field_name]
+    target[field_path[-1]] = invalid_value
+
+    async with mcp_session(mutation_app(executor)) as session:
+        await session.initialize()
+        result = await session.call_tool(tool_name, arguments)
+
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["error"]["code"] == "invalid_input"
     assert executor.calls == []

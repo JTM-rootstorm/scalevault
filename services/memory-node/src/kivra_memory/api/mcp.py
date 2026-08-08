@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Annotated, Literal, Protocol
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Annotated, Any, Literal, Protocol, cast, overload
 from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.tools import Tool
-from mcp.types import ToolAnnotations
-from pydantic import ConfigDict, Field, RootModel, ValidationError
+from mcp.types import ContentBlock, ToolAnnotations
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool, StrictStr, ValidationError
 
 from kivra_memory.domain.commands import (
     BoundedMetadata,
@@ -32,7 +32,15 @@ from kivra_memory.domain.commands import (
     RetireCommand,
     ReviseCommand,
 )
-from kivra_memory.domain.enums import LinkType
+from kivra_memory.domain.enums import (
+    AuthorityClass,
+    LinkType,
+    MemoryCategory,
+    MemoryScope,
+    MemoryVisibility,
+    OntologicalStatus,
+    SubjectKind,
+)
 
 SERVER_INSTRUCTIONS = (
     "Use this server as the authoritative shared continuity store for the Kivra persona. "
@@ -49,21 +57,71 @@ SERVER_INSTRUCTIONS = (
 
 IdempotencyKey = Annotated[str, Field(min_length=1, max_length=255)]
 WirePositiveInteger = Annotated[int, Field(strict=True, ge=1, le=(1 << 53) - 1)]
+WireUnitScore = Annotated[float, Field(strict=True, ge=0, le=1)]
+WireSensitivity = Annotated[int, Field(strict=True, ge=0, le=4)]
+CanonicalUUID7 = Annotated[
+    StrictStr,
+    Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"),
+]
 
 
-class _MemoryInputWire(MemoryInput):
-    """JSON-coercible wire rendering of the strict command value object."""
+class _WireModel(BaseModel):
+    """Strict JSON-shape model converted into the canonical strict DTO."""
 
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=False)
+
+
+class _MemoryInputWire(_WireModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=False, title="MemoryInput")
 
+    subject_id: CanonicalUUID7
+    subject_kind: SubjectKind
+    category: MemoryCategory
+    ontological_status: OntologicalStatus
+    scope: MemoryScope
+    visibility: MemoryVisibility
+    statement: Annotated[StrictStr, Field(min_length=1, max_length=8192)]
+    reason_to_remember: Annotated[StrictStr, Field(min_length=1, max_length=4096)]
+    interpretation_limits: Annotated[
+        tuple[Annotated[StrictStr, Field(min_length=1, max_length=1024)], ...],
+        Field(max_length=32),
+    ]
+    confidence: WireUnitScore
+    salience: WireUnitScore
+    durability: WireUnitScore
+    sensitivity: WireSensitivity
+    authority_class: AuthorityClass
+    valid_from: StrictStr | None = None
+    valid_to: StrictStr | None = None
+    observed_at: StrictStr | None = None
+    origin_session_id: CanonicalUUID7 | None = None
+    metadata: BoundedMetadata
 
-class _MemoryChangesWire(MemoryChanges):
-    """JSON-coercible wire rendering that preserves explicit patch fields."""
 
+class _MemoryChangesWire(_WireModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=False, title="MemoryChanges")
 
+    category: MemoryCategory | None = None
+    ontological_status: OntologicalStatus | None = None
+    visibility: MemoryVisibility | None = None
+    statement: Annotated[StrictStr | None, Field(min_length=1, max_length=8192)] = None
+    reason_to_remember: Annotated[StrictStr | None, Field(min_length=1, max_length=4096)] = None
+    interpretation_limits: Annotated[
+        tuple[Annotated[StrictStr, Field(min_length=1, max_length=1024)], ...] | None,
+        Field(max_length=32),
+    ] = None
+    confidence: WireUnitScore | None = None
+    salience: WireUnitScore | None = None
+    durability: WireUnitScore | None = None
+    sensitivity: WireSensitivity | None = None
+    authority_class: AuthorityClass | None = None
+    valid_from: StrictStr | None = None
+    valid_to: StrictStr | None = None
+    observed_at: StrictStr | None = None
+    metadata: BoundedMetadata | None = None
 
-class _MemoryRevisionExpectationWire(MemoryRevisionExpectation):
+
+class _MemoryRevisionExpectationWire(_WireModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -71,14 +129,17 @@ class _MemoryRevisionExpectationWire(MemoryRevisionExpectation):
         title="MemoryRevisionExpectation",
     )
 
+    memory_id: CanonicalUUID7
+    expected_revision: WirePositiveInteger
 
-class _ConflictResolutionWire(ConflictResolution):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        strict=False,
-        title="ConflictResolution",
-    )
+
+class _ConflictResolutionWire(_WireModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=False, title="ConflictResolution")
+
+    memory_id: CanonicalUUID7
+    expected_revision: WirePositiveInteger
+    disposition: Annotated[StrictStr, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)]
+    resulting_status: Literal["active", "superseded", "retired"]
 
 
 ConflictMembers = Annotated[
@@ -99,6 +160,41 @@ class MutationExecutor(Protocol):
 
 class _MutationToolResponse(RootModel[MutationResponse]):
     """Expose the domain response union as an unwrapped structured MCP object."""
+
+
+def _error_response(code: Literal["invalid_input", "internal_error"]) -> _MutationToolResponse:
+    return _MutationToolResponse(
+        MutationError(
+            contract_version="mcp-mutation-v1",
+            error=MutationErrorBody(
+                code=code,
+                message=MutationErrorBody.SAFE_MESSAGES[code],
+            ),
+        )
+    )
+
+
+class _SanitizedFastMCP(FastMCP[None]):
+    """Prevent SDK validation failures from reflecting caller payloads."""
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> Sequence[ContentBlock] | dict[str, Any]:
+        try:
+            tool = self._tool_manager.get_tool(name)
+            if tool is None:
+                return cast(
+                    dict[str, Any],
+                    _error_response("invalid_input").model_dump(mode="json"),
+                )
+            # Validate the untouched JSON shape before FastMCP's compatibility
+            # pre-parser can turn JSON strings into objects or arrays.
+            tool.fn_metadata.arg_model.model_validate(arguments)
+            return await super().call_tool(name, arguments)
+        except Exception:
+            return cast(dict[str, Any], _error_response("invalid_input").model_dump(mode="json"))
 
 
 async def dependency_unavailable_executor(
@@ -143,7 +239,50 @@ def _strict_tool(
     argument_model.model_config["extra"] = "forbid"
     argument_model.model_rebuild(force=True)
     tool.parameters = argument_model.model_json_schema(by_alias=True)
+    output_schema = tool.output_schema
+    if output_schema is not None:
+        definitions = output_schema.get("$defs", {})
+        required_fields = {
+            "MutationResult": [
+                "ok",
+                "contract_version",
+                "operation",
+                "receipt_id",
+                "event_id",
+                "memory_id",
+                "revision",
+                "conflict_id",
+                "conflict_state",
+                "forget_state",
+                "idempotent_replay",
+                "warnings",
+            ],
+            "MutationError": ["ok", "contract_version", "error"],
+            "MutationErrorBody": [
+                "code",
+                "message",
+                "retryable",
+                "retry_after_ms",
+                "details",
+            ],
+        }
+        for definition_name, required in required_fields.items():
+            definition = definitions.get(definition_name)
+            if isinstance(definition, dict):
+                definition["required"] = required
     return tool
+
+
+@overload
+def _uuid(value: CanonicalUUID7) -> UUID: ...
+
+
+@overload
+def _uuid(value: None) -> None: ...
+
+
+def _uuid(value: CanonicalUUID7 | None) -> UUID | None:
+    return UUID(value) if value is not None else None
 
 
 def create_mutation_mcp(
@@ -152,40 +291,35 @@ def create_mutation_mcp(
     """Create the stateless production MCP server for ordinary mutations."""
 
     async def execute(command: DirectMutationCommand) -> _MutationToolResponse:
-        return _MutationToolResponse(await executor(command))
+        try:
+            return _MutationToolResponse(await executor(command))
+        except Exception:
+            return _error_response("internal_error")
 
     def invalid_input() -> _MutationToolResponse:
-        return _MutationToolResponse(
-            MutationError(
-                contract_version="mcp-mutation-v1",
-                error=MutationErrorBody(
-                    code="invalid_input",
-                    message=MutationErrorBody.SAFE_MESSAGES["invalid_input"],
-                ),
-            )
-        )
+        return _error_response("invalid_input")
 
     async def memory_observe(
         *,
         contract_version: ContractVersion,
         idempotency_key: IdempotencyKey,
-        persona_id: UUID,
-        branch_id: UUID,
+        persona_id: CanonicalUUID7,
+        branch_id: CanonicalUUID7,
         reason: BoundedReason,
         memory: _MemoryInputWire,
-        logical_session_id: UUID | None = None,
-        causation_event_id: UUID | None = None,
+        logical_session_id: CanonicalUUID7 | None = None,
+        causation_event_id: CanonicalUUID7 | None = None,
     ) -> _MutationToolResponse:
         return await execute(
             ObserveCommand(
                 contract_version=contract_version,
                 idempotency_key=idempotency_key,
-                logical_session_id=logical_session_id,
-                persona_id=persona_id,
-                branch_id=branch_id,
+                logical_session_id=_uuid(logical_session_id),
+                persona_id=_uuid(persona_id),
+                branch_id=_uuid(branch_id),
                 reason=reason,
-                causation_event_id=causation_event_id,
-                memory=MemoryInput.model_validate(memory.model_dump(mode="python")),
+                causation_event_id=_uuid(causation_event_id),
+                memory=MemoryInput.model_validate_json(memory.model_dump_json()),
             )
         )
 
@@ -193,23 +327,23 @@ def create_mutation_mcp(
         *,
         contract_version: ContractVersion,
         idempotency_key: IdempotencyKey,
-        persona_id: UUID,
-        branch_id: UUID,
+        persona_id: CanonicalUUID7,
+        branch_id: CanonicalUUID7,
         reason: BoundedReason,
         memory: _MemoryInputWire,
-        logical_session_id: UUID | None = None,
-        causation_event_id: UUID | None = None,
+        logical_session_id: CanonicalUUID7 | None = None,
+        causation_event_id: CanonicalUUID7 | None = None,
     ) -> _MutationToolResponse:
         return await execute(
             RememberCommand(
                 contract_version=contract_version,
                 idempotency_key=idempotency_key,
-                logical_session_id=logical_session_id,
-                persona_id=persona_id,
-                branch_id=branch_id,
+                logical_session_id=_uuid(logical_session_id),
+                persona_id=_uuid(persona_id),
+                branch_id=_uuid(branch_id),
                 reason=reason,
-                causation_event_id=causation_event_id,
-                memory=MemoryInput.model_validate(memory.model_dump(mode="python")),
+                causation_event_id=_uuid(causation_event_id),
+                memory=MemoryInput.model_validate_json(memory.model_dump_json()),
             )
         )
 
@@ -217,28 +351,28 @@ def create_mutation_mcp(
         *,
         contract_version: ContractVersion,
         idempotency_key: IdempotencyKey,
-        persona_id: UUID,
-        branch_id: UUID,
+        persona_id: CanonicalUUID7,
+        branch_id: CanonicalUUID7,
         reason: BoundedReason,
-        memory_id: UUID,
+        memory_id: CanonicalUUID7,
         expected_revision: WirePositiveInteger,
         changes: _MemoryChangesWire,
-        logical_session_id: UUID | None = None,
-        causation_event_id: UUID | None = None,
+        logical_session_id: CanonicalUUID7 | None = None,
+        causation_event_id: CanonicalUUID7 | None = None,
     ) -> _MutationToolResponse:
         return await execute(
             ReviseCommand(
                 contract_version=contract_version,
                 idempotency_key=idempotency_key,
-                logical_session_id=logical_session_id,
-                persona_id=persona_id,
-                branch_id=branch_id,
+                logical_session_id=_uuid(logical_session_id),
+                persona_id=_uuid(persona_id),
+                branch_id=_uuid(branch_id),
                 reason=reason,
-                causation_event_id=causation_event_id,
-                memory_id=memory_id,
+                causation_event_id=_uuid(causation_event_id),
+                memory_id=_uuid(memory_id),
                 expected_revision=expected_revision,
-                changes=MemoryChanges.model_validate(
-                    changes.model_dump(mode="python", exclude_unset=True)
+                changes=MemoryChanges.model_validate_json(
+                    changes.model_dump_json(exclude_unset=True)
                 ),
             )
         )
@@ -247,30 +381,30 @@ def create_mutation_mcp(
         *,
         contract_version: ContractVersion,
         idempotency_key: IdempotencyKey,
-        persona_id: UUID,
-        branch_id: UUID,
+        persona_id: CanonicalUUID7,
+        branch_id: CanonicalUUID7,
         reason: BoundedReason,
-        source_memory_id: UUID,
+        source_memory_id: CanonicalUUID7,
         source_expected_revision: WirePositiveInteger,
-        target_memory_id: UUID,
+        target_memory_id: CanonicalUUID7,
         target_expected_revision: WirePositiveInteger,
         link_type: LinkType,
-        logical_session_id: UUID | None = None,
-        causation_event_id: UUID | None = None,
+        logical_session_id: CanonicalUUID7 | None = None,
+        causation_event_id: CanonicalUUID7 | None = None,
         metadata: BoundedMetadata | None = None,
     ) -> _MutationToolResponse:
         return await execute(
             LinkCommand(
                 contract_version=contract_version,
                 idempotency_key=idempotency_key,
-                logical_session_id=logical_session_id,
-                persona_id=persona_id,
-                branch_id=branch_id,
+                logical_session_id=_uuid(logical_session_id),
+                persona_id=_uuid(persona_id),
+                branch_id=_uuid(branch_id),
                 reason=reason,
-                causation_event_id=causation_event_id,
-                source_memory_id=source_memory_id,
+                causation_event_id=_uuid(causation_event_id),
+                source_memory_id=_uuid(source_memory_id),
                 source_expected_revision=source_expected_revision,
-                target_memory_id=target_memory_id,
+                target_memory_id=_uuid(target_memory_id),
                 target_expected_revision=target_expected_revision,
                 link_type=link_type,
                 metadata={} if metadata is None else metadata,
@@ -281,28 +415,28 @@ def create_mutation_mcp(
         *,
         contract_version: ContractVersion,
         idempotency_key: IdempotencyKey,
-        persona_id: UUID,
-        branch_id: UUID,
+        persona_id: CanonicalUUID7,
+        branch_id: CanonicalUUID7,
         reason: BoundedReason,
-        subject_id: UUID,
+        subject_id: CanonicalUUID7,
         members: ConflictMembers,
         conflict_reason: BoundedReason,
-        logical_session_id: UUID | None = None,
-        causation_event_id: UUID | None = None,
+        logical_session_id: CanonicalUUID7 | None = None,
+        causation_event_id: CanonicalUUID7 | None = None,
         metadata: BoundedMetadata | None = None,
     ) -> _MutationToolResponse:
         return await execute(
             OpenConflictCommand(
                 contract_version=contract_version,
                 idempotency_key=idempotency_key,
-                logical_session_id=logical_session_id,
-                persona_id=persona_id,
-                branch_id=branch_id,
+                logical_session_id=_uuid(logical_session_id),
+                persona_id=_uuid(persona_id),
+                branch_id=_uuid(branch_id),
                 reason=reason,
-                causation_event_id=causation_event_id,
-                subject_id=subject_id,
+                causation_event_id=_uuid(causation_event_id),
+                subject_id=_uuid(subject_id),
                 members=tuple(
-                    MemoryRevisionExpectation.model_validate(member.model_dump(mode="python"))
+                    MemoryRevisionExpectation.model_validate_json(member.model_dump_json())
                     for member in members
                 ),
                 conflict_reason=conflict_reason,
@@ -314,29 +448,29 @@ def create_mutation_mcp(
         *,
         contract_version: ContractVersion,
         idempotency_key: IdempotencyKey,
-        persona_id: UUID,
-        branch_id: UUID,
+        persona_id: CanonicalUUID7,
+        branch_id: CanonicalUUID7,
         reason: BoundedReason,
-        conflict_id: UUID,
+        conflict_id: CanonicalUUID7,
         members: ResolutionMembers,
         resolution_kind: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$", max_length=64)],
         resolution_rationale: BoundedReason,
-        user_confirmed: bool,
-        logical_session_id: UUID | None = None,
-        causation_event_id: UUID | None = None,
+        user_confirmed: StrictBool,
+        logical_session_id: CanonicalUUID7 | None = None,
+        causation_event_id: CanonicalUUID7 | None = None,
     ) -> _MutationToolResponse:
         return await execute(
             ResolveConflictCommand(
                 contract_version=contract_version,
                 idempotency_key=idempotency_key,
-                logical_session_id=logical_session_id,
-                persona_id=persona_id,
-                branch_id=branch_id,
+                logical_session_id=_uuid(logical_session_id),
+                persona_id=_uuid(persona_id),
+                branch_id=_uuid(branch_id),
                 reason=reason,
-                causation_event_id=causation_event_id,
-                conflict_id=conflict_id,
+                causation_event_id=_uuid(causation_event_id),
+                conflict_id=_uuid(conflict_id),
                 members=tuple(
-                    ConflictResolution.model_validate(member.model_dump(mode="python"))
+                    ConflictResolution.model_validate_json(member.model_dump_json())
                     for member in members
                 ),
                 resolution_kind=resolution_kind,
@@ -349,24 +483,24 @@ def create_mutation_mcp(
         *,
         contract_version: ContractVersion,
         idempotency_key: IdempotencyKey,
-        persona_id: UUID,
-        branch_id: UUID,
+        persona_id: CanonicalUUID7,
+        branch_id: CanonicalUUID7,
         reason: BoundedReason,
-        memory_id: UUID,
+        memory_id: CanonicalUUID7,
         expected_revision: WirePositiveInteger,
-        logical_session_id: UUID | None = None,
-        causation_event_id: UUID | None = None,
+        logical_session_id: CanonicalUUID7 | None = None,
+        causation_event_id: CanonicalUUID7 | None = None,
     ) -> _MutationToolResponse:
         return await execute(
             RetireCommand(
                 contract_version=contract_version,
                 idempotency_key=idempotency_key,
-                logical_session_id=logical_session_id,
-                persona_id=persona_id,
-                branch_id=branch_id,
+                logical_session_id=_uuid(logical_session_id),
+                persona_id=_uuid(persona_id),
+                branch_id=_uuid(branch_id),
                 reason=reason,
-                causation_event_id=causation_event_id,
-                memory_id=memory_id,
+                causation_event_id=_uuid(causation_event_id),
+                memory_id=_uuid(memory_id),
                 expected_revision=expected_revision,
             )
         )
@@ -375,26 +509,26 @@ def create_mutation_mcp(
         *,
         contract_version: ContractVersion,
         idempotency_key: IdempotencyKey,
-        persona_id: UUID,
-        branch_id: UUID,
+        persona_id: CanonicalUUID7,
+        branch_id: CanonicalUUID7,
         reason: BoundedReason,
-        memory_id: UUID,
+        memory_id: CanonicalUUID7,
         expected_revision: WirePositiveInteger,
         mode: Literal["logical", "hard"],
         confirmation: Literal["confirm_logical_forget", "confirm_hard_forget"],
-        logical_session_id: UUID | None = None,
-        causation_event_id: UUID | None = None,
+        logical_session_id: CanonicalUUID7 | None = None,
+        causation_event_id: CanonicalUUID7 | None = None,
     ) -> _MutationToolResponse:
         try:
             command = ForgetCommand(
                 contract_version=contract_version,
                 idempotency_key=idempotency_key,
-                logical_session_id=logical_session_id,
-                persona_id=persona_id,
-                branch_id=branch_id,
+                logical_session_id=_uuid(logical_session_id),
+                persona_id=_uuid(persona_id),
+                branch_id=_uuid(branch_id),
                 reason=reason,
-                causation_event_id=causation_event_id,
-                memory_id=memory_id,
+                causation_event_id=_uuid(causation_event_id),
+                memory_id=_uuid(memory_id),
                 expected_revision=expected_revision,
                 mode=mode,
                 confirmation=confirmation,
@@ -455,7 +589,7 @@ def create_mutation_mcp(
         ),
     ]
 
-    return FastMCP(
+    return _SanitizedFastMCP(
         name="ScaleVault Memory Node",
         instructions=SERVER_INSTRUCTIONS,
         tools=tools,
