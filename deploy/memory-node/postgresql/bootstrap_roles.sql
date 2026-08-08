@@ -161,8 +161,9 @@ BEGIN
             'kivra_memory_exporter';
     END IF;
 
-    -- The API reads canonical state, appends events/receipts/outbox work, and
-    -- maintains sessions. Projection mutation belongs to workers.
+    -- The API reads canonical state, appends events/receipts/outbox work,
+    -- atomically stages live projections, and maintains sessions. Workers
+    -- retain the broader rebuild and derived-state mutation privileges.
     FOREACH table_name IN ARRAY ARRAY[
         'alembic_compatibility', 'tenants', 'actors', 'clients',
         'client_credentials', 'transport_installations', 'transport_bindings',
@@ -186,6 +187,18 @@ BEGIN
         IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
             EXECUTE format(
                 'GRANT INSERT ON TABLE public.%I TO kivra_memory_api',
+                table_name
+            );
+        END IF;
+    END LOOP;
+    FOREACH table_name IN ARRAY ARRAY[
+        'memories', 'memory_links', 'memory_conflicts',
+        'memory_conflict_members'
+    ]
+    LOOP
+        IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
+            EXECUTE format(
+                'GRANT INSERT, UPDATE ON TABLE public.%I TO kivra_memory_api',
                 table_name
             );
         END IF;
