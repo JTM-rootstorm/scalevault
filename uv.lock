@@ -1261,6 +1261,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "pgvector" },
     { name = "prometheus-client" },
@@ -1285,7 +1286,6 @@ dev = [
     { name = "hatchling" },
     { name = "httpx" },
     { name = "hypothesis" },
-    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1296,6 +1296,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.16,<2" },
     { name = "fastapi", specifier = ">=0.116,<1" },
+    { name = "jsonschema", specifier = ">=4.25,<5" },
     { name = "mcp", specifier = ">=1.12,<2" },
     { name = "numpy", marker = "extra == 'embedding-worker'", specifier = ">=2.2,<3" },
     { name = "onnxruntime", marker = "extra == 'embedding-worker'", specifier = ">=1.22,<2" },
@@ -1317,7 +1318,6 @@ dev = [
     { name = "hatchling", specifier = "==1.31.0" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "hypothesis", specifier = ">=6.136,<7" },
-    { name = "jsonschema", specifier = ">=4.25,<5" },
     { name = "mypy", specifier = ">=1.17,<2" },
     { name = "pytest", specifier = ">=8.4,<9" },
     { name = "pytest-asyncio", specifier = ">=1.1,<2" },
