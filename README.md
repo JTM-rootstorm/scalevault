@@ -84,12 +84,18 @@ JSON contracts.
 ## Current boundary
 
 The API exposes liveness, schema- and extension-aware readiness, metrics, and
-the echo surface. The canonical database contracts and event replay engine are
-present, while user-facing MCP memory tools, retrieval, relay forwarding,
-enrollment, and OAuth are deliberately not represented as complete.
+the eight strict Milestone 3 mutation tool contracts. The transport-neutral
+mutation engine provides SERIALIZABLE retries, idempotent receipts, expected
+revisions, advisory locking, atomic live projections, conflict transitions, and
+transactional outbox staging.
+
+Production mutation authentication and request-scoped principal resolution are
+deliberately fail-closed until Milestone 7. Read tools and retrieval, production
+GitHub proposal conversion, relay forwarding, enrollment, and OAuth are not
+represented as complete.
 
 Milestone status is tracked in the
-[dated Milestone 2 acceptance checklist](docs/milestone-2-acceptance-2026-08-07.md).
+[dated Milestone 3 acceptance checklist](docs/milestone-3-acceptance-2026-08-08.md).
 
 ScaleVault is licensed under the GNU Affero General Public License v3.0.
 
