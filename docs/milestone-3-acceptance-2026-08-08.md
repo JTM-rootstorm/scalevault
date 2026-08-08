@@ -2,7 +2,7 @@
 
 - Review date: 2026-08-08 (America/Chicago)
 - Status: Complete
-- Accepted implementation source: `2bf5803`
+- Accepted implementation source: `d968546`
 
 This checklist separates repository verification, the disposable PostgreSQL 17
 and pgvector concurrency lane, and the canonical Memory Node deployment. The
@@ -60,7 +60,7 @@ The first run correctly failed five of seven cases. A live diagnostic found
 that mutation jobs used the outbox reference name `memory_revision`, while the
 privacy allowlist accepts only IDs, versions, and sequences. The ingress fixture
 also attempted to insert directly at `validated`, which the lifecycle trigger
-correctly rejected. Commit `2bf5803` renamed only the outbox reference to
+correctly rejected. Commit `d968546` renamed only the outbox reference to
 `memory_version`, added exact payload assertions, and made the fixture perform
 `discovered` to `validated`.
 
@@ -86,7 +86,7 @@ The final JUnit record is retained at:
 The accepted release is installed under:
 
 ```text
-/opt/kivra-memory/releases/2bf5803
+/opt/kivra-memory/releases/d968546
 ```
 
 The `/opt/kivra-memory/app` symlink was atomically switched from the retained
