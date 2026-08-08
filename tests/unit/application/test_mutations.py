@@ -3,15 +3,24 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
 from kivra_memory.application import CommandPrincipal, MutationEngine
 from kivra_memory.application import mutations as mutations_module
-from kivra_memory.domain.commands import MemoryChanges, MutationResult, ReviseCommand
+from kivra_memory.domain.commands import (
+    LinkCommand,
+    MemoryChanges,
+    MemoryInput,
+    MutationResult,
+    ObserveCommand,
+    RememberCommand,
+    ReviseCommand,
+)
 from kivra_memory.domain.enums import (
     AuthorityClass,
+    LinkType,
     MemoryCategory,
     MemoryScope,
     MemoryStatus,
@@ -52,6 +61,36 @@ def command() -> ReviseCommand:
         memory_id=uid(7),
         expected_revision=3,
         changes=MemoryChanges(statement="The revised safe synthetic statement."),
+    )
+
+
+def proposal_command(
+    command_type: type[ObserveCommand] | type[RememberCommand],
+) -> ObserveCommand | RememberCommand:
+    return command_type(
+        contract_version="mcp-mutation-v1",
+        idempotency_key=f"unit-{command_type.OPERATION}",
+        logical_session_id=None,
+        persona_id=uid(5),
+        branch_id=uid(6),
+        reason="Exercise narrowly authorized proposal ingress.",
+        memory=MemoryInput(
+            subject_id=uid(9),
+            subject_kind=SubjectKind.PROJECT,
+            category=MemoryCategory.PROJECT_DECISION,
+            ontological_status=OntologicalStatus.LITERAL_TECHNICAL_FACT,
+            scope=MemoryScope.PROJECT,
+            visibility=MemoryVisibility.PRIVATE_ROOT,
+            statement="The proposal authorization fixture is synthetic.",
+            reason_to_remember="The fixture verifies proposal ingress authorization.",
+            interpretation_limits=("Synthetic fixture only.",),
+            confidence=Decimal("0.9"),
+            salience=Decimal("0.8"),
+            durability=Decimal("0.7"),
+            sensitivity=0,
+            authority_class=AuthorityClass.VERIFIED_PROJECT_SOURCE,
+            metadata={"fixture": True},
+        ),
     )
 
 
@@ -135,7 +174,7 @@ def test_revise_after_image_preserves_server_owned_and_lifecycle_fields() -> Non
 
 
 @pytest.mark.parametrize("ingress_id", [None, uid(30)])
-async def test_direct_and_synthetic_ingress_use_the_same_execute_path(
+async def test_transport_provenance_does_not_create_a_provider_specific_execute_path(
     monkeypatch: pytest.MonkeyPatch, ingress_id: UUID | None
 ) -> None:
     seen: list[CommandPrincipal] = []
@@ -158,6 +197,78 @@ async def test_direct_and_synthetic_ingress_use_the_same_execute_path(
 
     assert response == result()
     assert seen == [principal(ingress_id=ingress_id)]
+
+
+@pytest.mark.parametrize("command_type", [ObserveCommand, RememberCommand])
+def test_proposal_scope_allows_only_ingress_observe_and_remember(
+    command_type: type[ObserveCommand] | type[RememberCommand],
+) -> None:
+    context = principal(ingress_id=uid(30)).model_copy(
+        update={"scopes": frozenset({"memory:propose"})}
+    )
+
+    assert mutations_module._principal_authorized(context, proposal_command(command_type))
+
+
+def test_proposal_scope_does_not_authorize_a_direct_principal() -> None:
+    context = principal().model_copy(update={"scopes": frozenset({"memory:propose"})})
+
+    assert not mutations_module._principal_authorized(context, proposal_command(ObserveCommand))
+
+
+def test_proposal_scope_does_not_authorize_other_ingress_mutations() -> None:
+    context = principal(ingress_id=uid(30)).model_copy(
+        update={"scopes": frozenset({"memory:propose"})}
+    )
+
+    assert not mutations_module._principal_authorized(context, command())
+
+
+def test_exact_dotted_scope_authorization_is_unchanged() -> None:
+    assert mutations_module._principal_authorized(principal(), command())
+
+
+async def test_duplicate_active_link_returns_stable_non_retryable_invalid_input() -> None:
+    session = MagicMock()
+    session.scalar = AsyncMock(return_value=uid(40))
+    link = LinkCommand(
+        contract_version="mcp-mutation-v1",
+        idempotency_key="unit-link",
+        logical_session_id=None,
+        persona_id=uid(5),
+        branch_id=uid(6),
+        reason="Exercise duplicate active link handling.",
+        source_memory_id=uid(7),
+        source_expected_revision=3,
+        target_memory_id=uid(8),
+        target_expected_revision=2,
+        link_type=LinkType.SUPPORTS,
+    )
+
+    with pytest.raises(mutations_module._SafeFailure) as failure:
+        await mutations_module._reject_duplicate_active_link(
+            session,
+            principal=principal(),
+            lineage_id=uid(10),
+            command=link,
+        )
+
+    assert failure.value.response.error.code == "invalid_input"
+    assert not failure.value.response.error.retryable
+
+
+@pytest.mark.parametrize("operation", ["retire", "forget"])
+def test_disputed_memory_terminal_mutations_require_conflict_resolution(
+    operation: str,
+) -> None:
+    del operation  # Both command paths use the same guard before event construction.
+    disputed = memory().model_copy(update={"status": MemoryStatus.DISPUTED})
+
+    with pytest.raises(mutations_module._SafeFailure) as failure:
+        mutations_module._reject_disputed_terminal_mutation(disputed)
+
+    assert failure.value.response.error.code == "conflict_state_changed"
+    assert not failure.value.response.error.retryable
 
 
 async def test_retry_callback_reuses_attempt_identity_and_timestamp(

@@ -379,7 +379,7 @@ async def test_direct_and_validated_ingress_share_engine_and_commit_ingress_atom
                 _principal(
                     2,
                     ingress_id=ingress_id,
-                    scopes=frozenset({"memory.write.remember"}),
+                    scopes=frozenset({"memory:propose"}),
                 ),
                 _remember(
                     ingress_key,
@@ -406,7 +406,7 @@ async def test_direct_and_validated_ingress_share_engine_and_commit_ingress_atom
                 _principal(
                     2,
                     ingress_id=ingress_id,
-                    scopes=frozenset({"memory.write.remember"}),
+                    scopes=frozenset({"memory:propose"}),
                 ),
                 _remember(
                     ingress_key,

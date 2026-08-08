@@ -77,6 +77,9 @@ from kivra_memory.storage.models import (
 from kivra_memory.storage.models import (
     MemoryEvent as MemoryEventRow,
 )
+from kivra_memory.storage.models import (
+    MemoryLink as MemoryLinkRow,
+)
 from kivra_memory.storage.outbox import enqueue_outbox_job
 from kivra_memory.storage.projector import ProjectionPersistenceError, memory_row_to_state
 from kivra_memory.storage.transactions import (
@@ -128,6 +131,19 @@ _EVENT_OPERATIONS = {
     "retire": EventOperation.RETIRED,
     "forget": EventOperation.TOMBSTONED,
 }
+
+
+def _principal_authorized(principal: CommandPrincipal, command: DirectMutationCommand) -> bool:
+    """Apply exact mutation scopes, including the narrow proposal-ingress seam."""
+
+    required_scope = _SCOPES[command.OPERATION]
+    if required_scope in principal.scopes or "memory:write" in principal.scopes:
+        return True
+    return (
+        "memory:propose" in principal.scopes
+        and principal.ingress_id is not None
+        and isinstance(command, ObserveCommand | RememberCommand)
+    )
 
 
 class _SafeFailure(Exception):
@@ -213,6 +229,35 @@ def _revised_memory(current: MemoryState, command: ReviseCommand, now: datetime)
             "normalized_fingerprint": fingerprint.sha256_hex,
         }
     )
+
+
+def _reject_disputed_terminal_mutation(memory: MemoryState) -> None:
+    if memory.status is MemoryStatus.DISPUTED:
+        _fail("conflict_state_changed")
+
+
+async def _reject_duplicate_active_link(
+    session: AsyncSession,
+    *,
+    principal: CommandPrincipal,
+    lineage_id: UUID,
+    command: LinkCommand,
+) -> None:
+    existing = await session.scalar(
+        select(MemoryLinkRow.link_id)
+        .where(
+            MemoryLinkRow.tenant_id == principal.tenant_id,
+            MemoryLinkRow.lineage_id == lineage_id,
+            MemoryLinkRow.branch_id == command.branch_id,
+            MemoryLinkRow.source_memory_id == command.source_memory_id,
+            MemoryLinkRow.target_memory_id == command.target_memory_id,
+            MemoryLinkRow.link_type == command.link_type.value,
+            MemoryLinkRow.status == "active",
+        )
+        .with_for_update()
+    )
+    if existing is not None:
+        _fail("invalid_input")
 
 
 def _event(
@@ -347,8 +392,7 @@ class MutationEngine:
         created_at: datetime,
         job_ids: tuple[UUID, ...],
     ) -> MutationResult:
-        required_scope = _SCOPES[command.OPERATION]
-        if required_scope not in principal.scopes and "memory:write" not in principal.scopes:
+        if not _principal_authorized(principal, command):
             _fail("forbidden")
 
         identity_result = await session.execute(
@@ -754,6 +798,12 @@ class MutationEngine:
             source, target = memories[command.source_memory_id], memories[command.target_memory_id]
             self._check_revision(source, command.source_expected_revision)
             self._check_revision(target, command.target_expected_revision)
+            await _reject_duplicate_active_link(
+                session,
+                principal=principal,
+                lineage_id=lineage_id,
+                command=command,
+            )
             link = LinkState(
                 link_id=aggregate_id,
                 tenant_id=principal.tenant_id,
@@ -895,6 +945,7 @@ class MutationEngine:
         current = memories[command.memory_id]
         self._check_revision(current, command.expected_revision)
         if isinstance(command, RetireCommand):
+            _reject_disputed_terminal_mutation(current)
             after = _updated_memory(current, created_at, status=MemoryStatus.RETIRED)
             return (
                 MemoryTransitionPayload(previous_revision=current.revision, memory=after),
@@ -905,6 +956,7 @@ class MutationEngine:
                 None,
             )
         assert isinstance(command, ForgetCommand)
+        _reject_disputed_terminal_mutation(current)
         if command.mode == "hard":
             if current.content_protection != "envelope_encrypted" or current.content_key_id is None:
                 _fail("hard_forget_unavailable")
