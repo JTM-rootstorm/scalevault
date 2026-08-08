@@ -68,7 +68,7 @@ def _principal() -> CommandPrincipal:
         actor_id=cast(UUID, binding["actor_id"]),
         client_id=cast(UUID, binding["client_id"]),
         transport_binding_id=cast(UUID, binding["transport_binding_id"]),
-        scopes=frozenset({"memory:write"}),
+        scopes=frozenset({"memory:write", "memory.write.legacy_v1", "memory.write.remember"}),
     )
 
 

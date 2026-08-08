@@ -61,7 +61,14 @@ def _principal(
     index: int,
     *,
     ingress_id: UUID | None = None,
-    scopes: frozenset[str] = frozenset({"memory:write"}),
+    scopes: frozenset[str] = frozenset(
+        {
+            "memory:write",
+            "memory.write.legacy_v1",
+            "memory.write.remember",
+            "memory.write.revise",
+        }
+    ),
 ) -> CommandPrincipal:
     binding = seed_rows()["transport_bindings"][index]
     return CommandPrincipal(
