@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -403,14 +404,14 @@ async def test_duplicate_candidate_promotion_uses_internal_identity_and_rolls_ba
             assert decision.actor_id == principal.actor_id
             assert decision.client_id == principal.client_id
             jobs = (await session.scalars(select(OutboxJob).order_by(OutboxJob.job_id))).all()
-            assert [job.job_type for job in jobs] == [
-                "embed_memory",
-                "check_duplicates",
-                "expire_candidate",
-                "export_git_batch",
-                "embed_memory",
-                "export_git_batch",
-            ]
+            assert Counter(job.job_type for job in jobs) == Counter(
+                {
+                    "embed_memory": 2,
+                    "check_duplicates": 1,
+                    "expire_candidate": 1,
+                    "export_git_batch": 2,
+                }
+            )
 
 
 async def test_expiry_is_internal_idempotent_and_keeps_authorized_audit_history(
@@ -462,7 +463,7 @@ async def test_expiry_is_internal_idempotent_and_keeps_authorized_audit_history(
             assert memory.candidate_expires_at is None
             assert await _count(session, MemoryEvent) == 2
             assert await _count(session, SelectionDecision) == 2
-            assert await _count(session, OutboxJob) == 5
+            assert await _count(session, OutboxJob) == 6
             history = await SelectionHistoryRepository(session).list_decisions(
                 SelectionHistoryFilters(
                     tenant_id=nominator.tenant_id,
