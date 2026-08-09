@@ -17,8 +17,6 @@ from kivra_memory.domain.enums import (
 )
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.policy import (
-    EvidenceKind,
-    EvidenceTrust,
     NominationEvidenceReference,
     NominationProposal,
     PolicyOutcome,
@@ -111,7 +109,7 @@ async def test_routine_banter_is_a_content_free_deterministic_omit() -> None:
     assert policy_outcome(command_value, resolved) is PolicyOutcome.OMIT
 
 
-async def test_safe_assistant_observation_maps_keys_without_opaque_references() -> None:
+async def test_assistant_observation_cannot_upgrade_caller_evidence_to_trusted() -> None:
     canary = "OPAQUE-REFERENCE-MUST-NOT-SURVIVE"
     command_value = command(
         SelectionBasis.ASSISTANT_OBSERVATION,
@@ -126,11 +124,9 @@ async def test_safe_assistant_observation_maps_keys_without_opaque_references() 
     resolved = await DirectNominationResolver().resolve(principal(), command_value)
 
     assert resolved.content_signals == frozenset()
-    assert resolved.evidence[0].evidence_key == "episode:one"
-    assert resolved.evidence[0].kind is EvidenceKind.ASSISTANT_OBSERVATION
-    assert resolved.evidence[0].trust is EvidenceTrust.TRUSTED
+    assert resolved.evidence == ()
     assert canary not in resolved.model_dump_json()
-    assert policy_outcome(command_value, resolved) is PolicyOutcome.CANDIDATE
+    assert policy_outcome(command_value, resolved) is PolicyOutcome.REJECT
 
 
 @pytest.mark.parametrize(
