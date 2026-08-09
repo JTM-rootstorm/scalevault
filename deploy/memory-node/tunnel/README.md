@@ -95,6 +95,11 @@ value. Raw HTTP logging, remote UI access, configuration profiles, ambient API
 keys, proxy variables, and ambient MCP header settings are removed from the
 service environment.
 
+The unit deliberately passes `--log.file=` with an empty value so version
+`0.0.10` writes structured logs to standard output for journald. Do not change
+this to `--log.file=stdout`: that literal value is treated as a filesystem path
+and fails under `ProtectSystem=strict`.
+
 The installed `tunnel-client` 0.0.10 `doctor` command can report absent OAuth
 metadata as a failure even when a non-OAuth MCP server initializes correctly.
 Use `doctor` as an operator diagnostic, not as a service startup gate. The

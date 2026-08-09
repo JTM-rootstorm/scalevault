@@ -62,7 +62,8 @@ def test_tunnel_unit_probes_before_run_with_secret_environment_removed() -> None
     assert "LOG_HTTP_RAW_UNSAFE" in unset
     assert "http_proxy" in unset
     assert "https_proxy" in unset
-    assert "--log.file=stdout" in run
+    assert run.endswith(" --log.file=")
+    assert "--log.file=stdout" not in run
     assert "tunnel-client doctor" not in unit
 
 
@@ -76,6 +77,7 @@ def test_tunnel_settings_and_documentation_expose_no_secret_value() -> None:
     assert AUTHORIZATION not in readme
     assert "never forwards" in readme
     assert "`/chatgpt/mcp`" in readme
+    assert "Do not change\nthis to `--log.file=stdout`" in readme
 
 
 def test_preflight_accepts_supported_client_and_exact_authorization(tmp_path: Path) -> None:
