@@ -6,13 +6,16 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass, field
+from typing import cast
 from uuid import UUID
 
 import pytest
 from kivra_memory.ingress.github_client import (
     MAX_REPOSITORY_TREE_ENTRIES,
+    GitHubCommit,
     GitHubProposalClient,
     GitHubProposalError,
+    GitHubRepositoryEntry,
     GitHubResponse,
 )
 from kivra_memory.ingress.poller import (
@@ -439,6 +442,87 @@ def test_poll_accepts_one_first_parent_regular_blob_addition() -> None:
     assert snapshot.tree_id == head_tree
     assert snapshot.proposals[0].raw_bytes == payload
     assert "/git/blobs/" in transport.calls[-1][0]
+
+
+class _TrackingTreeEntries(list[GitHubRepositoryEntry]):
+    live = 0
+    maximum_live = 0
+
+    def __init__(self, entries: list[GitHubRepositoryEntry]) -> None:
+        super().__init__(entries)
+        type(self).live += 1
+        type(self).maximum_live = max(type(self).maximum_live, type(self).live)
+
+    def __del__(self) -> None:
+        type(self).live -= 1
+
+
+def test_long_large_history_retains_two_trees_and_fails_cumulative_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trusted_commit = "a" * 40
+    trusted_tree = "b" * 40
+    commit_ids = [f"{5_000 + index:040x}" for index in range(10)]
+    tree_ids = [f"{6_000 + index:040x}" for index in range(10)]
+    commits: dict[str, GitHubCommit] = {}
+    parent_id = trusted_commit
+    for commit_id, tree_id in zip(commit_ids, tree_ids, strict=True):
+        commits[commit_id] = GitHubCommit(
+            commit_id=commit_id,
+            tree_id=tree_id,
+            parent_ids=(parent_id,),
+        )
+        parent_id = commit_id
+
+    base = [
+        GitHubRepositoryEntry(
+            path=f"frozen/object-{index}",
+            mode="100644",
+            object_type="blob",
+            object_id=f"{10_000 + index:040x}",
+        )
+        for index in range(9_990)
+    ]
+    additions = [
+        GitHubRepositoryEntry(
+            path=_path(4_000 + index),
+            mode="100644",
+            object_type="blob",
+            object_id=f"{30_000 + index:040x}",
+        )
+        for index in range(10)
+    ]
+    steps = {trusted_tree: 0, **{tree_id: index + 1 for index, tree_id in enumerate(tree_ids)}}
+    enumerated: list[str] = []
+    _TrackingTreeEntries.live = 0
+    _TrackingTreeEntries.maximum_live = 0
+
+    client = _client(StubTransport([]))
+
+    def get_commit(commit_id: str) -> GitHubCommit:
+        return commits[commit_id]
+
+    def enumerate_tree(tree_id: str) -> tuple[GitHubRepositoryEntry, ...]:
+        enumerated.append(tree_id)
+        step = steps[tree_id]
+        return cast(
+            tuple[GitHubRepositoryEntry, ...],
+            _TrackingTreeEntries([*base, *additions[:step]]),
+        )
+
+    monkeypatch.setattr(client, "get_commit", get_commit)
+    monkeypatch.setattr(client, "enumerate_repository_tree", enumerate_tree)
+
+    with pytest.raises(GitHubProposalError, match="cumulative tree entry limit"):
+        client.verify_additive_history(
+            trusted_commit_id=trusted_commit,
+            trusted_tree_id=trusted_tree,
+            head_commit_id=commit_ids[-1],
+            head_tree_id=tree_ids[-1],
+        )
+
+    assert enumerated == [trusted_tree, *tree_ids]
+    assert _TrackingTreeEntries.maximum_live <= 2
 
 
 def test_first_poll_rejects_create_then_update_before_fetching_content() -> None:

@@ -79,6 +79,12 @@ ingress ledger, while still checking every known path/blob identity, and also
 enforces the 4 MiB aggregate limit against the actual decoded bytes before
 appending each fetched object to the batch.
 
+History verification traverses at most 100 commits and at most 100,000
+cumulative recursive-tree entries. It compares trees pairwise and discards the
+older tree after each delta, retaining no more than the previous and current
+full tree. This bounds both traversal work and live tree memory independently
+of the number of commits accepted in one poll.
+
 Provider object identity is `(github, numeric repository ID, normalized
 create-only path)`. The row also records the observed head commit and blob SHA.
 The same object may be rediscovered only with identical immutable provenance

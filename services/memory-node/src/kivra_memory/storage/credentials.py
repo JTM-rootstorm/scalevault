@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Protocol, cast
 from uuid import UUID
 
-from sqlalchemy import Row, Select, Table, func, insert, select, update
+from sqlalchemy import Row, Select, Table, func, insert, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -738,10 +738,10 @@ class CredentialAdminStorageRepository:
             credential_count = cast(
                 int,
                 await session.scalar(
-                    select(func.count(ClientCredential.credential_id)).where(
-                        ClientCredential.tenant_id == tenant_id,
-                        ClientCredential.client_id == client_id,
-                        ClientCredential.transport_binding_id == transport_binding_id,
+                    _credential_reissue_occupancy_statement(
+                        tenant_id=tenant_id,
+                        client_id=client_id,
+                        transport_binding_id=transport_binding_id,
                     )
                 ),
             )
@@ -913,6 +913,23 @@ class CredentialAdminStorageRepository:
             raise
         except SQLAlchemyError:
             raise CredentialAdminError("credential_repository_unavailable") from None
+
+
+def _credential_reissue_occupancy_statement(
+    *,
+    tenant_id: UUID,
+    client_id: UUID,
+    transport_binding_id: UUID,
+) -> Select[tuple[int]]:
+    """Count all active or revoked credentials occupying either selector."""
+
+    return select(func.count(ClientCredential.credential_id)).where(
+        ClientCredential.tenant_id == tenant_id,
+        or_(
+            ClientCredential.client_id == client_id,
+            ClientCredential.transport_binding_id == transport_binding_id,
+        ),
+    )
 
 
 async def _load_state(

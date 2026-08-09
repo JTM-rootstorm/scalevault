@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import secrets
 from collections.abc import Iterator
@@ -1019,6 +1020,7 @@ async def test_credential_admin_role_executes_create_list_rotate_and_revoke(
     restored_actor_id = new_uuid7()
     restored_client_id = new_uuid7()
     restored_binding_id = new_uuid7()
+    restored_other_binding_id = new_uuid7()
     restored_installation_id = new_uuid7()
     restored_at = datetime(2026, 8, 9, 19, tzinfo=UTC)
     with Session(role_secured_database.engine) as session:
@@ -1072,6 +1074,17 @@ async def test_credential_admin_role_executes_create_list_rotate_and_revoke(
                     authorized_operations={"operations": []},
                     created_at=restored_at,
                 ),
+                TransportBinding(
+                    transport_binding_id=restored_other_binding_id,
+                    tenant_id=tenant_id,
+                    actor_id=restored_actor_id,
+                    client_id=restored_client_id,
+                    transport_kind="secure_tunnel",
+                    disclosure_boundary="openai_secure_tunnel",
+                    installation_id=restored_installation_id,
+                    authorized_operations={"operations": []},
+                    created_at=restored_at,
+                ),
             )
         )
         session.commit()
@@ -1103,23 +1116,32 @@ async def test_credential_admin_role_executes_create_list_rotate_and_revoke(
             reissue_authorization = reissue_authorization or proposed
             return reissue_authorization
 
-        reissued = await service.reissue_secure_tunnel(
-            tenant_id=tenant_id,
-            actor_id=restored_actor_id,
-            client_id=restored_client_id,
-            transport_binding_id=restored_binding_id,
-            installation_id=restored_installation_id,
-            authorization_artifact=load_or_create_reissue,
-        )
-        reissue_retry = await service.reissue_secure_tunnel(
-            tenant_id=tenant_id,
-            actor_id=restored_actor_id,
-            client_id=restored_client_id,
-            transport_binding_id=restored_binding_id,
-            installation_id=restored_installation_id,
-            authorization_artifact=load_or_create_reissue,
+        reissued, reissue_retry = await asyncio.gather(
+            *(
+                service.reissue_secure_tunnel(
+                    tenant_id=tenant_id,
+                    actor_id=restored_actor_id,
+                    client_id=restored_client_id,
+                    transport_binding_id=restored_binding_id,
+                    installation_id=restored_installation_id,
+                    authorization_artifact=load_or_create_reissue,
+                )
+                for _index in range(2)
+            )
         )
         assert reissue_retry.credential_id == reissued.credential_id
+        with pytest.raises(
+            RuntimeError,
+            match="credential_repository_rejected_after_secret_output",
+        ):
+            await service.reissue_secure_tunnel(
+                tenant_id=tenant_id,
+                actor_id=restored_actor_id,
+                client_id=restored_client_id,
+                transport_binding_id=restored_other_binding_id,
+                installation_id=restored_installation_id,
+                authorization_artifact=lambda proposed: proposed,
+            )
         with pytest.raises(
             RuntimeError,
             match="credential_repository_rejected_after_secret_output",

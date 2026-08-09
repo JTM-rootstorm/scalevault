@@ -16,6 +16,7 @@ from kivra_memory.storage.credentials import (
     CredentialStorageError,
     _AdminCredentialState,
     _credential_lookup_statement,
+    _credential_reissue_occupancy_statement,
     _CredentialState,
     _identity_from_state,
     _metadata_from_state,
@@ -281,6 +282,20 @@ def test_first_phase_lookup_selects_only_verifier_locator_columns() -> None:
     assert "client_credentials.secret_hash IS NOT NULL" in sql
     assert "client_credentials.secret_hash_key_id IS NOT NULL" in sql
     assert " JOIN " not in sql
+
+
+def test_dr_reissue_rejects_any_client_or_binding_credential_without_actor_scope() -> None:
+    statement = _credential_reissue_occupancy_statement(
+        tenant_id=new_uuid7(),
+        client_id=new_uuid7(),
+        transport_binding_id=new_uuid7(),
+    )
+    sql = str(statement)
+
+    assert "client_credentials.client_id =" in sql
+    assert " OR client_credentials.transport_binding_id =" in sql
+    assert "client_credentials.actor_id" not in sql
+    assert "client_credentials.revoked_at" not in sql
 
 
 def test_direct_bearer_requires_exact_provisioning_marker() -> None:

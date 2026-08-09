@@ -19,7 +19,8 @@ MAX_PROPOSAL_BYTES = 32 * 1024
 MAX_REPOSITORY_TREE_ENTRIES = 10_000
 _MAX_API_RESPONSE_BYTES = 64 * 1024
 _MAX_TREE_RESPONSE_BYTES = 4 * 1024 * 1024
-_MAX_VERIFIED_COMMITS = 1000
+_MAX_VERIFIED_COMMITS = 100
+_MAX_HISTORY_TREE_ENTRIES = 100_000
 _MAX_TRANSPORT_RESPONSE_BYTES = _MAX_TREE_RESPONSE_BYTES
 _API_ROOT = "https://api.github.com"
 _API_VERSION = "2022-11-28"
@@ -338,21 +339,17 @@ class GitHubProposalClient:
         if reverse_chain[0].tree_id != head_tree_id:
             raise GitHubProposalError("GitHub head tree did not match the commit object")
 
-        previous_tree_id = trusted_tree_id
-        tree_cache: dict[str, tuple[GitHubRepositoryEntry, ...]] = {}
-
-        def tree_entries(tree_id: str) -> tuple[GitHubRepositoryEntry, ...]:
-            cached = tree_cache.get(tree_id)
-            if cached is None:
-                cached = self.enumerate_repository_tree(tree_id)
-                tree_cache[tree_id] = cached
-            return cached
-
+        previous = self.enumerate_repository_tree(trusted_tree_id)
+        cumulative_entries = len(previous)
         for commit in reversed(reverse_chain):
-            previous = tree_entries(previous_tree_id)
-            current = tree_entries(commit.tree_id)
+            current = self.enumerate_repository_tree(commit.tree_id)
+            cumulative_entries += len(current)
+            if cumulative_entries > _MAX_HISTORY_TREE_ENTRIES:
+                raise GitHubProposalError(
+                    "GitHub additive history exceeded the cumulative tree entry limit"
+                )
             self._verify_additive_tree_delta(previous, current)
-            previous_tree_id = commit.tree_id
+            previous = current
 
     def get_commit(self, commit_id: str) -> GitHubCommit:
         """Fetch one immutable Git commit object by object ID."""
