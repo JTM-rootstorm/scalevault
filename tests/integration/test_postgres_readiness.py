@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, cast
+from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app
 from kivra_memory.config import Settings
+from kivra_memory.runtime import MemoryNodeRuntime
 from kivra_memory.storage.readiness import (
     MINIMUM_EXTENSION_VERSIONS,
     _extension_version_is_supported,
@@ -27,6 +29,12 @@ class PostgreSQLTestServer(Protocol):
     database_url: str
 
     def stop(self) -> None: ...
+
+
+def configured_runtime() -> MemoryNodeRuntime:
+    runtime = MagicMock(spec=MemoryNodeRuntime)
+    runtime.authenticate_mcp.side_effect = lambda application: application
+    return cast(MemoryNodeRuntime, runtime)
 
 
 async def test_disposable_postgresql_supports_required_extensions(
@@ -70,7 +78,7 @@ async def test_memory_node_readiness_tracks_real_postgresql(
         database_url=PostgresDsn(postgresql_server.database_url),
         database_connect_timeout_seconds=1,
     )
-    app = create_app(settings)
+    app = create_app(settings, runtime=configured_runtime())
     sqlalchemy_url = make_url(postgresql_server.database_url).set(drivername="postgresql+psycopg")
     runner = AlembicRunner(
         create_engine(
