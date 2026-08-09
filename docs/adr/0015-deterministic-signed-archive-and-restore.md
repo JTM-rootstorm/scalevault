@@ -35,6 +35,14 @@ Repeating an export from the same committed database prefix therefore produces
 the same archive files, manifest bytes, Git tree, message, author time, and
 committer time.
 
+Archive v1 is intentionally a single-tenant node format. Because
+`memory_events.sequence` is global while each target is tenant-bound, the
+exporter must prove that the selected tenant owns the complete event prefix
+`1..source_high_water_sequence`. Any gap, foreign-tenant event, or target whose
+first event is not sequence one fails closed as `archive_multitenant_unsupported`.
+A multi-tenant archive requires a later contract with an explicit global or
+tenant-local ordering model; v1 never silently rewrites event identity.
+
 The snapshot is deterministic CBOR using canonical map ordering, shortest
 integer and length encodings, definite lengths, and no floats, tags, or
 indefinite values. Zstandard compression uses a checked-in parameter profile,
@@ -104,4 +112,3 @@ review.
   PostgreSQL checkpoint state in isolation.
 - Recovery archives can contain private canonical material and therefore remain
   under the same controlled storage and disclosure boundary as the Memory Node.
-
