@@ -22,6 +22,7 @@ EXPECTED_TABLES = {
     "genesis_import_sources",
     "genesis_import_supersessions",
     "ingress_items",
+    "ingress_provider_violations",
     "lineages",
     "memories",
     "memory_conflict_members",

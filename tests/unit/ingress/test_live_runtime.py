@@ -7,15 +7,19 @@ from collections.abc import Callable
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from kivra_memory.application.github_ingress import GitHubIngressProcessResult
+from kivra_memory.application.github_ingress import (
+    GitHubIngressOrchestrator,
+    GitHubIngressProcessResult,
+)
 from kivra_memory.domain.enums import IngressState, MemoryScope, SubjectKind
 from kivra_memory.ingress.github_client import GitHubProposalObject
 from kivra_memory.ingress.runtime import adapt_live_proposal, transaction_binding_sha256
 from kivra_memory.ingress.validator import IngressValidationError, validate_ingress
-from kivra_memory.storage.github_ingress import GitHubIngressDiscovery
+from kivra_memory.storage.github_ingress import GitHubIngressDiscovery, IngressRegistration
 from kivra_memory.workers.github_ingress import (
     GitHubIngressIdentity,
     GitHubIngressWorker,
@@ -130,6 +134,33 @@ def test_poller_object_is_bound_to_pinned_local_identity_without_invented_fields
 
     assert item.discovery == discovery
     assert item.raw_bytes is raw
+
+
+async def test_terminal_provenance_violation_reports_unchanged_canonical_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery = _discovery()
+    orchestrator = GitHubIngressOrchestrator(cast(Any, None), cast(Any, None))
+
+    async def register(_: GitHubIngressDiscovery) -> IngressRegistration:
+        return IngressRegistration(
+            ingress_id=discovery.ingress_id,
+            state=IngressState.ACCEPTED,
+            created=False,
+            same_object=False,
+            canonical_changed=False,
+        )
+
+    monkeypatch.setattr(orchestrator, "_register", register)
+
+    result = await orchestrator.process(discovery, b"content-must-not-be-read")
+
+    assert result == GitHubIngressProcessResult(
+        ingress_id=discovery.ingress_id,
+        state=IngressState.ACCEPTED,
+        disposition="unchanged",
+        code="append_only_violation",
+    )
 
 
 @pytest.mark.parametrize(

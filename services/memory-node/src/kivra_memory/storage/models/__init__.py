@@ -4,6 +4,7 @@ from kivra_memory.storage.base import Base, metadata, tenant_table_names
 from kivra_memory.storage.models.events import (
     CommandReceipt,
     IngressItem,
+    IngressProviderViolation,
     MemoryEvent,
     MemoryEventCounter,
     SelectionDecision,
@@ -71,6 +72,7 @@ __all__ = [
     "GenesisImportSource",
     "GenesisImportSupersession",
     "IngressItem",
+    "IngressProviderViolation",
     "Lineage",
     "LogicalSession",
     "Memory",

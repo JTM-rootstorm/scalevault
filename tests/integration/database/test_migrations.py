@@ -22,7 +22,7 @@ from .conftest import (
     installed_extensions,
 )
 
-EXPECTED_HEAD = "0006_sealed_canonical_content"
+EXPECTED_HEAD = "0007_persistence_hardening"
 revision_module = importlib.import_module("migrations.versions.0001_initial_domain")
 
 
@@ -124,7 +124,7 @@ def test_zero_to_head_and_full_round_trip(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (6, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (7, EXPECTED_HEAD, EXPECTED_HEAD)
 
     runner.downgrade("base")
     with runner.connect() as connection:
@@ -158,7 +158,7 @@ def test_existing_0001_database_upgrades_to_hybrid_retrieval(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (6, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (7, EXPECTED_HEAD, EXPECTED_HEAD)
 
 
 def test_existing_0002_database_upgrades_and_downgrades_policy_lifecycle(
@@ -240,9 +240,7 @@ def test_existing_0004_database_upgrades_through_ingress_and_sealed_content(
             column["name"]: bool(column["nullable"])
             for column in inspect(connection).get_columns("ingress_items")
         }
-        memory_columns = {
-            column["name"] for column in inspect(connection).get_columns("memories")
-        }
+        memory_columns = {column["name"] for column in inspect(connection).get_columns("memories")}
         assert ingress_columns["declared_idempotency_key"] is False
         assert ingress_columns["payload_sha256"] is False
         assert "sealed_ciphertext" not in memory_columns
@@ -253,9 +251,7 @@ def test_existing_0004_database_upgrades_through_ingress_and_sealed_content(
             column["name"]: bool(column["nullable"])
             for column in inspect(connection).get_columns("ingress_items")
         }
-        memory_columns = {
-            column["name"] for column in inspect(connection).get_columns("memories")
-        }
+        memory_columns = {column["name"] for column in inspect(connection).get_columns("memories")}
         assert _current_revision(connection) == EXPECTED_HEAD
         assert ingress_columns["declared_idempotency_key"] is True
         assert ingress_columns["payload_sha256"] is True
@@ -267,7 +263,29 @@ def test_existing_0004_database_upgrades_through_ingress_and_sealed_content(
             "sealed_aad_sha256",
             "safe_summary",
         } <= memory_columns
+        assert "ingress_provider_violations" in inspect(connection).get_table_names()
         assert _schema_differences(connection) == []
+
+
+def test_existing_0006_database_upgrades_and_downgrades_persistence_hardening(
+    bootstrapped_alembic_runner: AlembicRunner,
+) -> None:
+    runner = bootstrapped_alembic_runner
+    runner.upgrade("0006_sealed_canonical_content")
+    with runner.connect() as connection:
+        assert _current_revision(connection) == "0006_sealed_canonical_content"
+        assert "ingress_provider_violations" not in inspect(connection).get_table_names()
+
+    runner.upgrade()
+    with runner.connect() as connection:
+        assert _current_revision(connection) == EXPECTED_HEAD
+        assert "ingress_provider_violations" in inspect(connection).get_table_names()
+        assert _schema_differences(connection) == []
+
+    runner.downgrade("0006_sealed_canonical_content")
+    with runner.connect() as connection:
+        assert _current_revision(connection) == "0006_sealed_canonical_content"
+        assert "ingress_provider_violations" not in inspect(connection).get_table_names()
 
 
 def test_genesis_downgrade_fails_closed_after_a_genesis_decision(

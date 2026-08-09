@@ -46,10 +46,109 @@ ATTACK_BINDING = UUID("01936d5a-8c4e-7b12-ae6c-4a41a22836f1")
 EXPIRED_BINDING = UUID("01936d5a-8c4e-7b12-ae6c-4a41a22836f2")
 CREATED_AT = datetime(2026, 8, 3, 20, 0, 0, tzinfo=UTC)
 API_ROLE = "scalevault_test_api"
+CONTENT_KEY = UUID("01936d5a-8c4e-7b12-ae6c-4a41a2283701")
 
 
 def _sqlstate(error: DBAPIError) -> str | None:
     return getattr(error.orig, "sqlstate", None)
+
+
+def test_content_key_identity_and_lifecycle_audit_are_forward_only(
+    migrated_database: AlembicRunner,
+) -> None:
+    with migrated_database.engine.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = 'replica'"))
+        connection.execute(
+            text(
+                "INSERT INTO memory_content_keys ("
+                "content_key_id, tenant_id, lineage_id, memory_id, provider_name, "
+                "provider_key_reference, state, created_at) VALUES ("
+                ":content_key_id, :tenant_id, :lineage_id, :memory_id, "
+                "'synthetic-provider', 'opaque-reference', 'active', :created_at)"
+            ),
+            {
+                "content_key_id": CONTENT_KEY,
+                "tenant_id": TENANT_A,
+                "lineage_id": LINEAGE,
+                "memory_id": MEMORY,
+                "created_at": CREATED_AT,
+            },
+        )
+
+    with (
+        pytest.raises(DBAPIError) as identity_mutation,
+        migrated_database.engine.begin() as connection,
+    ):
+        connection.execute(
+            text(
+                "UPDATE memory_content_keys SET provider_key_reference = 'changed-reference' "
+                "WHERE content_key_id = :content_key_id"
+            ),
+            {"content_key_id": CONTENT_KEY},
+        )
+    assert _sqlstate(identity_mutation.value) == "55000"
+
+    requested_at = CREATED_AT.replace(hour=21)
+    with migrated_database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE memory_content_keys SET state = 'destruction_requested', "
+                "destruction_requested_at = :requested_at "
+                "WHERE content_key_id = :content_key_id"
+            ),
+            {"content_key_id": CONTENT_KEY, "requested_at": requested_at},
+        )
+
+    with (
+        pytest.raises(DBAPIError) as cleared_request,
+        migrated_database.engine.begin() as connection,
+    ):
+        connection.execute(
+            text(
+                "UPDATE memory_content_keys SET destruction_requested_at = NULL "
+                "WHERE content_key_id = :content_key_id"
+            ),
+            {"content_key_id": CONTENT_KEY},
+        )
+    assert _sqlstate(cleared_request.value) == "55000"
+
+    destroyed_at = CREATED_AT.replace(hour=22)
+    with migrated_database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE memory_content_keys SET state = 'destroyed', "
+                "destroyed_at = :destroyed_at, destruction_receipt_sha256 = :receipt "
+                "WHERE content_key_id = :content_key_id"
+            ),
+            {
+                "content_key_id": CONTENT_KEY,
+                "destroyed_at": destroyed_at,
+                "receipt": b"r" * 32,
+            },
+        )
+
+    with (
+        pytest.raises(DBAPIError) as receipt_rewrite,
+        migrated_database.engine.begin() as connection,
+    ):
+        connection.execute(
+            text(
+                "UPDATE memory_content_keys SET destruction_receipt_sha256 = :receipt "
+                "WHERE content_key_id = :content_key_id"
+            ),
+            {"content_key_id": CONTENT_KEY, "receipt": b"x" * 32},
+        )
+    assert _sqlstate(receipt_rewrite.value) == "55000"
+
+    with (
+        pytest.raises(DBAPIError) as deletion,
+        migrated_database.engine.begin() as connection,
+    ):
+        connection.execute(
+            text("DELETE FROM memory_content_keys WHERE content_key_id = :content_key_id"),
+            {"content_key_id": CONTENT_KEY},
+        )
+    assert _sqlstate(deletion.value) == "55000"
 
 
 def _seed_two_tenants(runner: AlembicRunner) -> None:

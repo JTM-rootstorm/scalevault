@@ -193,6 +193,48 @@ class IngressItem(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class IngressProviderViolation(Base):
+    """Content-free audit of immutable provider provenance conflicts."""
+
+    __tablename__ = "ingress_provider_violations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "ingress_id"],
+            ["ingress_items.tenant_id", "ingress_items.ingress_id"],
+            name="ingress_item",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "violation_code ~ '^[a-z][a-z0-9_]{0,63}$'",
+            name="violation_code_format",
+        ),
+        sha256_check("expected_provenance_sha256", name="expected_provenance_sha256_length"),
+        sha256_check("observed_provenance_sha256", name="observed_provenance_sha256_length"),
+        CheckConstraint(
+            "expected_provenance_sha256 <> observed_provenance_sha256",
+            name="provenance_hashes_differ",
+        ),
+        Index("ix_ingress_provider_violations_detected", "tenant_id", "detected_at"),
+        {
+            "info": {
+                TENANT_OWNED_INFO_KEY: True,
+                "scalevault_immutable": True,
+                "scalevault_append_only": True,
+                "scalevault_content_free": True,
+            }
+        },
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(primary_key=True)
+    ingress_id: Mapped[UUID] = mapped_column(primary_key=True)
+    violation_code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expected_provenance_sha256: Mapped[bytes] = mapped_column(LargeBinary(), primary_key=True)
+    observed_provenance_sha256: Mapped[bytes] = mapped_column(LargeBinary(), primary_key=True)
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
 class MemoryEventCounter(Base):
     __tablename__ = "memory_event_counter"
     __table_args__ = (

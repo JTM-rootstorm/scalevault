@@ -217,6 +217,13 @@ BEGIN
     IF pg_catalog.to_regclass('public.memory_evidence') IS NOT NULL THEN
         GRANT INSERT ON TABLE public.memory_evidence TO kivra_memory_api;
     END IF;
+    IF pg_catalog.to_regclass('public.memory_content_keys') IS NOT NULL THEN
+        GRANT INSERT ON TABLE public.memory_content_keys TO kivra_memory_api;
+        GRANT UPDATE (
+            state,
+            destruction_requested_at
+        ) ON TABLE public.memory_content_keys TO kivra_memory_api;
+    END IF;
     FOREACH table_name IN ARRAY ARRAY[
         'memories', 'memory_links', 'memory_conflicts',
         'memory_conflict_members'
@@ -392,7 +399,7 @@ BEGIN
     END LOOP;
     FOREACH table_name IN ARRAY ARRAY[
         'memories', 'memory_evidence', 'memory_links', 'memory_conflicts',
-        'memory_conflict_members', 'memory_content_keys'
+        'memory_conflict_members'
     ]
     LOOP
         IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
@@ -414,6 +421,13 @@ BEGIN
     IF pg_catalog.to_regclass('public.memory_embeddings_v1') IS NOT NULL THEN
         GRANT DELETE ON TABLE public.memory_embeddings_v1 TO kivra_memory_worker;
     END IF;
+    IF pg_catalog.to_regclass('public.memory_content_keys') IS NOT NULL THEN
+        GRANT UPDATE (
+            state,
+            destroyed_at,
+            destruction_receipt_sha256
+        ) ON TABLE public.memory_content_keys TO kivra_memory_worker;
+    END IF;
     IF pg_catalog.to_regclass('public.branches') IS NOT NULL THEN
         GRANT INSERT ON TABLE public.branches TO kivra_memory_worker;
     END IF;
@@ -424,7 +438,7 @@ BEGIN
     FOREACH table_name IN ARRAY ARRAY[
         'alembic_compatibility', 'tenants', 'actors', 'clients',
         'transport_installations', 'transport_bindings', 'branches', 'sessions',
-        'ingress_items'
+        'ingress_items', 'ingress_provider_violations'
     ]
     LOOP
         IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
@@ -448,7 +462,8 @@ BEGIN
             immutable_path,
             external_object_id,
             commit_id,
-            blob_id
+            blob_id,
+            discovered_at
         ) ON TABLE public.ingress_items TO kivra_memory_ingress;
         GRANT UPDATE (
             state,
@@ -460,13 +475,29 @@ BEGIN
             processed_at
         ) ON TABLE public.ingress_items TO kivra_memory_ingress;
     END IF;
+    IF pg_catalog.to_regclass('public.ingress_provider_violations') IS NOT NULL THEN
+        GRANT INSERT (
+            tenant_id,
+            ingress_id,
+            violation_code,
+            expected_provenance_sha256,
+            observed_provenance_sha256
+        ) ON TABLE public.ingress_provider_violations TO kivra_memory_ingress;
+    END IF;
 
     -- Export is read-only except for its append-only checkpoint ledger.
     FOREACH table_name IN ARRAY ARRAY[
-        'alembic_compatibility', 'tenants', 'lineages', 'branches', 'subjects',
-        'memory_events', 'memories', 'memory_evidence', 'memory_links',
-        'memory_conflicts', 'memory_conflict_members', 'archive_targets',
-        'archive_export_checkpoints'
+        'alembic_compatibility', 'tenants', 'actors', 'clients',
+        'transport_installations', 'transport_bindings', 'personas', 'lineages',
+        'branches', 'sessions', 'subjects', 'subject_aliases',
+        'genesis_import_runs', 'genesis_import_sources',
+        'genesis_import_exclusions', 'genesis_import_records',
+        'genesis_import_supersessions', 'genesis_import_run_results',
+        'ingress_items', 'ingress_provider_violations', 'memory_events',
+        'command_receipts', 'memories',
+        'memory_evidence', 'memory_links', 'memory_conflicts',
+        'memory_conflict_members', 'selection_decisions', 'memory_content_keys',
+        'archive_targets', 'archive_export_checkpoints'
     ]
     LOOP
         IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
@@ -478,6 +509,13 @@ BEGIN
     END LOOP;
     IF pg_catalog.to_regclass('public.archive_export_checkpoints') IS NOT NULL THEN
         GRANT INSERT ON TABLE public.archive_export_checkpoints TO kivra_memory_exporter;
+        GRANT UPDATE (
+            state,
+            git_commit_sha,
+            remote_git_commit_sha,
+            committed_at,
+            pushed_at
+        ) ON TABLE public.archive_export_checkpoints TO kivra_memory_exporter;
     END IF;
 
 END
@@ -549,6 +587,7 @@ BEGIN
         'scalevault_reject_immutable_mutation()',
         'scalevault_reject_immutable_field_mutation()',
         'scalevault_enforce_branch_visibility()',
+        'scalevault_enforce_content_key_lifecycle()',
         'scalevault_enforce_event_ingress_provenance()',
         'scalevault_enforce_ingress_validation_write()',
         'scalevault_enforce_genesis_record_terminalization()',

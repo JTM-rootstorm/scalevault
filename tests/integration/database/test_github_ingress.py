@@ -15,7 +15,7 @@ from kivra_memory.storage.github_ingress import (
     GitHubIngressRepository,
     IngressRegistration,
 )
-from kivra_memory.storage.models import IngressItem
+from kivra_memory.storage.models import IngressItem, IngressProviderViolation
 from kivra_memory.storage.transactions import run_serializable_transaction
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
@@ -128,6 +128,103 @@ async def test_validation_sets_semantic_identity_once_and_append_only_change_qua
             assert row.declared_idempotency_key == "github:synthetic-proposal"
             assert row.payload_sha256 == b"p" * 32
             assert row.error_code == "append_only_violation"
+            violations = (
+                await session.scalars(
+                    select(IngressProviderViolation).where(
+                        IngressProviderViolation.ingress_id == discovery.ingress_id
+                    )
+                )
+            ).all()
+            assert len(violations) == 1
+            assert violations[0].violation_code == "append_only_violation"
+            assert len(violations[0].expected_provenance_sha256) == 32
+            assert len(violations[0].observed_provenance_sha256) == 32
+            assert (
+                violations[0].expected_provenance_sha256 != violations[0].observed_provenance_sha256
+            )
+    finally:
+        await database.dispose()
+
+
+async def test_terminal_provenance_change_is_audited_once_without_result_mutation(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+) -> None:
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    repository = GitHubIngressRepository()
+    discovery = _discovery()
+    changed = replace(discovery, commit_id="3" * 40, blob_id="4" * 40)
+    await _seed(database)
+
+    async def register_changed() -> IngressRegistration:
+        async def operation(session: AsyncSession) -> IngressRegistration:
+            return await repository.register(session, changed)
+
+        return await run_serializable_transaction(
+            database.session_factory, discovery.tenant_id, operation
+        )
+
+    try:
+        async with database.tenant_session(discovery.tenant_id) as session:
+            await repository.register(session, discovery)
+        async with database.tenant_session(discovery.tenant_id) as session:
+            await repository.quarantine(
+                session,
+                discovery=discovery,
+                error_code="schema_invalid",
+                processed_at=_NOW,
+            )
+        async with database.tenant_session(discovery.tenant_id) as session:
+            terminal = await session.get(IngressItem, discovery.ingress_id)
+            assert terminal is not None
+            terminal_snapshot = (
+                terminal.state,
+                terminal.error_code,
+                terminal.result_event_id,
+                terminal.result_memory_id,
+                terminal.validated_at,
+                terminal.processed_at,
+            )
+
+        first, second = await asyncio.gather(register_changed(), register_changed())
+        assert all(not result.same_object for result in (first, second))
+        assert all(not result.canonical_changed for result in (first, second))
+        assert all(result.state is IngressState.QUARANTINED for result in (first, second))
+
+        async with database.tenant_session(discovery.tenant_id) as session:
+            terminal = await session.get(IngressItem, discovery.ingress_id)
+            assert terminal is not None
+            assert (
+                terminal.state,
+                terminal.error_code,
+                terminal.result_event_id,
+                terminal.result_memory_id,
+                terminal.validated_at,
+                terminal.processed_at,
+            ) == terminal_snapshot
+            violations = (
+                await session.scalars(
+                    select(IngressProviderViolation).where(
+                        IngressProviderViolation.ingress_id == discovery.ingress_id
+                    )
+                )
+            ).all()
+            assert len(violations) == 1
+            assert violations[0].violation_code == "append_only_violation"
+        with pytest.raises(DBAPIError) as deletion:
+            async with database.tenant_session(discovery.tenant_id) as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM ingress_provider_violations "
+                        "WHERE tenant_id = :tenant_id AND ingress_id = :ingress_id"
+                    ),
+                    {
+                        "tenant_id": discovery.tenant_id,
+                        "ingress_id": discovery.ingress_id,
+                    },
+                )
+        assert getattr(deletion.value.orig, "sqlstate", None) == "55000"
     finally:
         await database.dispose()
 

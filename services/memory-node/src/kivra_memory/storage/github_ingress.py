@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -14,12 +15,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import NominationCommandLike, SelectionResult
+from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import IngressState, MemoryStatus
 from kivra_memory.domain.fingerprints import exact_memory_fingerprint
 from kivra_memory.domain.identifiers import require_uuid7
-from kivra_memory.storage.models import IngressItem, Memory, MemoryEvent
+from kivra_memory.storage.models import (
+    IngressItem,
+    IngressProviderViolation,
+    Memory,
+    MemoryEvent,
+)
 
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_PROVENANCE_HASH_DOMAIN = b"scalevault:ingress-provider-provenance:v1\x00"
 _TERMINAL_STATES = frozenset(
     {
         IngressState.ACCEPTED.value,
@@ -91,6 +99,7 @@ class IngressRegistration:
     state: IngressState
     created: bool
     same_object: bool
+    canonical_changed: bool
 
     @property
     def terminal(self) -> bool:
@@ -140,6 +149,26 @@ def _matches(row: IngressItem, discovery: GitHubIngressDiscovery) -> bool:
     )
 
 
+def _provider_provenance_sha256(value: IngressItem | GitHubIngressDiscovery) -> bytes:
+    provider = value.provider if isinstance(value, IngressItem) else "github"
+    material = {
+        "ingress_id": value.ingress_id,
+        "tenant_id": value.tenant_id,
+        "transport_binding_id": value.transport_binding_id,
+        "installation_id": value.installation_id,
+        "actor_id": value.actor_id,
+        "client_id": value.client_id,
+        "provider": provider,
+        "repository_external_id": value.repository_external_id,
+        "branch_name": value.branch_name,
+        "immutable_path": value.immutable_path,
+        "external_object_id": value.external_object_id,
+        "commit_id": value.commit_id,
+        "blob_id": value.blob_id,
+    }
+    return hashlib.sha256(_PROVENANCE_HASH_DOMAIN + canonical_json_bytes(material)).digest()
+
+
 class GitHubIngressRepository:
     """Stage ingress state transitions inside caller-owned transactions."""
 
@@ -158,6 +187,37 @@ class GitHubIngressRepository:
         if row is None:
             raise GitHubIngressStorageError("registration_unavailable")
         return row
+
+    @staticmethod
+    async def _record_provider_violation(
+        session: AsyncSession,
+        *,
+        row: IngressItem,
+        discovery: GitHubIngressDiscovery,
+    ) -> None:
+        expected_sha256 = _provider_provenance_sha256(row)
+        observed_sha256 = _provider_provenance_sha256(discovery)
+        if expected_sha256 == observed_sha256:
+            raise GitHubIngressStorageError("provenance_audit_invalid")
+        await session.execute(
+            insert(IngressProviderViolation)
+            .values(
+                tenant_id=row.tenant_id,
+                ingress_id=row.ingress_id,
+                violation_code="append_only_violation",
+                expected_provenance_sha256=expected_sha256,
+                observed_provenance_sha256=observed_sha256,
+            )
+            .on_conflict_do_nothing(
+                index_elements=(
+                    IngressProviderViolation.tenant_id,
+                    IngressProviderViolation.ingress_id,
+                    IngressProviderViolation.violation_code,
+                    IngressProviderViolation.expected_provenance_sha256,
+                    IngressProviderViolation.observed_provenance_sha256,
+                )
+            )
+        )
 
     async def register(
         self, session: AsyncSession, discovery: GitHubIngressDiscovery, /
@@ -195,16 +255,21 @@ class GitHubIngressRepository:
         created_id = await session.scalar(statement)
         row = await self._load_locked(session, discovery)
         same_object = _matches(row, discovery)
+        canonical_changed = created_id is not None
+        if not same_object:
+            await self._record_provider_violation(session, row=row, discovery=discovery)
         if not same_object and row.state not in _TERMINAL_STATES:
             row.state = IngressState.QUARANTINED.value
             row.error_code = "append_only_violation"
             row.processed_at = datetime.now(UTC)
             await session.flush()
+            canonical_changed = True
         return IngressRegistration(
             ingress_id=row.ingress_id,
             state=IngressState(row.state),
             created=created_id is not None,
             same_object=same_object,
+            canonical_changed=canonical_changed,
         )
 
     async def validate(
@@ -227,7 +292,9 @@ class GitHubIngressRepository:
                 state=IngressState(row.state),
                 created=False,
                 same_object=True,
+                canonical_changed=False,
             )
+        canonical_changed = False
         if row.state == IngressState.VALIDATED.value:
             if (
                 row.declared_idempotency_key != idempotency_key
@@ -240,6 +307,7 @@ class GitHubIngressRepository:
             row.state = IngressState.VALIDATED.value
             row.validated_at = validated_at
             await session.flush()
+            canonical_changed = True
         else:
             raise GitHubIngressStorageError("state_invalid")
         return IngressRegistration(
@@ -247,6 +315,7 @@ class GitHubIngressRepository:
             state=IngressState(row.state),
             created=False,
             same_object=True,
+            canonical_changed=canonical_changed,
         )
 
     async def quarantine(
@@ -266,6 +335,7 @@ class GitHubIngressRepository:
                 state=IngressState(row.state),
                 created=False,
                 same_object=_matches(row, discovery),
+                canonical_changed=False,
             )
         row.state = IngressState.QUARANTINED.value
         row.error_code = error_code
@@ -277,6 +347,7 @@ class GitHubIngressRepository:
             state=IngressState(row.state),
             created=False,
             same_object=_matches(row, discovery),
+            canonical_changed=True,
         )
 
     async def terminalize(

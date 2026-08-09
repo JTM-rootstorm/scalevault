@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 from kivra_memory.domain.identifiers import new_uuid7
+from kivra_memory.storage.archive import recovery_table_names
 from psycopg import Connection
 from psycopg import sql as psycopg_sql
 from sqlalchemy import create_engine, text
@@ -427,14 +428,14 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
         (
             "kivra_memory_exporter",
             "genesis_import_sources",
-            "",
-            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
         ),
         (
             "kivra_memory_api",
             "memory_content_keys",
-            "SELECT",
-            "INSERT,UPDATE,DELETE,TRUNCATE",
+            "SELECT,INSERT",
+            "UPDATE,DELETE,TRUNCATE",
         ),
         (
             "kivra_memory_api",
@@ -464,7 +465,19 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
             "SELECT,INSERT,UPDATE,DELETE",
             "TRUNCATE",
         ),
+        (
+            "kivra_memory_worker",
+            "memory_content_keys",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
         ("kivra_memory_ingress", "ingress_items", "SELECT", "INSERT,UPDATE,DELETE,TRUNCATE"),
+        (
+            "kivra_memory_ingress",
+            "ingress_provider_violations",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
         ("kivra_memory_ingress", "memory_events", "", "SELECT,INSERT,UPDATE,DELETE,TRUNCATE"),
         (
             "kivra_memory_ingress",
@@ -490,9 +503,15 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
         ),
         (
             "kivra_memory_exporter",
+            "ingress_provider_violations",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_exporter",
             "archive_export_checkpoints",
-            "SELECT,INSERT",
-            "UPDATE,DELETE,TRUNCATE",
+            "SELECT,INSERT,UPDATE",
+            "DELETE,TRUNCATE",
         ),
     ),
 )
@@ -513,6 +532,46 @@ def test_runtime_table_privilege_matrix(
             text("SELECT has_table_privilege(:role, :table_name, :privileges)"),
             {"role": role, "table_name": f"public.{table_name}", "privileges": denied},
         ).scalar_one()
+
+
+def test_exporter_can_read_exact_recovery_allowlist_and_update_checkpoint_state(
+    role_secured_database: AlembicRunner,
+) -> None:
+    with role_secured_database.engine.begin() as connection:
+        for table_name in recovery_table_names():
+            assert connection.execute(
+                text("SELECT has_table_privilege('kivra_memory_exporter', :table_name, 'SELECT')"),
+                {"table_name": f"public.{table_name}"},
+            ).scalar_one()
+        for column in (
+            "state",
+            "git_commit_sha",
+            "remote_git_commit_sha",
+            "committed_at",
+            "pushed_at",
+        ):
+            assert connection.execute(
+                text(
+                    "SELECT has_column_privilege("
+                    "'kivra_memory_exporter', 'public.archive_export_checkpoints', "
+                    ":column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
+        for column in (
+            "manifest_sha256",
+            "first_event_sequence",
+            "last_event_sequence",
+            "previous_checkpoint_id",
+        ):
+            assert not connection.execute(
+                text(
+                    "SELECT has_column_privilege("
+                    "'kivra_memory_exporter', 'public.archive_export_checkpoints', "
+                    ":column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
 
 
 def test_genesis_importer_has_only_terminal_result_update_columns(
@@ -548,6 +607,72 @@ def test_genesis_importer_has_only_terminal_result_update_columns(
             ).scalar_one()
 
 
+def test_content_key_roles_have_only_exact_lifecycle_update_columns(
+    role_secured_database: AlembicRunner,
+) -> None:
+    expected = {
+        "kivra_memory_api": {"state", "destruction_requested_at"},
+        "kivra_memory_worker": {
+            "state",
+            "destroyed_at",
+            "destruction_receipt_sha256",
+        },
+    }
+    all_columns = {
+        "content_key_id",
+        "tenant_id",
+        "lineage_id",
+        "memory_id",
+        "provider_name",
+        "provider_key_reference",
+        "state",
+        "created_at",
+        "destruction_requested_at",
+        "destroyed_at",
+        "destruction_receipt_sha256",
+    }
+    with role_secured_database.engine.begin() as connection:
+        for role, allowed in expected.items():
+            for column in all_columns:
+                has_update = connection.execute(
+                    text(
+                        "SELECT has_column_privilege(:role, "
+                        "'public.memory_content_keys', :column, 'UPDATE')"
+                    ),
+                    {"role": role, "column": column},
+                ).scalar_one()
+                assert bool(has_update) is (column in allowed)
+
+
+def test_ingress_can_only_append_content_free_provider_violation_columns(
+    role_secured_database: AlembicRunner,
+) -> None:
+    insertable = {
+        "tenant_id",
+        "ingress_id",
+        "violation_code",
+        "expected_provenance_sha256",
+        "observed_provenance_sha256",
+    }
+    with role_secured_database.engine.begin() as connection:
+        for column in (*sorted(insertable), "detected_at"):
+            has_insert = connection.execute(
+                text(
+                    "SELECT has_column_privilege('kivra_memory_ingress', "
+                    "'public.ingress_provider_violations', :column, 'INSERT')"
+                ),
+                {"column": column},
+            ).scalar_one()
+            assert bool(has_insert) is (column in insertable)
+            assert not connection.execute(
+                text(
+                    "SELECT has_column_privilege('kivra_memory_ingress', "
+                    "'public.ingress_provider_violations', :column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
+
+
 def test_other_runtime_roles_have_no_genesis_table_privileges(
     role_secured_database: AlembicRunner,
 ) -> None:
@@ -564,7 +689,6 @@ def test_other_runtime_roles_have_no_genesis_table_privileges(
         "kivra_memory_policy",
         "kivra_memory_worker",
         "kivra_memory_ingress",
-        "kivra_memory_exporter",
     )
     with role_secured_database.engine.begin() as connection:
         for role in denied_roles:
@@ -642,6 +766,7 @@ def test_column_grants_keep_ingress_validation_separate_from_api_processing(
         "external_object_id",
         "commit_id",
         "blob_id",
+        "discovered_at",
     )
     ingress_update_columns = (
         "state",

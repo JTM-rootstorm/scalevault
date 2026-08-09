@@ -177,7 +177,7 @@ class GitHubIngressOrchestrator:
             return GitHubIngressProcessResult(
                 ingress_id=registration.ingress_id,
                 state=registration.state,
-                disposition="terminal" if registration.terminal else "unchanged",
+                disposition="terminal" if registration.canonical_changed else "unchanged",
                 code="append_only_violation",
             )
         if registration.terminal:

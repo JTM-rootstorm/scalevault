@@ -65,3 +65,40 @@ def test_key_reference_table_explicitly_contains_no_key_material() -> None:
         "destroyed_at",
         "destruction_receipt_sha256",
     }
+    assert content_keys.info["scalevault_immutable_fields"] == (
+        "content_key_id",
+        "tenant_id",
+        "lineage_id",
+        "memory_id",
+        "provider_name",
+        "provider_key_reference",
+        "created_at",
+    )
+    assert content_keys.info["scalevault_delete_forbidden"] is True
+    checks = {
+        str(constraint.name): str(constraint.sqltext)
+        for constraint in content_keys.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    lifecycle = checks["ck_memory_content_keys_lifecycle_shape"]
+    assert "state = 'active'" in lifecycle
+    assert "state IN ('destruction_requested', 'failed')" in lifecycle
+    assert "state = 'destroyed'" in lifecycle
+    assert "destruction_receipt_sha256 IS NOT NULL" in lifecycle
+
+
+def test_ingress_provider_violation_audit_is_content_free_and_append_only() -> None:
+    violations = metadata.tables["ingress_provider_violations"]
+
+    assert set(violations.c.keys()) == {
+        "tenant_id",
+        "ingress_id",
+        "violation_code",
+        "expected_provenance_sha256",
+        "observed_provenance_sha256",
+        "detected_at",
+    }
+    assert violations.info["scalevault_tenant_owned"] is True
+    assert violations.info["scalevault_immutable"] is True
+    assert violations.info["scalevault_append_only"] is True
+    assert violations.info["scalevault_content_free"] is True

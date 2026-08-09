@@ -652,8 +652,33 @@ class MemoryContentKey(Base):
             "destruction_receipt_sha256 IS NULL OR octet_length(destruction_receipt_sha256) = 32",
             name="destruction_receipt_length",
         ),
+        CheckConstraint(
+            "(state = 'active' AND destruction_requested_at IS NULL "
+            "AND destroyed_at IS NULL AND destruction_receipt_sha256 IS NULL) OR "
+            "(state IN ('destruction_requested', 'failed') "
+            "AND destruction_requested_at IS NOT NULL AND destroyed_at IS NULL "
+            "AND destruction_receipt_sha256 IS NULL) OR "
+            "(state = 'destroyed' AND destruction_requested_at IS NOT NULL "
+            "AND destroyed_at IS NOT NULL AND destruction_receipt_sha256 IS NOT NULL)",
+            name="lifecycle_shape",
+        ),
         uuid_v7_check("content_key_id", name="content_key_id_uuid_v7"),
-        {"info": {TENANT_OWNED_INFO_KEY: True, "scalevault_contains_no_key_material": True}},
+        {
+            "info": {
+                TENANT_OWNED_INFO_KEY: True,
+                "scalevault_contains_no_key_material": True,
+                "scalevault_immutable_fields": (
+                    "content_key_id",
+                    "tenant_id",
+                    "lineage_id",
+                    "memory_id",
+                    "provider_name",
+                    "provider_key_reference",
+                    "created_at",
+                ),
+                "scalevault_delete_forbidden": True,
+            }
+        },
     )
 
     content_key_id: Mapped[UUID] = mapped_column(primary_key=True)

@@ -169,6 +169,35 @@ def test_identity_and_ancestry_fields_have_targeted_immutable_triggers(
         assert all(field in by_table[table] for field in fields)
 
 
+def test_content_key_lifecycle_has_forward_only_audit_and_delete_barriers(
+    migrated_database: AlembicRunner,
+) -> None:
+    with migrated_database.connect() as connection:
+        definitions = {
+            str(name): " ".join(str(definition).lower().split())
+            for name, definition in connection.execute(
+                text(
+                    "SELECT t.tgname, pg_get_triggerdef(t.oid) "
+                    "FROM pg_trigger AS t "
+                    "JOIN pg_class AS c ON c.oid = t.tgrelid "
+                    "JOIN pg_namespace AS n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = 'public' "
+                    "AND c.relname = 'memory_content_keys' "
+                    "AND NOT t.tgisinternal"
+                )
+            ).all()
+        }
+
+    assert "before update of" in definitions["trg_memory_content_keys_immutable_fields"]
+    assert "provider_key_reference" in definitions["trg_memory_content_keys_immutable_fields"]
+    assert "before delete" in definitions["trg_memory_content_keys_delete_forbidden"]
+    assert "before truncate" in definitions["trg_memory_content_keys_truncate_forbidden"]
+    assert "before insert" in definitions["trg_memory_content_keys_lifecycle_insert"]
+    lifecycle = definitions["trg_memory_content_keys_lifecycle"]
+    assert "before update of state, destruction_requested_at, destroyed_at" in lifecycle
+    assert "destruction_receipt_sha256" in lifecycle
+
+
 def test_memories_has_branch_visibility_trigger(migrated_database: AlembicRunner) -> None:
     with migrated_database.connect() as connection:
         trigger = connection.execute(
