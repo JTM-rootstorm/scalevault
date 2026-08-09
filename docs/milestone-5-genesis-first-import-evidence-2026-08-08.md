@@ -2,7 +2,7 @@
 
 - Review date: 2026-08-08 (America/Chicago)
 - Status: Complete within the staged authentication and review boundary
-- Accepted implementation baseline: `8e131ea`
+- Accepted implementation baseline: `009c694`
 
 This record is content-free. It contains no memory statements, relationship
 content, evidence excerpts, private transport coordinates, credentials, or
@@ -104,7 +104,7 @@ PostgreSQL cluster startup for matrices already covered elsewhere.
 Canonical apply exposed one additional least-privilege regression before any
 canonical memory write: PostgreSQL requires `UPDATE` privilege for a
 `SELECT ... FOR UPDATE`, while the Genesis importer is intentionally
-INSERT-only on memory projections. Commit `8e131ea` retains ordinary mutation
+INSERT-only on memory projections. Commit `009c694` retains ordinary mutation
 locks but omits update locks on create-only projection reads already protected
 by advisory locks and uniqueness constraints. The new importer-role regression
 passed alone in 73.91 seconds; the complete six-case Genesis suite then passed
@@ -122,7 +122,7 @@ Retained evidence:
 ## Canonical preflight and cutover
 
 The canonical node was upgraded before the import. The accepted source is
-installed at `/opt/kivra-memory/releases/8e131ea`, the application symlink
+installed at `/opt/kivra-memory/releases/009c694`, the application symlink
 selects that release, and PostgreSQL reports migration
 `0004_genesis_import_provenance`. The API and outbound tunnel were stopped for
 the protected apply.
@@ -180,7 +180,7 @@ authorized review mode covered by the repository and disposable PostgreSQL
 retrieval suites.
 
 After verification, the API and outbound tunnel restarted on release
-`8e131ea`. `/readyz` reported database, migration, and extension readiness, and
+`009c694`. `/readyz` reported database, migration, and extension readiness, and
 the official MCP client discovered the exact 19-tool Milestone 5 surface.
 
 ## Post-import recovery point
