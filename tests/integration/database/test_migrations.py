@@ -264,10 +264,15 @@ def test_existing_0008_secure_tunnel_binding_without_installation_fails_closed(
                 "transport_kind, scopes, capability_profile) VALUES ("
                 ":client_id, :tenant_id, 'm8-secure-client', 'M8 secure client', "
                 "'interactive', 'secure_tunnel', ARRAY['memory.read.get'], "
-                '\'{"contract_version":"scalevault-client-capability-v1",'
-                '"read":null}\'::jsonb)'
+                "CAST(:capability_profile AS jsonb))"
             ),
-            {"client_id": client_id, "tenant_id": tenant_id},
+            {
+                "client_id": client_id,
+                "tenant_id": tenant_id,
+                "capability_profile": (
+                    '{"contract_version":"scalevault-client-capability-v1","read":null}'
+                ),
+            },
         )
         connection.execute(
             text(

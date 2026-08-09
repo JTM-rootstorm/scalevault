@@ -1063,6 +1063,11 @@ async def test_credential_admin_role_executes_create_list_rotate_and_revoke(
                     enrolled_at=restored_at,
                     health_state="unknown",
                 ),
+            )
+        )
+        session.flush()
+        session.add_all(
+            (
                 TransportBinding(
                     transport_binding_id=restored_binding_id,
                     tenant_id=tenant_id,
@@ -1164,7 +1169,10 @@ async def test_credential_admin_role_executes_create_list_rotate_and_revoke(
                 read=None,
             ),
         )
-        listed = await service.list_metadata(tenant_id=tenant_id)
+        listed = await service.list_metadata(
+            tenant_id=tenant_id,
+            client_id=issued.metadata.client_id,
+        )
         assert [row.credential_id for row in listed] == [issued.metadata.credential_id]
 
         authorization: str | None = None
