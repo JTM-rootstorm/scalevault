@@ -194,14 +194,50 @@ class Memory(Base):
             "content_key_id IS NOT NULL)",
             name="content_key_required",
         ),
+        CheckConstraint(
+            "(content_protection = 'plaintext' AND sealed_envelope_version IS NULL AND "
+            "sealed_algorithm IS NULL AND sealed_nonce IS NULL AND sealed_ciphertext IS NULL "
+            "AND sealed_aad_sha256 IS NULL AND safe_summary IS NULL) OR "
+            "(content_protection IN ('envelope_encrypted', 'cryptographically_erased') AND "
+            "sealed_envelope_version = 1 AND sealed_algorithm = 'AES-256-GCM' AND "
+            "sealed_nonce IS NOT NULL AND sealed_ciphertext IS NOT NULL AND "
+            "sealed_aad_sha256 IS NOT NULL AND safe_summary IS NOT NULL)",
+            name="sealed_envelope_shape",
+        ),
+        CheckConstraint(
+            "sealed_nonce IS NULL OR octet_length(sealed_nonce) = 12",
+            name="sealed_nonce_length",
+        ),
+        CheckConstraint(
+            "sealed_ciphertext IS NULL OR octet_length(sealed_ciphertext) BETWEEN 17 AND 716816",
+            name="sealed_ciphertext_length",
+        ),
+        CheckConstraint(
+            "sealed_aad_sha256 IS NULL OR octet_length(sealed_aad_sha256) = 32",
+            name="sealed_aad_sha256_length",
+        ),
+        CheckConstraint(
+            "safe_summary IS NULL OR length(safe_summary) BETWEEN 1 AND 1024",
+            name="safe_summary_length",
+        ),
+        CheckConstraint(
+            "content_protection = 'plaintext' OR (statement IS NULL AND "
+            "reason_to_remember IS NULL AND normalized_fingerprint IS NULL AND "
+            "interpretation_limits = '[]'::jsonb AND metadata = '{}'::jsonb)",
+            name="sealed_plaintext_absence",
+        ),
         CheckConstraint("revision >= 1", name="revision_positive"),
         CheckConstraint("length(statement) BETWEEN 1 AND 8192", name="statement_length"),
         CheckConstraint("length(reason_to_remember) BETWEEN 1 AND 4096", name="reason_length"),
         CheckConstraint(
             "(status = 'tombstoned' AND statement IS NULL AND reason_to_remember IS NULL AND "
             "normalized_fingerprint IS NULL AND interpretation_limits = '[]'::jsonb) OR "
-            "(status <> 'tombstoned' AND statement IS NOT NULL AND reason_to_remember IS NOT NULL "
-            "AND normalized_fingerprint IS NOT NULL)",
+            "(status <> 'tombstoned' AND content_protection = 'plaintext' AND "
+            "statement IS NOT NULL AND reason_to_remember IS NOT NULL AND "
+            "normalized_fingerprint IS NOT NULL) OR "
+            "(status <> 'tombstoned' AND content_protection = 'envelope_encrypted' AND "
+            "statement IS NULL AND reason_to_remember IS NULL AND normalized_fingerprint IS NULL "
+            "AND interpretation_limits = '[]'::jsonb AND metadata = '{}'::jsonb)",
             name="tombstone_content_shape",
         ),
         CheckConstraint(
@@ -313,6 +349,12 @@ class Memory(Base):
         String(32), nullable=False, server_default=text("'plaintext'")
     )
     content_key_id: Mapped[UUID | None] = mapped_column()
+    sealed_envelope_version: Mapped[int | None] = mapped_column(SmallInteger())
+    sealed_algorithm: Mapped[str | None] = mapped_column(String(32))
+    sealed_nonce: Mapped[bytes | None] = mapped_column(LargeBinary())
+    sealed_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary())
+    sealed_aad_sha256: Mapped[bytes | None] = mapped_column(LargeBinary())
+    safe_summary: Mapped[str | None] = mapped_column(Text())
     last_event_id: Mapped[UUID] = mapped_column(nullable=False)
 
 

@@ -1,0 +1,10 @@
+{
+    "contract_version": "scalevault.sealed-content-envelope.v1",
+    "envelope_version": 1,
+    "algorithm": "AES-256-GCM",
+    "content_key_id": "019c0000-0000-7000-8000-000000000061",
+    "nonce": "AAECAwQFBgcICQoL",
+    "ciphertext": "AAECAwQFBgcICQoLDA0ODxA=",
+    "aad_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "safe_summary": "Synthetic sealed-content contract fixture."
+}
