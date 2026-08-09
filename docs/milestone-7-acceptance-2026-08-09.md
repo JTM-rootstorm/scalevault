@@ -2,7 +2,8 @@
 
 - Review date: 2026-08-09 (America/Chicago)
 - Status: Complete for authenticated direct-private Codex access
-- Deployed implementation source: `8b01b22`
+- Accepted signed implementation source: `401204e`
+- Tree-equivalent deployed pre-sign source: `8b01b22`
 - Deployed source-archive SHA-256:
   `f9bbcc33e7dcd7a1f99a823702ba6996006746fb67e7aae0db85f2c23e01f568`
 
@@ -167,4 +168,5 @@ ingress objects.
 
 Relay-backed remote Codex mutation remains a later milestone. The checked-in
 relay example stays disabled, and direct-private credentials cannot be reused
-as relay identities. No Git remote was pushed during Milestone 7 acceptance.
+as relay identities. No Git remote was pushed during the live acceptance;
+the verified tree-equivalent history was signed and published afterward.
