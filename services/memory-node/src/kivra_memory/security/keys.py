@@ -74,13 +74,27 @@ class KeyDestructionReceipt:
 
 
 @runtime_checkable
-class KeyProvider(Protocol):
-    """Root-controlled provider that owns every per-memory data-encryption key."""
+class KeyDestroyer(Protocol):
+    """Destruction-only capability for per-memory data-encryption keys."""
 
     @property
     def name(self) -> str:
         """Return the stable provider name persisted with opaque key references."""
         ...
+
+    async def destroy_key(self, reference: ContentKeyReference) -> KeyDestructionReceipt:
+        """Irreversibly destroy a content key and return an opaque receipt.
+
+        Destruction must be idempotent: retries after a successful destruction
+        return the same stable receipt so a database transaction can safely
+        record completion after an interrupted attempt.
+        """
+        ...
+
+
+@runtime_checkable
+class KeyProvider(KeyDestroyer, Protocol):
+    """Root-controlled provider that can provision and read content keys."""
 
     async def provision_key(
         self,
@@ -102,15 +116,6 @@ class KeyProvider(Protocol):
         """Load transient key material for an active external reference."""
         ...
 
-    async def destroy_key(self, reference: ContentKeyReference) -> KeyDestructionReceipt:
-        """Irreversibly destroy a content key and return an opaque receipt.
-
-        Destruction must be idempotent: retries after a successful destruction
-        return the same stable receipt so a database transaction can safely
-        record completion after an interrupted attempt.
-        """
-        ...
-
 
 def _validate_bounded_text(value: str, *, field_name: str, maximum: int) -> None:
     if (
@@ -126,6 +131,7 @@ __all__ = [
     "CONTENT_KEY_BYTES",
     "ContentKeyMaterial",
     "ContentKeyReference",
+    "KeyDestroyer",
     "KeyDestructionReceipt",
     "KeyProvider",
     "KeyProviderError",

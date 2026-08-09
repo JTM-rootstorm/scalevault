@@ -25,12 +25,6 @@ useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-exporter
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-ingress
-groupadd --system kivra-sealed
-groupadd --system memory-purge
-useradd --system --no-create-home --home-dir /nonexistent \
-  --shell /usr/sbin/nologin --gid memory-purge memory-purge
-usermod --append --groups kivra-sealed memory-api
-usermod --append --groups kivra-memory,kivra-sealed memory-purge
 mountpoint --quiet /mnt/memory
 install -d -o root -g root -m 0755 /opt/kivra-memory/app
 install -d -o root -g kivra-memory -m 0750 /etc/kivra-memory
@@ -41,8 +35,6 @@ install -d -o memory-node -g kivra-memory -m 0700 \
   /mnt/memory/kivra-memory/node-agent
 install -d -o memory-exporter -g kivra-memory -m 0700 \
   /mnt/memory/kivra-memory/archive
-install -d -o root -g kivra-sealed -m 2770 \
-  /var/lib/kivra-memory-sealed/keys
 ```
 
 Treat an already-existing account with unexpected UID, GID, shell, home, or
@@ -70,18 +62,45 @@ under `systemd/sealed-content/`, a root-owned mode-`0600` file containing 32 to
 128 random bytes at `/etc/kivra-memory/sealed-digest-binding`, and these API
 settings:
 
+```sh
+groupadd --system kivra-sealed
+groupadd --system memory-purge
+useradd --system --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin --gid memory-purge memory-purge
+usermod --append --groups kivra-sealed memory-api
+usermod --append --groups kivra-memory,kivra-sealed memory-purge
+install -d -o root -g kivra-sealed -m 2710 \
+  /var/lib/kivra-memory-sealed/keys
+install -d -o root -g kivra-sealed -m 2770 \
+  /var/lib/kivra-memory-sealed/keys/control
+install -d -o root -g kivra-sealed -m 2770 \
+  /var/lib/kivra-memory-sealed/keys/material
+```
+
+Treat an existing sealed account, group membership, directory owner, or mode
+that differs from this layout as a failed prerequisite. The API creates raw
+DEK files in `material` as `memory-api` mode `0600`. The separate
+`memory-purge` user can create the stable, non-secret receipt tombstone in
+`control` and unlink a known material filename, but Unix DAC prevents it from
+opening a DEK file. Do not make material files group-readable and do not run the
+purge service as `memory-api`.
+
+Configure the API with:
+
 ```text
 KIVRA_MEMORY_SEALED_CONTENT_ENABLED=true
 KIVRA_MEMORY_SEALED_KEY_PROVIDER_ROOT=/var/lib/kivra-memory-sealed/keys
 KIVRA_MEMORY_SEALED_DIGEST_BINDING_CREDENTIAL=/run/credentials/kivra-memory-api.service/sealed-digest-binding
 ```
 
-The local provider never writes key bytes to PostgreSQL, environment variables,
-Git, or `/mnt/memory`. Back up `/var/lib/kivra-memory-sealed/keys` and the
-digest-binding credential through a separate restricted key-recovery process.
-Restoring only PostgreSQL and the archive does not restore sealed-content
-readability. Replacing the binding credential makes existing sealed idempotency
-bindings unverifiable and requires a separately reviewed rotation procedure.
+The local provider never writes key bytes to its `control` tree, PostgreSQL,
+environment variables, Git, or `/mnt/memory`. Back up both `control` and
+`material` below `/var/lib/kivra-memory-sealed/keys`, plus the digest-binding
+credential, through a separate restricted key-recovery process. Restore them
+together; restoring only PostgreSQL and the archive does not restore
+sealed-content readability. Replacing the binding credential makes existing
+sealed idempotency bindings unverifiable and requires a separately reviewed
+rotation procedure.
 
 Install `memory-sealed-worker.env` as `root:memory-purge` mode `0640`:
 
@@ -96,7 +115,9 @@ KIVRA_MEMORY_PURGE_TRANSPORT_BINDING_ID=REPLACE_WITH_UUIDV7
 Those IDs must identify one unexpired `internal_service` binding with a service
 actor, a worker client scoped exactly to `memory.lifecycle.purge`, and the exact
 authorized operation `payload_purge_completed`. The worker claims only
-`purge_payload` jobs and emits only content-free startup and retry diagnostics.
+`purge_payload` jobs, composes only the destruction-capability provider, loads
+no key or digest-binding credential, and emits only content-free startup and
+retry diagnostics.
 The authenticated API composition must construct both `SelectionEngine` and
 `QueryEngine` through `SealedRuntime`; setting the environment variables alone
 does not turn dependency-unavailable MCP executors into a usable sensitivity-4

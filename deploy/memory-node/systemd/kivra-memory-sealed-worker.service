@@ -2,7 +2,8 @@
 Description=ScaleVault sealed-content purge worker
 After=postgresql@17-main.service
 Requires=postgresql@17-main.service
-ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys
+ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys/control
+ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys/material
 
 [Service]
 Type=simple
@@ -31,7 +32,8 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=any
 IPAddressAllow=localhost
 CapabilityBoundingSet=
-ReadWritePaths=/var/lib/kivra-memory-sealed/keys
+ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control
+ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material
 
 [Install]
 WantedBy=multi-user.target

@@ -22,7 +22,7 @@ from kivra_memory.domain.events import (
     event_hash_fields,
 )
 from kivra_memory.domain.identifiers import new_uuid7
-from kivra_memory.security.keys import ContentKeyReference, KeyProvider, KeyProviderError
+from kivra_memory.security.keys import ContentKeyReference, KeyDestroyer, KeyProviderError
 from kivra_memory.storage.event_store import append_memory_event
 from kivra_memory.storage.live_projection import (
     load_projection_state_for_update,
@@ -152,7 +152,7 @@ async def handle_purge_payload_job(
     *,
     job: ClaimedOutboxJob,
     principal: CommandPrincipal,
-    key_provider: KeyProvider,
+    key_destroyer: KeyDestroyer,
     now: datetime | None = None,
 ) -> SealedContentPurgeResult:
     """Destroy one per-memory key and atomically record cryptographic erasure."""
@@ -207,9 +207,9 @@ async def handle_purge_payload_job(
         provider_key_reference=key_row.provider_key_reference,
     )
     try:
-        if key_provider.name != reference.provider_name:
+        if key_destroyer.name != reference.provider_name:
             raise KeyProviderError()
-        receipt = await key_provider.destroy_key(reference)
+        receipt = await key_destroyer.destroy_key(reference)
         receipt_sha256 = hashlib.sha256(receipt.receipt).digest()
     except Exception:
         raise SealedContentPurgeError("dependency_unavailable") from None

@@ -641,11 +641,7 @@ def test_content_key_roles_have_only_exact_lifecycle_update_columns(
 ) -> None:
     expected = {
         "kivra_memory_api": {"state", "destruction_requested_at"},
-        "kivra_memory_worker": {
-            "state",
-            "destroyed_at",
-            "destruction_receipt_sha256",
-        },
+        "kivra_memory_worker": set(),
         "kivra_memory_purge": {
             "state",
             "destroyed_at",
@@ -775,6 +771,44 @@ def test_purge_role_has_only_handler_required_table_and_column_privileges(
                 {"column": column},
             ).scalar_one()
             assert bool(has_update) is (column in memory_update_columns)
+
+        embedding_columns = tuple(
+            connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'memory_embeddings_v1'"
+                )
+            ).scalars()
+        )
+        for column in embedding_columns:
+            has_select = connection.execute(
+                text(
+                    "SELECT has_column_privilege('kivra_memory_purge', "
+                    "'public.memory_embeddings_v1', :column, 'SELECT')"
+                ),
+                {"column": column},
+            ).scalar_one()
+            assert bool(has_select) is (column in {"tenant_id", "memory_id"})
+
+
+def test_purge_role_can_execute_tenant_scoped_embedding_delete(
+    role_secured_database: AlembicRunner,
+) -> None:
+    with role_secured_database.engine.begin() as connection:
+        connection.execute(text("SET ROLE kivra_memory_purge"))
+        connection.execute(
+            text("SELECT set_config('scalevault.tenant_id', :tenant_id, true)"),
+            {"tenant_id": str(TENANT_A)},
+        )
+        result = connection.execute(
+            text(
+                "DELETE FROM memory_embeddings_v1 "
+                "WHERE tenant_id = :tenant_id AND memory_id = :memory_id"
+            ),
+            {"tenant_id": TENANT_A, "memory_id": TENANT_B},
+        )
+
+    assert result.rowcount == 0
 
 
 def test_ingress_can_only_append_content_free_provider_violation_columns(

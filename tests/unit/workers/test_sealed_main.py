@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import pwd
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
 from kivra_memory.domain.identifiers import new_uuid7
+from kivra_memory.security.local_key_provider import LOCAL_KEY_PROVIDER_ROOT
 from kivra_memory.storage.outbox_worker import ClaimedOutboxJob
 from kivra_memory.workers import sealed_main
 from kivra_memory.workers.sealed_content import (
@@ -119,6 +122,37 @@ def test_main_sanitizes_startup_failure(
     assert sentinel not in captured.err
 
 
+def test_main_composes_only_destruction_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings()
+    destroyer = MagicMock(spec=["name", "destroy_key"])
+    constructor = MagicMock(return_value=destroyer)
+    run_worker = AsyncMock()
+    monkeypatch.setattr(
+        sealed_main.SealedWorkerSettings,
+        "from_environment",
+        MagicMock(return_value=settings),
+    )
+    monkeypatch.setattr(
+        pwd,
+        "getpwnam",
+        MagicMock(return_value=SimpleNamespace(pw_uid=8123)),
+    )
+    monkeypatch.setattr(sealed_main, "LocalDirectoryKeyDestroyer", constructor)
+    monkeypatch.setattr(sealed_main, "run_sealed_worker", run_worker)
+
+    sealed_main.main()
+
+    constructor.assert_called_once_with(
+        LOCAL_KEY_PROVIDER_ROOT,
+        required_owner_uid=0,
+        material_file_owner_uid=8123,
+    )
+    run_worker.assert_awaited_once_with(settings, destroyer)
+    assert not hasattr(destroyer, "get_key")
+
+
 @pytest.mark.asyncio
 async def test_worker_claims_only_purge_and_acknowledges_with_exact_scope(
     monkeypatch: pytest.MonkeyPatch,
@@ -155,7 +189,7 @@ async def test_worker_claims_only_purge_and_acknowledges_with_exact_scope(
     assert handle_call is not None
     assert claim_call.kwargs["job_types"] == ("purge_payload",)
     assert recover_call.kwargs["job_types"] == ("purge_payload",)
-    assert handle_call.kwargs["key_provider"] is provider
+    assert handle_call.kwargs["key_destroyer"] is provider
     assert handle_call.kwargs["principal"].scopes == frozenset({"memory.lifecycle.purge"})
     assert acknowledge.await_count == 1
 
@@ -241,11 +275,20 @@ def test_systemd_profile_is_local_separate_and_least_privilege() -> None:
         "deploy/memory-node/systemd/sealed-content/"
         "kivra-memory-api.service.d/20-sealed-content.conf"
     ).read_text()
+    operator_documentation = REPOSITORY_ROOT.joinpath(
+        "deploy/memory-node/systemd/README.md"
+    ).read_text()
 
     assert "User=memory-purge" in unit
     assert "Group=memory-purge" in unit
     assert "SupplementaryGroups=kivra-memory kivra-sealed" in unit
-    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys" in unit
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in unit
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material" in unit
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys" not in unit.splitlines()
+    assert "LoadCredential=" not in unit
     assert "/mnt/memory" not in unit
     assert "LoadCredential=sealed-digest-binding:" in drop_in
-    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys" in drop_in
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in drop_in
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material" in drop_in
+    assert "DEK files in `material` as `memory-api` mode `0600`" in operator_documentation
+    assert "Do not make material files group-readable" in operator_documentation

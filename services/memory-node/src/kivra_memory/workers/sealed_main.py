@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pwd
 import signal
 import sys
 from dataclasses import dataclass, field
@@ -17,10 +18,10 @@ from sqlalchemy.engine import make_url
 
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.domain.identifiers import new_uuid7, require_uuid7
-from kivra_memory.security.keys import KeyProvider
+from kivra_memory.security.keys import KeyDestroyer
 from kivra_memory.security.local_key_provider import (
     LOCAL_KEY_PROVIDER_ROOT,
-    LocalDirectoryKeyProvider,
+    LocalDirectoryKeyDestroyer,
 )
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import Actor, Client, TransportBinding
@@ -114,11 +115,11 @@ class SealedContentWorker:
         self,
         settings: SealedWorkerSettings,
         database: Database,
-        key_provider: KeyProvider,
+        key_destroyer: KeyDestroyer,
     ) -> None:
         self._settings = settings
         self._database = database
-        self._key_provider = key_provider
+        self._key_destroyer = key_destroyer
         self._owner = f"sealed-content-purge:{new_uuid7()}"
 
     def _principal(self) -> CommandPrincipal:
@@ -227,7 +228,7 @@ class SealedContentWorker:
                         session,
                         job=job,
                         principal=self._principal(),
-                        key_provider=self._key_provider,
+                        key_destroyer=self._key_destroyer,
                     )
                     await acknowledge_outbox_job(
                         session,
@@ -274,9 +275,9 @@ class SealedContentWorker:
             return
 
 
-async def run_sealed_worker(settings: SealedWorkerSettings, provider: KeyProvider) -> None:
+async def run_sealed_worker(settings: SealedWorkerSettings, destroyer: KeyDestroyer) -> None:
     database = Database(settings.database_url)
-    worker = SealedContentWorker(settings, database, provider)
+    worker = SealedContentWorker(settings, database, destroyer)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for selected_signal in (signal.SIGINT, signal.SIGTERM):
@@ -296,8 +297,12 @@ async def run_sealed_worker(settings: SealedWorkerSettings, provider: KeyProvide
 def main() -> None:
     try:
         settings = SealedWorkerSettings.from_environment()
-        provider = LocalDirectoryKeyProvider(LOCAL_KEY_PROVIDER_ROOT, required_owner_uid=0)
-        asyncio.run(run_sealed_worker(settings, provider))
+        destroyer = LocalDirectoryKeyDestroyer(
+            LOCAL_KEY_PROVIDER_ROOT,
+            required_owner_uid=0,
+            material_file_owner_uid=pwd.getpwnam("memory-api").pw_uid,
+        )
+        asyncio.run(run_sealed_worker(settings, destroyer))
     except Exception:
         print("ScaleVault sealed worker is unavailable", file=sys.stderr)
         raise SystemExit(2) from None

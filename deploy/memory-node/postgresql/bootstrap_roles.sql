@@ -387,8 +387,9 @@ BEGIN
             TO kivra_memory_genesis_importer;
     END IF;
 
-    -- Workers read event/domain state and exclusively maintain derived state,
-    -- key-destruction metadata, embeddings, and outbox leases.
+    -- Workers read event/domain state and maintain ordinary derived state,
+    -- embeddings, and outbox leases. Key destruction completion belongs only
+    -- to the dedicated purge role below.
     FOREACH table_name IN ARRAY ARRAY[
         'alembic_compatibility', 'tenants', 'actors', 'clients',
         'transport_installations', 'transport_bindings', 'personas', 'lineages',
@@ -429,13 +430,6 @@ BEGIN
     END LOOP;
     IF pg_catalog.to_regclass('public.memory_embeddings_v1') IS NOT NULL THEN
         GRANT DELETE ON TABLE public.memory_embeddings_v1 TO kivra_memory_worker;
-    END IF;
-    IF pg_catalog.to_regclass('public.memory_content_keys') IS NOT NULL THEN
-        GRANT UPDATE (
-            state,
-            destroyed_at,
-            destruction_receipt_sha256
-        ) ON TABLE public.memory_content_keys TO kivra_memory_worker;
     END IF;
     IF pg_catalog.to_regclass('public.branches') IS NOT NULL THEN
         GRANT INSERT ON TABLE public.branches TO kivra_memory_worker;
@@ -486,6 +480,10 @@ BEGIN
         ) ON TABLE public.memory_content_keys TO kivra_memory_purge;
     END IF;
     IF pg_catalog.to_regclass('public.memory_embeddings_v1') IS NOT NULL THEN
+        GRANT SELECT (
+            tenant_id,
+            memory_id
+        ) ON TABLE public.memory_embeddings_v1 TO kivra_memory_purge;
         GRANT DELETE ON TABLE public.memory_embeddings_v1 TO kivra_memory_purge;
     END IF;
     IF pg_catalog.to_regclass('public.outbox_jobs') IS NOT NULL THEN

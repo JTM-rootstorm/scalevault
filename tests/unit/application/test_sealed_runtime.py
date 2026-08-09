@@ -6,12 +6,20 @@ from unittest.mock import MagicMock
 import pytest
 from kivra_memory.application.sealed_runtime import SealedRuntime
 from kivra_memory.config import Settings
+from kivra_memory.security.local_key_provider import (
+    CONTROL_DIRECTORY_NAME,
+    MATERIAL_DIRECTORY_NAME,
+)
 
 
 def _key_root(tmp_path: Path) -> Path:
     root = tmp_path / "sealed-keys"
-    root.mkdir(mode=0o770)
-    root.chmod(0o2770)
+    root.mkdir(mode=0o710)
+    root.chmod(0o2710)
+    for directory_name in (CONTROL_DIRECTORY_NAME, MATERIAL_DIRECTORY_NAME):
+        directory = root / directory_name
+        directory.mkdir(mode=0o770)
+        directory.chmod(0o2770)
     return root
 
 
