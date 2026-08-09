@@ -153,6 +153,82 @@ async def test_provider_head_bootstrap_identity_is_database_immutable(
         await database.dispose()
 
 
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("last_verified_commit_id", "a" * 40),
+        ("last_verified_tree_id", "b" * 40),
+    ],
+)
+async def test_provider_head_rejects_commit_or_tree_advancing_alone(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+    column: str,
+    value: str,
+) -> None:
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    repository = GitHubProviderHeadRepository()
+    identity = _provider_identity()
+    await _seed(database)
+    try:
+        async with database.tenant_session(identity.tenant_id) as session:
+            await repository.load_or_create(session, identity)
+        with pytest.raises(DBAPIError) as caught:
+            async with database.tenant_session(identity.tenant_id) as session:
+                await session.execute(
+                    text(
+                        f"UPDATE ingress_provider_heads SET {column} = :value "
+                        "WHERE tenant_id = :tenant_id"
+                    ),
+                    {"value": value, "tenant_id": identity.tenant_id},
+                )
+        assert getattr(caught.value.orig, "sqlstate", None) == "23514"
+    finally:
+        await database.dispose()
+
+
+async def test_two_stale_provider_head_advances_have_one_cas_winner(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+) -> None:
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    repository = GitHubProviderHeadRepository()
+    identity = _provider_identity()
+    await _seed(database)
+    try:
+        async with database.tenant_session(identity.tenant_id) as session:
+            await repository.load_or_create(session, identity)
+
+        async def advance(commit_id: str, tree_id: str) -> object:
+            async with database.tenant_session(identity.tenant_id) as session:
+                return await repository.advance(
+                    session,
+                    identity,
+                    expected_commit_id=GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+                    expected_tree_id=GITHUB_INGRESS_BOOTSTRAP_TREE,
+                    commit_id=commit_id,
+                    tree_id=tree_id,
+                    etag=None,
+                )
+
+        outcomes = await asyncio.gather(
+            advance("a" * 40, "b" * 40),
+            advance("c" * 40, "d" * 40),
+            return_exceptions=True,
+        )
+
+        assert sum(isinstance(outcome, GitHubHeadStorageError) for outcome in outcomes) == 1
+        assert sum(not isinstance(outcome, BaseException) for outcome in outcomes) == 1
+        failure = next(
+            outcome for outcome in outcomes if isinstance(outcome, GitHubHeadStorageError)
+        )
+        assert str(failure) == "verified_head_race"
+    finally:
+        await database.dispose()
+
+
 async def test_provider_head_rejects_installation_from_an_unrelated_binding(
     postgresql_server: PostgreSQLTestServer,
     migrated_database: AlembicRunner,

@@ -4,6 +4,7 @@ enabled = false
 
 repository_owner = "JTM-rootstorm"
 repository_name = "scalevault-memory-ingress"
+repository_id = 1322346959
 default_branch = "main"
 installation_id = "REPLACE_WITH_UUIDV7"
 ingress_prefix = "ingress/v2"

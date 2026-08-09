@@ -16,6 +16,7 @@ from kivra_memory.ingress.github_fallback import (
     GitHubExistingFile,
     GitHubFallbackError,
     GitHubProposalFallbackConfig,
+    GitHubRepositoryIdentity,
     prepare_github_create_request,
 )
 from kivra_memory.ingress.status import IngressStatusPayload, IngressStatusResult
@@ -33,6 +34,7 @@ _FIXTURE = (
 _INSTALLATION_ID = UUID("019c0000-0000-7000-8000-000000000022")
 _PROPOSAL_ID = UUID("019c0000-0000-7000-8000-000000000021")
 _PATH = f"ingress/v2/{_INSTALLATION_ID}/2026/08/{_PROPOSAL_ID}.json"
+_REPOSITORY_ID = 1_322_346_959
 
 
 def _proposal() -> bytes:
@@ -62,8 +64,20 @@ def _status(ingress_id: UUID = _PROPOSAL_ID) -> IngressStatusResult:
 class StubWriter:
     response: GitHubCreateFileResponse
     existing: GitHubExistingFile | None = None
+    repository_identity: GitHubRepositoryIdentity = field(
+        default_factory=lambda: GitHubRepositoryIdentity(
+            repository_id=_REPOSITORY_ID,
+            full_name="JTM-rootstorm/scalevault-memory-ingress",
+            default_branch="main",
+        )
+    )
+    resolve_calls: list[int] = field(default_factory=list)
     create_calls: list[GitHubCreateFileRequest] = field(default_factory=list)
     read_calls: list[str] = field(default_factory=list)
+
+    async def resolve_repository(self, repository_id: int) -> GitHubRepositoryIdentity:
+        self.resolve_calls.append(repository_id)
+        return self.repository_identity
 
     async def create_file(self, request: GitHubCreateFileRequest) -> GitHubCreateFileResponse:
         self.create_calls.append(request)
@@ -72,11 +86,13 @@ class StubWriter:
     async def read_file(
         self,
         *,
+        repository_id: int,
         repository_owner: str,
         repository_name: str,
         branch: str,
         immutable_path: str,
     ) -> GitHubExistingFile:
+        assert repository_id == _REPOSITORY_ID
         assert repository_owner == "JTM-rootstorm"
         assert repository_name == "scalevault-memory-ingress"
         assert branch == "main"
@@ -96,12 +112,21 @@ class StubStatusReader:
 
 
 class FailingWriter:
+    async def resolve_repository(self, repository_id: int) -> GitHubRepositoryIdentity:
+        assert repository_id == _REPOSITORY_ID
+        return GitHubRepositoryIdentity(
+            repository_id=repository_id,
+            full_name="JTM-rootstorm/scalevault-memory-ingress",
+            default_branch="main",
+        )
+
     async def create_file(self, request: GitHubCreateFileRequest) -> GitHubCreateFileResponse:
         raise RuntimeError(f"timeout after sending {request.raw_bytes.decode()}")
 
     async def read_file(
         self,
         *,
+        repository_id: int,
         repository_owner: str,
         repository_name: str,
         branch: str,
@@ -114,6 +139,7 @@ def test_prepare_request_uses_uuid_path_and_create_only_body() -> None:
     request = prepare_github_create_request(_config(), _proposal())
 
     assert request.ingress_id == _PROPOSAL_ID
+    assert request.repository_id == _REPOSITORY_ID
     assert request.immutable_path == _PATH
     assert request.repository_owner == "JTM-rootstorm"
     assert request.repository_name == "scalevault-memory-ingress"
@@ -138,6 +164,7 @@ async def test_create_and_status_keep_one_ingress_identity() -> None:
     assert reference.created is True
     assert result.result.ingress_id == reference.ingress_id
     assert len(writer.create_calls) == 1
+    assert writer.resolve_calls == [_REPOSITORY_ID]
     assert writer.read_calls == []
     assert status_reader.calls == [_PROPOSAL_ID]
 
@@ -162,6 +189,7 @@ async def test_duplicate_create_reads_and_verifies_same_object_without_second_wr
     assert first_retry.ingress_id == _PROPOSAL_ID
     assert first_retry.created is False
     assert len(writer.create_calls) == 1
+    assert writer.resolve_calls == [_REPOSITORY_ID, _REPOSITORY_ID]
     assert writer.read_calls == [_PATH]
 
 
@@ -206,7 +234,46 @@ def test_config_rejects_wrong_external_source_or_repository() -> None:
         replace(_config(), external_source_commit="0" * 40)
     with pytest.raises(ValueError, match="configuration is invalid"):
         replace(_config(), repository_name="canonical-archive")
+    with pytest.raises(ValueError, match="configuration is invalid"):
+        replace(_config(), repository_id=_REPOSITORY_ID + 1)
     assert _config().external_source_commit == GITHUB_INGRESS_BOOTSTRAP_COMMIT
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        GitHubRepositoryIdentity(
+            repository_id=_REPOSITORY_ID + 1,
+            full_name="JTM-rootstorm/scalevault-memory-ingress",
+            default_branch="main",
+        ),
+        GitHubRepositoryIdentity(
+            repository_id=_REPOSITORY_ID,
+            full_name="JTM-rootstorm/renamed-memory-ingress",
+            default_branch="main",
+        ),
+        GitHubRepositoryIdentity(
+            repository_id=_REPOSITORY_ID,
+            full_name="JTM-rootstorm/scalevault-memory-ingress",
+            default_branch="replacement-main",
+        ),
+    ],
+)
+async def test_repository_replacement_or_rename_fails_before_create_put(
+    identity: GitHubRepositoryIdentity,
+) -> None:
+    writer = StubWriter(
+        GitHubCreateFileResponse(status_code=201, commit_id="1" * 40, blob_id="2" * 40),
+        repository_identity=identity,
+    )
+    fallback = DuplicateSafeGitHubProposalFallback(_config(), writer, StubStatusReader(_status()))
+
+    with pytest.raises(GitHubFallbackError, match="github_repository_identity_mismatch"):
+        await fallback.create_unique(_proposal())
+
+    assert writer.resolve_calls == [_REPOSITORY_ID]
+    assert writer.create_calls == []
+    assert writer.read_calls == []
 
 
 def test_sensitive_or_wrong_installation_proposal_fails_before_creation() -> None:

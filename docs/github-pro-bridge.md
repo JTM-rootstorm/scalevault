@@ -22,6 +22,14 @@ commit `7dc1cae4b9a99173d2d227be1dd1d10c7f267ce9`; the later authorization commi
 [GitHub ingress compatibility](ingress-compatibility.md). The existing probe and
 proposal client do not constitute an implementation of those newer formats.
 
+The fallback pins numeric repository ID `1322346959`. Its provider adapter must
+resolve the numeric `/repositories/1322346959` endpoint immediately before
+every create or duplicate read and require the exact ID,
+`JTM-rootstorm/scalevault-memory-ingress` full name, and `main` default branch.
+This prevents a same-name replacement, rename, or transfer from inheriting the
+pin. Identity mismatch fails before a create-file `PUT`; no request supplies an
+update `sha`.
+
 The separately versioned repository was re-audited at exact commit
 `84233835924ade0e3cf26bb995717c880c75ff5c`. It contains no proposal-creator
 code and no proposal-v2 schema; ScaleVault's checked-in v2 schema remains the

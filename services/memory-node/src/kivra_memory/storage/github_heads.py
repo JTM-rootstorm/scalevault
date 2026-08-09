@@ -120,9 +120,9 @@ class GitHubProviderHeadRepository:
         database_now = await session.scalar(select(func.current_timestamp()))
         if not isinstance(database_now, datetime):
             raise GitHubHeadStorageError("database_clock_unavailable")
+        if (row.last_verified_commit_id == commit_id) != (row.last_verified_tree_id == tree_id):
+            raise GitHubHeadStorageError("verified_head_pair_mismatch")
         if row.last_verified_commit_id == commit_id:
-            if row.last_verified_tree_id != tree_id:
-                raise GitHubHeadStorageError("verified_head_tree_mismatch")
             row.etag = etag
             row.verified_at = database_now
             await session.flush()

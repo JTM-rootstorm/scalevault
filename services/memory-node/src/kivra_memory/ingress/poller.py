@@ -6,10 +6,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from kivra_memory.ingress.github_client import (
+    MAX_PROPOSAL_BYTES,
     GitHubProposalClient,
     GitHubProposalError,
     GitHubProposalObject,
 )
+
+MAX_NEW_PROPOSALS_PER_POLL = 256
+MAX_AGGREGATE_PROPOSAL_BYTES = 4 * 1024 * 1024
 
 
 class GitHubAppendOnlyViolation(GitHubProposalError):
@@ -83,18 +87,31 @@ class GitHubSnapshotPoller:
         if any(current.get(path) != blob_id for path, blob_id in known.items()):
             raise GitHubAppendOnlyViolation("GitHub append-only object provenance changed")
 
-        proposals = tuple(
-            self._client.fetch_blob(
+        additions = tuple(entry for entry in entries if entry.path not in known)
+        if len(additions) > MAX_NEW_PROPOSALS_PER_POLL:
+            raise GitHubProposalError("GitHub poll exceeded the new proposal limit")
+        declared_bytes = sum(
+            entry.size if entry.size is not None else MAX_PROPOSAL_BYTES for entry in additions
+        )
+        if declared_bytes > MAX_AGGREGATE_PROPOSAL_BYTES:
+            raise GitHubProposalError("GitHub poll exceeded the aggregate proposal size limit")
+
+        proposals: list[GitHubProposalObject] = []
+        actual_bytes = 0
+        for entry in additions:
+            proposal = self._client.fetch_blob(
                 commit_id=head.commit_id,
                 path=entry.path,
                 blob_id=entry.blob_id,
             )
-            for entry in entries
-        )
+            actual_bytes += len(proposal.raw_bytes)
+            if actual_bytes > MAX_AGGREGATE_PROPOSAL_BYTES:
+                raise GitHubProposalError("GitHub poll exceeded the aggregate proposal size limit")
+            proposals.append(proposal)
         return GitHubSnapshotPollResult(
             next_etag=head.next_etag,
             unchanged=False,
             commit_id=head.commit_id,
             tree_id=head.tree_id,
-            proposals=proposals,
+            proposals=tuple(proposals),
         )

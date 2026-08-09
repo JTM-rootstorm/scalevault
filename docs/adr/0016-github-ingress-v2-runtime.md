@@ -67,6 +67,17 @@ failure. Existing repository objects may not change or disappear, and each
 commit may add only `100644` proposal blobs under the exact installation root.
 The checkpoint advances with commit, tree, and opaque ETag only after the full
 batch has no retry and every item is terminal or an unchanged terminal replay.
+Commit and tree advance as one database-enforced pair. A stale poller loses the
+row-locked compare-and-swap; already-terminal proposals replay without creating
+another decision, receipt, event, memory, evidence row, or outbox job.
+
+Before any proposal blob request, the worker allows at most 10,000 total
+recursive-tree entries, 256 new proposals per poll, and 4 MiB of aggregate
+declared proposal bytes. Missing size metadata is charged at the 32 KiB
+per-proposal maximum. The worker fetches only paths absent from the durable
+ingress ledger, while still checking every known path/blob identity, and also
+enforces the 4 MiB aggregate limit against the actual decoded bytes before
+appending each fetched object to the batch.
 
 Provider object identity is `(github, numeric repository ID, normalized
 create-only path)`. The row also records the observed head commit and blob SHA.

@@ -31,6 +31,7 @@ from kivra_memory.storage.github_heads import (
 
 GITHUB_FALLBACK_REPOSITORY_OWNER = "JTM-rootstorm"
 GITHUB_FALLBACK_REPOSITORY_NAME = "scalevault-memory-ingress"
+GITHUB_FALLBACK_REPOSITORY_ID = 1_322_346_959
 GITHUB_FALLBACK_BRANCH = "main"
 GITHUB_FALLBACK_PREFIX = "ingress/v2"
 GITHUB_FALLBACK_PRIVACY_WARNING: Final[Literal["github_third_party_non_sensitive_only"]] = (
@@ -58,6 +59,7 @@ class GitHubProposalFallbackConfig:
     """Non-secret, fail-closed connector profile for the one private repository."""
 
     installation_id: UUID
+    repository_id: int = GITHUB_FALLBACK_REPOSITORY_ID
     repository_owner: str = GITHUB_FALLBACK_REPOSITORY_OWNER
     repository_name: str = GITHUB_FALLBACK_REPOSITORY_NAME
     default_branch: str = GITHUB_FALLBACK_BRANCH
@@ -73,7 +75,9 @@ class GitHubProposalFallbackConfig:
     def __post_init__(self) -> None:
         require_uuid7(self.installation_id, field_name="installation_id")
         if (
-            self.repository_owner != GITHUB_FALLBACK_REPOSITORY_OWNER
+            isinstance(self.repository_id, bool)
+            or self.repository_id != GITHUB_FALLBACK_REPOSITORY_ID
+            or self.repository_owner != GITHUB_FALLBACK_REPOSITORY_OWNER
             or self.repository_name != GITHUB_FALLBACK_REPOSITORY_NAME
             or self.default_branch != GITHUB_FALLBACK_BRANCH
             or self.ingress_prefix != GITHUB_FALLBACK_PREFIX
@@ -90,6 +94,7 @@ class GitHubProposalFallbackConfig:
 class GitHubCreateFileRequest:
     """One provider create-file call; its wire body deliberately has no ``sha``."""
 
+    repository_id: int
     repository_owner: str
     repository_name: str
     branch: str
@@ -129,7 +134,23 @@ class GitHubProposalReference:
     created: bool
 
 
+@dataclass(frozen=True, slots=True)
+class GitHubRepositoryIdentity:
+    """Identity returned by an exact ``GET /repositories/{id}`` lookup."""
+
+    repository_id: int
+    full_name: str
+    default_branch: str
+
+
 class GitHubCreateOnlyWriter(Protocol):
+    async def resolve_repository(
+        self,
+        repository_id: int,
+        /,
+    ) -> GitHubRepositoryIdentity:
+        """Resolve exactly ``GET /repositories/{repository_id}`` without mutation."""
+
     async def create_file(
         self,
         request: GitHubCreateFileRequest,
@@ -139,6 +160,7 @@ class GitHubCreateOnlyWriter(Protocol):
     async def read_file(
         self,
         *,
+        repository_id: int,
         repository_owner: str,
         repository_name: str,
         branch: str,
@@ -171,10 +193,13 @@ class DuplicateSafeGitHubProposalFallback:
 
     async def create_unique(self, proposal: bytes, /) -> GitHubProposalReference:
         request = prepare_github_create_request(self._config, proposal)
+        await self._verify_repository_pin()
         try:
             response = await self._writer.create_file(request)
         except Exception:
             raise GitHubFallbackError("github_create_ambiguous") from None
+        if not isinstance(response, GitHubCreateFileResponse):
+            raise GitHubFallbackError("github_create_response_invalid")
         if response.status_code == 201:
             commit_id = _object_id(response.commit_id)
             blob_id = _object_id(response.blob_id)
@@ -188,8 +213,10 @@ class DuplicateSafeGitHubProposalFallback:
         if response.status_code not in {409, 422}:
             raise GitHubFallbackError("github_create_failed")
 
+        await self._verify_repository_pin()
         try:
             existing = await self._writer.read_file(
+                repository_id=request.repository_id,
                 repository_owner=request.repository_owner,
                 repository_name=request.repository_name,
                 branch=request.branch,
@@ -197,6 +224,8 @@ class DuplicateSafeGitHubProposalFallback:
             )
         except Exception:
             raise GitHubFallbackError("github_duplicate_read_failed") from None
+        if not isinstance(existing, GitHubExistingFile):
+            raise GitHubFallbackError("github_duplicate_read_failed")
         if existing.immutable_path != request.immutable_path or not hmac.compare_digest(
             hashlib.sha256(existing.raw_bytes).digest(),
             hashlib.sha256(request.raw_bytes).digest(),
@@ -209,6 +238,20 @@ class DuplicateSafeGitHubProposalFallback:
             blob_id=_object_id(existing.blob_id),
             created=False,
         )
+
+    async def _verify_repository_pin(self) -> None:
+        try:
+            identity = await self._writer.resolve_repository(self._config.repository_id)
+        except Exception:
+            raise GitHubFallbackError("github_repository_verification_failed") from None
+        if (
+            not isinstance(identity, GitHubRepositoryIdentity)
+            or identity.repository_id != self._config.repository_id
+            or identity.full_name
+            != f"{self._config.repository_owner}/{self._config.repository_name}"
+            or identity.default_branch != self._config.default_branch
+        ):
+            raise GitHubFallbackError("github_repository_identity_mismatch")
 
     async def status(self, ingress_id: UUID, /) -> IngressStatusResult:
         require_uuid7(ingress_id, field_name="ingress_id")
@@ -257,6 +300,7 @@ def prepare_github_create_request(
     except IngressValidationError:
         raise GitHubFallbackError("proposal_invalid") from None
     return GitHubCreateFileRequest(
+        repository_id=config.repository_id,
         repository_owner=config.repository_owner,
         repository_name=config.repository_name,
         branch=config.default_branch,
@@ -276,6 +320,7 @@ __all__ = [
     "GITHUB_FALLBACK_BRANCH",
     "GITHUB_FALLBACK_PREFIX",
     "GITHUB_FALLBACK_PRIVACY_WARNING",
+    "GITHUB_FALLBACK_REPOSITORY_ID",
     "GITHUB_FALLBACK_REPOSITORY_NAME",
     "GITHUB_FALLBACK_REPOSITORY_OWNER",
     "DuplicateSafeGitHubProposalFallback",
@@ -288,5 +333,6 @@ __all__ = [
     "GitHubProposalFallback",
     "GitHubProposalFallbackConfig",
     "GitHubProposalReference",
+    "GitHubRepositoryIdentity",
     "prepare_github_create_request",
 ]

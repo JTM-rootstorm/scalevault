@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
+import pytest
 from kivra_memory.application.github_ingress import GitHubIngressOrchestrator
 from kivra_memory.application.selection import SelectionEngine
 from kivra_memory.domain.canonical_json import canonical_json_bytes
@@ -21,6 +22,9 @@ from kivra_memory.storage.database import Database
 from kivra_memory.storage.github_heads import (
     GITHUB_INGRESS_BOOTSTRAP_COMMIT,
     GITHUB_INGRESS_BOOTSTRAP_TREE,
+    GitHubHeadStorageError,
+    GitHubProviderHeadRepository,
+    GitHubProviderIdentity,
 )
 from kivra_memory.storage.models import (
     CommandReceipt,
@@ -402,5 +406,67 @@ async def test_repeated_same_source_candidate_does_not_self_promote_or_persist_h
         )
         assert b"synthetic-project-source:" not in persisted
         assert b"synthetic:project-source:" not in persisted
+    finally:
+        await database.dispose()
+
+
+async def test_checkpoint_cas_failure_after_terminalization_replays_without_duplicates(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+) -> None:
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    tenant_id = _seed_identifier("tenants", "tenant_id")
+    project_subject_id = _identifier(902)
+    await _seed(database, project_subject_id=project_subject_id)
+    factory = async_sessionmaker(database.engine, expire_on_commit=False)
+    selection = SelectionEngine(factory, PinnedGitHubNominationResolver(_settings()))
+    worker = GitHubIngressWorker(GitHubIngressOrchestrator(factory, selection, clock=lambda: _NOW))
+    item = _work_item(801, project_subject_id=project_subject_id)
+    identity = _identity()
+    provider_identity = GitHubProviderIdentity(
+        tenant_id=identity.tenant_id,
+        installation_id=identity.installation_id,
+        transport_binding_id=identity.transport_binding_id,
+        repository_id=identity.repository_id,
+        branch_name=identity.branch_name,
+    )
+    heads = GitHubProviderHeadRepository()
+
+    try:
+        terminal = (await worker.process_batch((item,)))[0]
+        assert terminal.state is IngressState.ACCEPTED
+        assert terminal.disposition == "terminal"
+
+        async with database.tenant_session(tenant_id) as session:
+            await heads.load_or_create(session, provider_identity)
+            committed_counts = await _canonical_counts(session)
+        async with database.tenant_session(tenant_id) as session:
+            await heads.advance(
+                session,
+                provider_identity,
+                expected_commit_id=GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+                expected_tree_id=GITHUB_INGRESS_BOOTSTRAP_TREE,
+                commit_id="a" * 40,
+                tree_id="b" * 40,
+                etag='"winner"',
+            )
+        with pytest.raises(GitHubHeadStorageError, match="verified_head_race"):
+            async with database.tenant_session(tenant_id) as session:
+                await heads.advance(
+                    session,
+                    provider_identity,
+                    expected_commit_id=GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+                    expected_tree_id=GITHUB_INGRESS_BOOTSTRAP_TREE,
+                    commit_id="c" * 40,
+                    tree_id="d" * 40,
+                    etag='"stale"',
+                )
+
+        replay = (await worker.process_batch((item,)))[0]
+        assert replay.state is IngressState.ACCEPTED
+        assert replay.disposition == "unchanged"
+        async with database.tenant_session(tenant_id) as session:
+            assert await _canonical_counts(session) == committed_counts
     finally:
         await database.dispose()

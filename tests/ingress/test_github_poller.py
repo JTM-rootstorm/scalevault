@@ -10,11 +10,17 @@ from uuid import UUID
 
 import pytest
 from kivra_memory.ingress.github_client import (
+    MAX_REPOSITORY_TREE_ENTRIES,
     GitHubProposalClient,
     GitHubProposalError,
     GitHubResponse,
 )
-from kivra_memory.ingress.poller import GitHubAppendOnlyViolation, GitHubSnapshotPoller
+from kivra_memory.ingress.poller import (
+    MAX_AGGREGATE_PROPOSAL_BYTES,
+    MAX_NEW_PROPOSALS_PER_POLL,
+    GitHubAppendOnlyViolation,
+    GitHubSnapshotPoller,
+)
 
 REPOSITORY_ID = 123456789
 INSTALLATION_ID = UUID("019c0000-0000-7000-8000-000000000001")
@@ -253,6 +259,127 @@ def test_poll_handles_fifty_new_proposals_without_loss() -> None:
     assert len(result.proposals) == 50
     assert len({proposal.path for proposal in result.proposals}) == 50
     assert [proposal.raw_bytes for proposal in result.proposals] == payloads
+
+
+def test_second_head_fetches_only_additions_after_verifying_known_objects() -> None:
+    known_payload = b'{"known":true}\n'
+    new_payload = b'{"new":true}\n'
+    known_path = _path(52)
+    new_path = _path(53)
+    transport = StubTransport(
+        [
+            _response(_repository()),
+            _response(_head()),
+            _response(
+                _tree(
+                    [
+                        _tree_entry(known_path, known_payload),
+                        _tree_entry(new_path, new_payload),
+                    ]
+                )
+            ),
+            _response(_blob(new_payload)),
+        ]
+    )
+
+    result = GitHubSnapshotPoller(_client(transport)).poll(
+        trusted_commit_id=COMMIT_ID,
+        trusted_tree_id=TREE_ID,
+        known_objects={known_path: _blob_id(known_payload)},
+    )
+
+    assert [proposal.path for proposal in result.proposals] == [new_path]
+    blob_calls = [url for url, _headers in transport.calls if "/git/blobs/" in url]
+    assert blob_calls == [
+        f"https://api.github.com/repos/JTM-rootstorm/scalevault-memory-ingress/git/blobs/"
+        f"{_blob_id(new_payload)}"
+    ]
+
+
+def test_poll_rejects_excess_total_tree_entries_before_blob_fetch() -> None:
+    entries = [
+        {
+            "path": f"frozen/{index}",
+            "mode": "100644",
+            "type": "blob",
+            "sha": f"{index % 16:x}" * 40,
+            "size": 1,
+        }
+        for index in range(MAX_REPOSITORY_TREE_ENTRIES + 1)
+    ]
+    transport = StubTransport(
+        [_response(_repository()), _response(_head()), _response(_tree(entries))]
+    )
+
+    with pytest.raises(GitHubProposalError, match="entry limit"):
+        GitHubSnapshotPoller(_client(transport)).poll(
+            trusted_commit_id=COMMIT_ID,
+            trusted_tree_id=TREE_ID,
+        )
+
+    _assert_no_blob_fetch(transport)
+
+
+def test_poll_rejects_excess_new_proposals_before_blob_fetch() -> None:
+    entries = [
+        _tree_entry(_path(index), b"x")
+        for index in range(1000, 1000 + MAX_NEW_PROPOSALS_PER_POLL + 1)
+    ]
+    transport = StubTransport(
+        [_response(_repository()), _response(_head()), _response(_tree(entries))]
+    )
+
+    with pytest.raises(GitHubProposalError, match="new proposal limit"):
+        GitHubSnapshotPoller(_client(transport)).poll(
+            trusted_commit_id=COMMIT_ID,
+            trusted_tree_id=TREE_ID,
+        )
+
+    _assert_no_blob_fetch(transport)
+
+
+def test_poll_counts_unknown_sizes_conservatively_before_blob_fetch() -> None:
+    unknown_count = MAX_AGGREGATE_PROPOSAL_BYTES // (32 * 1024) + 1
+    entries = [_tree_entry(_path(index), b"x") for index in range(2000, 2000 + unknown_count)]
+    for entry in entries:
+        entry.pop("size")
+    transport = StubTransport(
+        [_response(_repository()), _response(_head()), _response(_tree(entries))]
+    )
+
+    with pytest.raises(GitHubProposalError, match="aggregate proposal size limit"):
+        GitHubSnapshotPoller(_client(transport)).poll(
+            trusted_commit_id=COMMIT_ID,
+            trusted_tree_id=TREE_ID,
+        )
+
+    _assert_no_blob_fetch(transport)
+
+
+def test_poll_enforces_actual_decoded_aggregate_when_declared_sizes_understate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("kivra_memory.ingress.poller.MAX_AGGREGATE_PROPOSAL_BYTES", 8)
+    payloads = [b"12345", b"67890"]
+    entries = [_tree_entry(_path(index), payload) for index, payload in enumerate(payloads, 3000)]
+    for entry in entries:
+        entry["size"] = 1
+    transport = StubTransport(
+        [
+            _response(_repository()),
+            _response(_head()),
+            _response(_tree(entries)),
+            *[_response(_blob(payload)) for payload in payloads],
+        ]
+    )
+
+    with pytest.raises(GitHubProposalError, match="aggregate proposal size limit"):
+        GitHubSnapshotPoller(_client(transport)).poll(
+            trusted_commit_id=COMMIT_ID,
+            trusted_tree_id=TREE_ID,
+        )
+
+    assert sum("/git/blobs/" in url for url, _headers in transport.calls) == 2
 
 
 def test_poll_sanitizes_transport_failure() -> None:

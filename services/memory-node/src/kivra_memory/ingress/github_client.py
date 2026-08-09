@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 MAX_PROPOSAL_BYTES = 32 * 1024
+MAX_REPOSITORY_TREE_ENTRIES = 10_000
 _MAX_API_RESPONSE_BYTES = 64 * 1024
 _MAX_TREE_RESPONSE_BYTES = 4 * 1024 * 1024
 _MAX_VERIFIED_COMMITS = 1000
@@ -545,6 +546,8 @@ class GitHubProposalClient:
         entries: list[GitHubTreeEntry],
         seen_paths: set[str],
     ) -> None:
+        if len(raw_entries) > MAX_REPOSITORY_TREE_ENTRIES:
+            raise GitHubProposalError("GitHub repository tree exceeded the entry limit")
         for raw_entry in raw_entries:
             if not isinstance(raw_entry, dict):
                 raise GitHubProposalError("GitHub repository tree response was invalid")
@@ -577,6 +580,8 @@ class GitHubProposalClient:
         entries: list[GitHubRepositoryEntry],
         seen_paths: set[str],
     ) -> None:
+        if len(raw_entries) > MAX_REPOSITORY_TREE_ENTRIES:
+            raise GitHubProposalError("GitHub repository tree exceeded the entry limit")
         for raw_entry in raw_entries:
             if not isinstance(raw_entry, dict):
                 raise GitHubProposalError("GitHub repository tree response was invalid")

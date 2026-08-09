@@ -6,6 +6,11 @@ credential, connector implementation, or live activation.
 
 The only supported target is the private
 `JTM-rootstorm/scalevault-memory-ingress` repository on branch `main`. The
+numeric repository identity is exactly `1322346959`. Before every create or
+duplicate read, the connector must resolve `GET /repositories/1322346959` and
+require that exact ID, full name, and default branch; a same-name replacement,
+rename, transfer, or branch change fails before the create-file `PUT` or read.
+The create request never supplies a blob `sha`, so it cannot update a path. The
 history verifier starts at commit
 `84233835924ade0e3cf26bb995717c880c75ff5c` and tree
 `2de813150fe3952e6538abc5db9c2254d835a70e`. Changing any target or bootstrap
@@ -24,7 +29,7 @@ the proposal bytes.
 Keep `enabled = false` until all of these activation gates are recorded:
 
 - the target account exposes and re-probes an approved create-file action;
-- the private repository numeric ID and GitHub installation UUIDv7 are pinned;
+- the GitHub installation UUIDv7 is pinned;
 - provider and Memory Node credentials are installed outside this file;
 - migration `0010_ingress_provider_heads` and its role grants are active;
 - the worker validates the full additive first-parent history before fetching
