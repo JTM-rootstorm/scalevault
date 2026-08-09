@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 from typing import cast
 from uuid import UUID
@@ -9,6 +10,7 @@ from uuid import UUID
 import pytest
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import NominationCommandLike
+from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import AuthorityClass
 from kivra_memory.policy import (
     EvidenceKind,
@@ -67,14 +69,32 @@ def _principal(settings: GitHubIngressSettings) -> CommandPrincipal:
     )
 
 
-def _command(basis: SelectionBasis, *, with_evidence: bool = True) -> NominationCommandLike:
+def _server_evidence_key(settings: GitHubIngressSettings) -> str:
+    identity = settings.identity
+    material = {
+        "tenant_id": identity.tenant_id,
+        "actor_id": identity.actor_id,
+        "client_id": identity.client_id,
+        "transport_binding_id": identity.transport_binding_id,
+        "repository_id": identity.repository_id,
+    }
+    return f"github-proposal-source-v1:{hashlib.sha256(canonical_json_bytes(material)).hexdigest()}"
+
+
+def _command(
+    basis: SelectionBasis,
+    *,
+    with_evidence: bool = True,
+    evidence_key: str = "reviewed-project-source",
+    opaque_reference: str = "project-source:reviewed",
+) -> NominationCommandLike:
     proposal = SimpleNamespace(
         selection_basis=basis,
         evidence_references=(
             (
                 NominationEvidenceReference(
-                    evidence_key="reviewed-project-source",
-                    opaque_reference="project-source:reviewed",
+                    evidence_key=evidence_key,
+                    opaque_reference=opaque_reference,
                 ),
             )
             if with_evidence
@@ -95,6 +115,8 @@ async def test_trusted_resolver_uses_operator_profile_not_payload_claims() -> No
     assert resolved.effective_authority_class is AuthorityClass.VERIFIED_PROJECT_SOURCE
     assert resolved.evidence[0].kind is EvidenceKind.PROJECT_SOURCE
     assert resolved.evidence[0].trust is EvidenceTrust.TRUSTED
+    assert resolved.evidence[0].evidence_key == _server_evidence_key(settings)
+    assert resolved.evidence[0].evidence_key != "reviewed-project-source"
 
     with pytest.raises(RuntimeError, match="trust_profile_mismatch"):
         await PinnedGitHubNominationResolver(settings).resolve(
@@ -125,7 +147,26 @@ async def test_trusted_resolver_allows_schema_valid_proposal_without_evidence() 
     )
 
     assert resolved.source_kind == "github_proposal"
-    assert resolved.evidence == ()
+    assert len(resolved.evidence) == 1
+    assert resolved.evidence[0].evidence_key == _server_evidence_key(settings)
+
+
+async def test_trusted_resolver_key_is_stable_across_hostile_payload_references() -> None:
+    settings = _settings()
+    resolver = PinnedGitHubNominationResolver(settings)
+    first = await resolver.resolve(
+        _principal(settings),
+        _command(SelectionBasis.VERIFIED_PROJECT_DECISION),
+    )
+    second_command = _command(
+        SelectionBasis.VERIFIED_PROJECT_DECISION,
+        evidence_key="hostile-independent-source",
+        opaque_reference="hostile:must-not-persist",
+    )
+    second = await resolver.resolve(_principal(settings), second_command)
+
+    assert first.evidence == second.evidence
+    assert second.evidence[0].evidence_key == _server_evidence_key(settings)
 
 
 def test_ingress_settings_fail_closed_without_systemd_credential_directory(

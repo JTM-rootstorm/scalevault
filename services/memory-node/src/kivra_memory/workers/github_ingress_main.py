@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import signal
 import sys
@@ -23,6 +24,7 @@ from kivra_memory.application.selection import (
     ResolvedNominationContext,
     SelectionEngine,
 )
+from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import AuthorityClass
 from kivra_memory.domain.identifiers import require_uuid7
 from kivra_memory.ingress.github_client import GitHubProposalClient
@@ -171,7 +173,13 @@ class GitHubIngressSettings:
 
 
 class PinnedGitHubNominationResolver:
-    """Resolve only the operator-pinned trust profile for one ingress identity."""
+    """Resolve only the operator-pinned trust profile for one ingress identity.
+
+    Proposal evidence references are untrusted payload fields and are ignored.
+    The one trusted evidence key identifies the authenticated, operator-pinned
+    GitHub source.  It deliberately excludes proposal/object identifiers so
+    repeated submissions from one source cannot manufacture corroboration.
+    """
 
     def __init__(self, settings: GitHubIngressSettings) -> None:
         self._settings = settings
@@ -189,19 +197,29 @@ class PinnedGitHubNominationResolver:
             or command.proposal.selection_basis is not self._settings.allowed_selection_basis
         ):
             raise RuntimeError("github_ingress_trust_profile_mismatch")
-        evidence = tuple(
-            EvidenceSummary(
-                evidence_key=reference.evidence_key,
-                kind=self._settings.evidence_kind,
-                trust=self._settings.evidence_trust,
-            )
-            for reference in command.proposal.evidence_references
-        )
         return ResolvedNominationContext(
             source_kind="github_proposal",
             effective_authority_class=self._settings.authority_class,
-            evidence=evidence,
+            evidence=(
+                EvidenceSummary(
+                    evidence_key=_github_proposal_evidence_key(identity),
+                    kind=self._settings.evidence_kind,
+                    trust=self._settings.evidence_trust,
+                ),
+            ),
         )
+
+
+def _github_proposal_evidence_key(identity: GitHubIngressIdentity) -> str:
+    material = {
+        "tenant_id": identity.tenant_id,
+        "actor_id": identity.actor_id,
+        "client_id": identity.client_id,
+        "transport_binding_id": identity.transport_binding_id,
+        "repository_id": identity.repository_id,
+    }
+    digest = hashlib.sha256(canonical_json_bytes(material)).hexdigest()
+    return f"github-proposal-source-v1:{digest}"
 
 
 class PinnedPromotionPrincipalProvider:

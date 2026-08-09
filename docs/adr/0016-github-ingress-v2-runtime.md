@@ -75,9 +75,16 @@ database lifecycle barrier, never by placeholder keys or hashes.
 
 The runtime adapter validates V2 and builds the existing policy-gated
 `NominationProposal`. A trusted server resolver establishes only allowlisted
-GitHub source facts. The worker invokes `SelectionEngine` with the existing
-`memory:propose` scope and ingress ID. It does not invoke legacy mutation-v1 or
-insert events, projections, decisions, or receipts directly.
+GitHub source facts. Caller-supplied evidence references are never upgraded to
+trusted evidence. The resolver instead derives one stable, server-owned source
+key from the pinned tenant, actor, client, transport binding, and numeric
+repository identity. Proposal paths, blob and commit IDs, idempotency keys, and
+credentials are excluded so repeated proposals from one authenticated GitHub
+source cannot manufacture independent corroboration; exact object provenance
+remains in the ingress ledger and event transaction. The worker invokes
+`SelectionEngine` with the existing `memory:propose` scope and ingress ID. It
+does not invoke legacy mutation-v1 or insert events, projections, decisions, or
+receipts directly.
 
 Ingress registration, validation, policy decision, command receipt, canonical
 event when any, and terminal linkage retain their existing transaction and role
