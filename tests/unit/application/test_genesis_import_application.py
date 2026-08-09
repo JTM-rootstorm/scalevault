@@ -299,11 +299,20 @@ async def test_engine_builds_exact_imported_command_and_required_participant() -
     assert authority.actor_id != mappings.genesis_actor_id
     assert command.genesis_lineage_id == mappings.lineage_id
     assert command.proposal.metadata == {}
+    assert command.sealed_content is None
     assert command.proposal.selection_basis is SelectionBasis.IMPORTED_LEGACY
     assert (
         cast(SimpleNamespace, participant).transaction_binding_sha256
         == command.transaction_binding_sha256
     )
+    with pytest.raises(ValidationError, match="genesis sealed content is unsupported"):
+        GenesisNominationCommand.model_validate(
+            {
+                **command.model_dump(mode="python"),
+                "sealed_content": {"safe_summary": "Must remain forbidden."},
+            },
+            strict=False,
+        )
 
 
 async def test_resolver_emits_only_import_manifest_authority() -> None:

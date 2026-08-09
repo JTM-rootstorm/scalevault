@@ -26,6 +26,7 @@ from kivra_memory.workers.github_ingress import (
     GitHubIngressWorkItem,
     work_item_from_proposal,
 )
+from pydantic import ValidationError
 
 _ROOT = Path(__file__).resolve().parents[3]
 _FIXTURE = (
@@ -102,7 +103,16 @@ def test_v2_adapter_builds_only_the_existing_nomination_contract() -> None:
     assert command.proposal.sensitivity == 0
     assert command.proposal.metadata == {}
     assert command.logical_session_id is None
+    assert command.sealed_content is None
     assert "evidence_summary" not in command.model_dump(mode="json")["proposal"]
+    with pytest.raises(ValidationError, match="GitHub sealed content is unsupported"):
+        type(command).model_validate(
+            {
+                **command.model_dump(mode="python"),
+                "sealed_content": {"safe_summary": "Must remain forbidden."},
+            },
+            strict=False,
+        )
 
 
 def test_poller_object_is_bound_to_pinned_local_identity_without_invented_fields() -> None:

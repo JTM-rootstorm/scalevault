@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kivra_memory.application.mutations import CommandPrincipal
+from kivra_memory.application.sealed_content import SealedContentRequest
 from kivra_memory.application.selection import (
     NominationCommandLike,
     ResolvedNominationContext,
@@ -251,6 +252,7 @@ class GenesisNominationCommand(_Contract):
     reason: Annotated[str, Field(pattern=r"^genesis_import$")] = "genesis_import"
     proposal: NominationProposal
     logical_session_id: UUID | None
+    sealed_content: SealedContentRequest | None = None
     genesis_actor_id: UUID
     genesis_lineage_id: UUID
     nomination_sha256: Annotated[str, Field(pattern=_DIGEST)]
@@ -260,6 +262,15 @@ class GenesisNominationCommand(_Contract):
     source_record: GenesisSourceRecordContext
     terminal_reason: GenesisTerminalReason | None = None
     mapping_metadata: GenesisArchivedMappingMetadata
+
+    @field_validator("sealed_content")
+    @classmethod
+    def reject_sealed_content(
+        cls, value: SealedContentRequest | None
+    ) -> SealedContentRequest | None:
+        if value is not None:
+            raise ValueError("genesis sealed content is unsupported")
+        return value
 
 
 def _expected_evidence(

@@ -11,6 +11,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from kivra_memory.application.sealed_content import SealedContentRequest
 from kivra_memory.domain.canonical_json import JsonValue, canonical_json_bytes
 from kivra_memory.domain.enums import (
     MemoryCategory,
@@ -59,6 +60,7 @@ class GitHubNominationCommand(BaseModel):
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
     proposal: NominationProposal
     logical_session_id: UUID | None = None
+    sealed_content: SealedContentRequest | None = None
     transaction_binding_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
     @field_validator("persona_id", "branch_id", "logical_session_id")
@@ -66,6 +68,15 @@ class GitHubNominationCommand(BaseModel):
     def validate_uuid7(cls, value: UUID | None, info: object) -> UUID | None:
         if value is not None:
             require_uuid7(value, field_name=str(getattr(info, "field_name", "identifier")))
+        return value
+
+    @field_validator("sealed_content")
+    @classmethod
+    def reject_sealed_content(
+        cls, value: SealedContentRequest | None
+    ) -> SealedContentRequest | None:
+        if value is not None:
+            raise ValueError("GitHub sealed content is unsupported")
         return value
 
 

@@ -127,6 +127,7 @@ async def test_worker_claims_only_purge_and_acknowledges_with_exact_scope(
     provider = MagicMock()
     worker = SealedContentWorker(settings, _DatabaseStub(), provider)  # type: ignore[arg-type]
     job = _job(settings.tenant_id)
+    assert job.aggregate_id is not None
     recover = AsyncMock()
     claim = AsyncMock(return_value=(job,))
     handle = AsyncMock(
@@ -146,10 +147,16 @@ async def test_worker_claims_only_purge_and_acknowledges_with_exact_scope(
     monkeypatch.setattr(sealed_main, "acknowledge_outbox_job", acknowledge)
 
     assert await worker.run_once() == 1
-    assert claim.await_args.kwargs["job_types"] == ("purge_payload",)
-    assert recover.await_args.kwargs["job_types"] == ("purge_payload",)
-    assert handle.await_args.kwargs["key_provider"] is provider
-    assert handle.await_args.kwargs["principal"].scopes == frozenset({"memory.lifecycle.purge"})
+    claim_call = claim.await_args
+    recover_call = recover.await_args
+    handle_call = handle.await_args
+    assert claim_call is not None
+    assert recover_call is not None
+    assert handle_call is not None
+    assert claim_call.kwargs["job_types"] == ("purge_payload",)
+    assert recover_call.kwargs["job_types"] == ("purge_payload",)
+    assert handle_call.kwargs["key_provider"] is provider
+    assert handle_call.kwargs["principal"].scopes == frozenset({"memory.lifecycle.purge"})
     assert acknowledge.await_count == 1
 
 
@@ -173,8 +180,10 @@ async def test_worker_records_only_content_free_allowlisted_failures(
     monkeypatch.setattr(sealed_main, "fail_outbox_job", fail)
 
     assert await worker.run_once() == 0
-    assert fail.await_args.kwargs["error_code"] == "dependency_unavailable"
-    assert fail.await_args.kwargs["retryable"] is True
+    fail_call = fail.await_args
+    assert fail_call is not None
+    assert fail_call.kwargs["error_code"] == "dependency_unavailable"
+    assert fail_call.kwargs["retryable"] is True
 
 
 class _Result:

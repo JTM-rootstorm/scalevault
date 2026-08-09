@@ -409,7 +409,7 @@ def _validate_schema(
 ) -> tuple[CompatibilityCode, ...]:
     validation_payload: Mapping[str, object] = payload
     if format_ is IngressFormat.PROPOSAL_V2:
-        exact_payload = dict(payload)
+        exact_payload: dict[str, object] = dict(payload)
         for score_name in ("confidence", "salience", "durability"):
             score = exact_payload.get(score_name)
             if isinstance(score, (int, float)) and not isinstance(score, bool):
