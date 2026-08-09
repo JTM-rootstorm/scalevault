@@ -1,6 +1,7 @@
 """Typed runtime configuration for the canonical Memory Node."""
 
 import os
+import re
 from functools import lru_cache
 from ipaddress import ip_address
 from pathlib import Path
@@ -12,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOCAL_DATABASE_SOCKET_DIRECTORIES = {"/run/postgresql", "/var/run/postgresql"}
 _DATABASE_DESTINATION_QUERY_PARAMETERS = {"host", "hostaddr", "service", "servicefile"}
+_CLIENT_TOKEN_PEPPER_KEY_ID_PATTERN = re.compile(r"[a-z][a-z0-9_.-]{0,63}\Z")
 
 
 class Settings(BaseSettings):
@@ -31,6 +33,8 @@ class Settings(BaseSettings):
     database_url: PostgresDsn | None = None
     database_connect_timeout_seconds: int = Field(default=3, ge=1, le=30)
     metrics_enabled: bool = True
+    client_token_pepper_credential: Path | None = None
+    client_token_pepper_key_id: str | None = None
     sealed_content_enabled: bool = False
     sealed_key_provider_root: Path | None = None
     sealed_digest_binding_credential: Path | None = None
@@ -52,6 +56,26 @@ class Settings(BaseSettings):
                 raise ValueError("host must be loopback in production")
             if self.database_url is not None and not _is_local_database_url(self.database_url):
                 raise ValueError("database_url must use a local PostgreSQL host in production")
+        if (self.client_token_pepper_credential is None) != (
+            self.client_token_pepper_key_id is None
+        ):
+            raise ValueError("client token pepper credential and key ID must be supplied together")
+        if self.client_token_pepper_credential is not None and (
+            not self.client_token_pepper_credential.is_absolute()
+            or ".." in self.client_token_pepper_credential.parts
+        ):
+            raise ValueError("client token pepper credential must be an absolute canonical path")
+        if self.client_token_pepper_key_id is not None and (
+            _CLIENT_TOKEN_PEPPER_KEY_ID_PATTERN.fullmatch(self.client_token_pepper_key_id) is None
+        ):
+            raise ValueError("client token pepper key ID is invalid")
+        if self.environment == "production":
+            if self.client_token_pepper_credential != Path(
+                "/run/credentials/kivra-memory-api.service/client-token-pepper"
+            ):
+                raise ValueError("client token pepper credential must use the production boundary")
+            if self.client_token_pepper_key_id is None:
+                raise ValueError("client token pepper key ID is required in production")
         if self.sealed_content_enabled:
             if (
                 self.sealed_key_provider_root is None

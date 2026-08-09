@@ -10,6 +10,7 @@ from fastapi import FastAPI, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 from pydantic import ValidationError
 from pydantic_settings import SettingsError
+from starlette.types import ASGIApp
 
 from kivra_memory import __version__
 from kivra_memory.api.mcp import (
@@ -26,6 +27,11 @@ from kivra_memory.api.mcp import (
 )
 from kivra_memory.application.sealed_runtime import SealedRuntime
 from kivra_memory.config import Settings, get_settings
+from kivra_memory.runtime import (
+    MemoryNodeRuntime,
+    current_command_principal,
+    current_query_principal,
+)
 from kivra_memory.storage.readiness import (
     DatabaseProbe,
     DatabaseReadiness,
@@ -52,6 +58,7 @@ def create_app(
     read_executor: ReadExecutor = dependency_unavailable_read_executor,
     nomination_executor: NominationExecutor = dependency_unavailable_nomination_executor,
     sealed_runtime: SealedRuntime | None = None,
+    runtime: MemoryNodeRuntime | None = None,
 ) -> FastAPI:
     """Create an application without storing authoritative process-local state."""
 
@@ -60,20 +67,33 @@ def create_app(
     if runtime_settings.sealed_content_enabled != runtime_sealed.enabled:
         raise RuntimeError("invalid_sealed_content_configuration")
     mcp_server = create_mcp(
-        mutation_principal_resolver=mutation_principal_resolver,
-        mutation_executor=mutation_executor,
-        read_principal_resolver=read_principal_resolver,
-        read_executor=read_executor,
-        nomination_executor=nomination_executor,
+        mutation_principal_resolver=(
+            current_command_principal if runtime is not None else mutation_principal_resolver
+        ),
+        mutation_executor=(runtime.execute_mutation if runtime is not None else mutation_executor),
+        read_principal_resolver=(
+            current_query_principal if runtime is not None else read_principal_resolver
+        ),
+        read_executor=(runtime.execute_read if runtime is not None else read_executor),
+        nomination_executor=(
+            runtime.execute_nomination if runtime is not None else nomination_executor
+        ),
     )
-    mcp_application = mcp_server.streamable_http_app()
+    mcp_application: ASGIApp = mcp_server.streamable_http_app()
+    if runtime is not None:
+        mcp_application = runtime.authenticate_mcp(mcp_application)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = runtime_settings
         app.state.sealed_content_configured = runtime_sealed.enabled
-        async with mcp_server.session_manager.run():
-            yield
+        app.state.runtime_configured = runtime is not None
+        try:
+            async with mcp_server.session_manager.run():
+                yield
+        finally:
+            if runtime is not None:
+                await runtime.dispose()
 
     app = FastAPI(
         title="ScaleVault Memory Node",
@@ -108,9 +128,9 @@ def create_app(
                     )
                 else:
                     dependency_state = probe_result
-        result = "ready" if dependency_state.ready else "not_ready"
+        result = "ready" if dependency_state.ready and runtime is not None else "not_ready"
         HEALTH_REQUESTS.labels(endpoint="readyz", result=result).inc()
-        if not dependency_state.ready:
+        if result != "ready":
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {
             "status": result,
@@ -138,11 +158,12 @@ def main() -> None:
     try:
         settings = get_settings()
         sealed_runtime = SealedRuntime.from_settings(settings)
+        runtime = MemoryNodeRuntime.from_settings(settings, sealed_runtime=sealed_runtime)
     except (RuntimeError, SettingsError, ValidationError):
         print("ScaleVault configuration is invalid", file=sys.stderr)
         raise SystemExit(2) from None
     uvicorn.run(
-        create_app(settings, sealed_runtime=sealed_runtime),
+        create_app(settings, sealed_runtime=sealed_runtime, runtime=runtime),
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level.lower(),

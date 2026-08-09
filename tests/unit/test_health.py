@@ -1,10 +1,12 @@
 from collections.abc import Mapping
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app, main
 from kivra_memory.config import Settings, get_settings
+from kivra_memory.runtime import MemoryNodeRuntime
 from kivra_memory.storage.readiness import (
     EXPECTED_ALEMBIC_HEAD,
     MINIMUM_EXTENSION_VERSIONS,
@@ -18,6 +20,12 @@ from kivra_memory.storage.readiness import (
 from pydantic import PostgresDsn
 
 DATABASE_URL = PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory")
+
+
+def configured_runtime() -> MemoryNodeRuntime:
+    runtime = MagicMock(spec=MemoryNodeRuntime)
+    runtime.authenticate_mcp.side_effect = lambda application: application
+    return cast(MemoryNodeRuntime, runtime)
 
 
 class _Cursor:
@@ -206,6 +214,7 @@ async def test_readiness_reports_configured_database_state() -> None:
     app = create_app(
         Settings(database_url=DATABASE_URL),
         database_probe=database_is_ready,
+        runtime=configured_runtime(),
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/readyz")
@@ -215,6 +224,34 @@ async def test_readiness_reports_configured_database_state() -> None:
         "status": "ready",
         "checks": {"database": "ok", "migrations": "ok", "extensions": "ok"},
     }
+
+
+async def test_readiness_fails_closed_without_runtime_composition() -> None:
+    async def database_is_ready(*_args: object) -> DatabaseReadiness:
+        return DatabaseReadiness(database="ok", migrations="ok", extensions="ok")
+
+    app = create_app(
+        Settings(database_url=DATABASE_URL),
+        database_probe=database_is_ready,
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "checks": {"database": "ok", "migrations": "ok", "extensions": "ok"},
+    }
+
+
+async def test_lifespan_disposes_composed_runtime() -> None:
+    runtime = configured_runtime()
+    app = create_app(Settings(), runtime=runtime)
+
+    async with app.router.lifespan_context(app):
+        pass
+
+    cast(Any, runtime.dispose).assert_awaited_once_with()
 
 
 async def test_readiness_hides_database_failure_details() -> None:

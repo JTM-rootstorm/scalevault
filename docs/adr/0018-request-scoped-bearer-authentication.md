@@ -52,6 +52,12 @@ canonical memory data. Verification uses constant-time comparison. Rotation
 requires an explicit dual-verifier or credential-reissue procedure; silently
 trying unrelated keys is forbidden.
 
+The production process reads the systemd materialized credential only when it
+is a single-link regular file owned by the effective service UID, has no group
+or world permission bits, and contains 32 through 128 bytes. This pins the
+runtime check to the ownership produced for the service user rather than the
+root-owned source credential.
+
 All parsing, lookup, verifier, revocation, expiry, and binding failures expose
 one safe `authentication failed` result. Authorization values, token
 fragments, verifier strings, credential hashes, and database exception text

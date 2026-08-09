@@ -24,7 +24,11 @@ from pydantic import (
 
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.sealed_content import SealedContentRequest
-from kivra_memory.application.selection import NominationCommandLike, SelectionResult
+from kivra_memory.application.selection import (
+    NominationCommandLike,
+    SelectionExecutionError,
+    SelectionResult,
+)
 from kivra_memory.application.status import (
     IngressStatusQuery,
     IngressStatusResult,
@@ -422,6 +426,7 @@ def _nomination_error(
         "invalid_input",
         "unauthenticated",
         "forbidden",
+        "idempotency_key_reused",
         "dependency_unavailable",
         "internal_error",
     ],
@@ -1320,15 +1325,15 @@ def create_mcp(
         except Exception:
             return _nomination_error("internal_error").model_dump(mode="json")
         if isinstance(principal, MutationError):
-            code = principal.error.code
-            if code not in {"unauthenticated", "forbidden", "dependency_unavailable"}:
-                code = "internal_error"
+            auth_code = principal.error.code
+            if auth_code not in {"unauthenticated", "forbidden", "dependency_unavailable"}:
+                auth_code = "internal_error"
             return _nomination_error(
                 cast(
                     Literal[
                         "unauthenticated", "forbidden", "dependency_unavailable", "internal_error"
                     ],
-                    code,
+                    auth_code,
                 )
             ).model_dump(mode="json")
         if not isinstance(principal, CommandPrincipal):
@@ -1336,6 +1341,28 @@ def create_mcp(
         try:
             response = await nomination_executor(principal, command)
             validated = _NominationToolResponse.model_validate(response)
+        except SelectionExecutionError as error:
+            selection_code = {
+                "invalid_input": "invalid_input",
+                "forbidden": "forbidden",
+                "not_found": "forbidden",
+                "idempotency_key_reused": "idempotency_key_reused",
+                "authority_unavailable": "dependency_unavailable",
+                "dependency_unavailable": "dependency_unavailable",
+                "serialization_exhausted": "dependency_unavailable",
+            }.get(error.code, "internal_error")
+            return _nomination_error(
+                cast(
+                    Literal[
+                        "invalid_input",
+                        "forbidden",
+                        "idempotency_key_reused",
+                        "dependency_unavailable",
+                        "internal_error",
+                    ],
+                    selection_code,
+                )
+            ).model_dump(mode="json")
         except Exception:
             return _nomination_error("internal_error").model_dump(mode="json")
         payload = cast(dict[str, Any], validated.model_dump(mode="json"))
