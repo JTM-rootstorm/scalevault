@@ -21,6 +21,10 @@ useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-worker
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-lifecycle
+useradd --system --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin --gid kivra-memory memory-exporter
+useradd --system --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin --gid kivra-memory memory-ingress
 mountpoint --quiet /mnt/memory
 install -d -o root -g root -m 0755 /opt/kivra-memory/app
 install -d -o root -g kivra-memory -m 0750 /etc/kivra-memory
@@ -29,6 +33,8 @@ install -d -o root -g kivra-memory -m 2750 \
   /mnt/memory/kivra-memory/models
 install -d -o memory-node -g kivra-memory -m 0700 \
   /mnt/memory/kivra-memory/node-agent
+install -d -o memory-exporter -g kivra-memory -m 0700 \
+  /mnt/memory/kivra-memory/archive
 ```
 
 Treat an already-existing account with unexpected UID, GID, shell, home, or
@@ -42,6 +48,71 @@ dedicated lifecycle-worker file described below. Never copy `.env` from a
 development checkout. Database passwords remain local deployment secrets and
 must not appear in this repository, shell history, or command output. Private
 keys and API keys must use systemd credentials rather than environment files.
+
+The Milestone 6 services have separate Unix users and PostgreSQL roles. The
+exporter uses `kivra_memory_exporter`. GitHub discovery and validation use
+`kivra_memory_ingress`, while the canonical selection transaction uses a
+separate local `kivra_memory_api` connection. Never grant canonical event writes
+to the ingress role.
+
+### Archive exporter
+
+Install `/etc/kivra-memory/memory-archive-exporter.env` as root-owned mode
+`0600`:
+
+```text
+KIVRA_MEMORY_ARCHIVE_DATABASE_URL=postgresql+psycopg://kivra_memory_exporter:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
+KIVRA_MEMORY_ARCHIVE_TENANT_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_ARCHIVE_TARGET_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_ARCHIVE_REPOSITORY=/mnt/memory/kivra-memory/archive
+KIVRA_MEMORY_ARCHIVE_REPOSITORY_REFERENCE=ssh://git@REPLACE_WITH_FORGEJO_HOST/REPLACE_WITH_OWNER/REPLACE_WITH_REPOSITORY.git
+KIVRA_MEMORY_ARCHIVE_BRANCH=main
+KIVRA_MEMORY_ARCHIVE_SCHEMA_ROOT=/opt/kivra-memory/app/schemas
+KIVRA_MEMORY_ARCHIVE_ALLOWED_SIGNERS_FILE=/etc/kivra-memory/archive-allowed-signers
+KIVRA_MEMORY_ARCHIVE_KNOWN_HOSTS_FILE=/etc/kivra-memory/archive-known-hosts
+KIVRA_MEMORY_ARCHIVE_SIGNER_PRINCIPAL=archive@scalevault
+KIVRA_MEMORY_ARCHIVE_AUTHOR_NAME=ScaleVault Archive
+KIVRA_MEMORY_ARCHIVE_AUTHOR_EMAIL=archive@scalevault.invalid
+```
+
+Install `archive-signing-key` and the repository-scoped `archive-deploy-key` as
+root-owned mode-`0600` files named by the unit. Install the allowed-signers and
+pinned Forgejo known-hosts files as root-owned mode `0644`. The repository must
+be an absolute, clean Git worktree below `/mnt/memory`; global/system Git config,
+credential prompts, hooks, and ambient SSH agents are not used.
+
+### GitHub ingress
+
+Install `/etc/kivra-memory/memory-github-ingress.env` as root-owned mode `0600`:
+
+```text
+KIVRA_MEMORY_GITHUB_INGRESS_DATABASE_URL=postgresql+psycopg://kivra_memory_ingress:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
+KIVRA_MEMORY_GITHUB_COMMAND_DATABASE_URL=postgresql+psycopg://kivra_memory_api:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
+KIVRA_MEMORY_GITHUB_TENANT_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_GITHUB_TRANSPORT_BINDING_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_GITHUB_INSTALLATION_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_GITHUB_ACTOR_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_GITHUB_CLIENT_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_GITHUB_REPOSITORY_ID=REPLACE_WITH_NUMERIC_ID
+KIVRA_MEMORY_GITHUB_REPOSITORY_OWNER=REPLACE_WITH_OWNER
+KIVRA_MEMORY_GITHUB_REPOSITORY_NAME=REPLACE_WITH_REPOSITORY
+KIVRA_MEMORY_GITHUB_BRANCH=main
+KIVRA_MEMORY_GITHUB_INGRESS_PREFIX=ingress/v2
+KIVRA_MEMORY_GITHUB_ALLOWED_SELECTION_BASIS=verified_project_decision
+KIVRA_MEMORY_GITHUB_AUTHORITY_CLASS=verified_project_source
+KIVRA_MEMORY_GITHUB_EVIDENCE_KIND=project_source
+KIVRA_MEMORY_GITHUB_EVIDENCE_TRUST=trusted
+KIVRA_MEMORY_GITHUB_PROMOTION_ACTOR_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_GITHUB_PROMOTION_CLIENT_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_GITHUB_PROMOTION_TRANSPORT_BINDING_ID=REPLACE_WITH_UUIDV7
+```
+
+The trust-profile fields are operator-owned policy inputs, not claims accepted
+from proposal content. The configured basis, authority, evidence kind, and trust
+must be reviewed as one policy tuple. Install the fine-grained, repository-only,
+read-only token as root-owned mode `0600` at
+`/etc/kivra-memory/github-ingress-token`. Webhooks remain disabled; any future
+listener must be separately hosted and may only wake this same immutable poller.
 
 The required API file sets a production database URL and normally retains the
 loopback listener:
@@ -168,6 +239,12 @@ install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-lifecycle-worker.service \
   /etc/systemd/system/kivra-memory-lifecycle-worker.service
 install -D -o root -g root -m 0644 \
+  deploy/memory-node/systemd/kivra-memory-archive-exporter.service \
+  /etc/systemd/system/kivra-memory-archive-exporter.service
+install -D -o root -g root -m 0644 \
+  deploy/memory-node/systemd/kivra-memory-github-ingress.service \
+  /etc/systemd/system/kivra-memory-github-ingress.service
+install -D -o root -g root -m 0644 \
   deploy/memory-node/postgresql/systemd/postgresql@17-main.service.d/10-kivra-memory-mount.conf \
   /etc/systemd/system/postgresql@17-main.service.d/10-kivra-memory-mount.conf
 systemctl daemon-reload
@@ -177,6 +254,8 @@ systemd-analyze verify \
   kivra-memory-node-agent.service \
   kivra-memory-worker.service \
   kivra-memory-lifecycle-worker.service \
+  kivra-memory-archive-exporter.service \
+  kivra-memory-github-ingress.service \
   kivra-memory-tunnel.service
 ```
 
@@ -200,8 +279,9 @@ enrollment and workspace prerequisites are satisfied.
 
 The API unit starts the Debian PostgreSQL 17 cluster dependency. The node-agent
 unit is installed but should remain disabled until relay enrollment is
-implemented. Ingress, exporter, and timer units will be added with their runnable
-entry points so deployment never advertises an unimplemented service. The worker
+implemented. The ingress and exporter units remain disabled until their pinned
+identities, credentials, clean worktree, database roles, and remote identities
+have passed a synthetic acceptance run. The worker
 unit remains disabled until its pinned bundle, registry row, tenant
 configuration, and live acceptance gate have been verified. The lifecycle worker
 remains disabled until its preprovisioned internal-service identity, policy-role
@@ -211,3 +291,12 @@ The tunnel unit is installed separately and remains disabled until its Platform
 tunnel ID, restricted runtime credential, and ChatGPT workspace association are
 available. Its MCP target and health UI are both loopback-only; see
 `../tunnel/README.md` for the credential boundary and activation checks.
+
+For exporter activation, verify the `archive_targets` row, clean branch, pinned
+Forgejo host key, deploy-key repository scope, allowed signer, signed
+fast-forward push, and manifest/checkpoint hash equality. Divergence is a hard
+stop; never force-push or rewrite archive history. For ingress activation,
+verify the numeric GitHub repository ID, owner/name/default branch, installation
+and binding IDs, read-only token scope, both local database logins, and the
+promotion service binding. Run a non-sensitive synthetic proposal and the
+50-object concurrency gate before enabling the service.

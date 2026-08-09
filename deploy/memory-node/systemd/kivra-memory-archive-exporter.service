@@ -1,0 +1,42 @@
+[Unit]
+Description=ScaleVault signed Forgejo archive exporter
+After=network-online.target postgresql@17-main.service
+Wants=network-online.target
+Requires=postgresql@17-main.service
+RequiresMountsFor=/mnt/memory
+ConditionPathIsMountPoint=/mnt/memory
+ConditionPathIsDirectory=/mnt/memory/kivra-memory/archive
+
+[Service]
+Type=simple
+User=memory-exporter
+Group=kivra-memory
+WorkingDirectory=/opt/kivra-memory/app
+Environment=KIVRA_MEMORY_ENVIRONMENT=production
+Environment=HOME=/nonexistent
+EnvironmentFile=/etc/kivra-memory/memory-archive-exporter.env
+LoadCredential=archive-signing-key:/etc/kivra-memory/archive-signing-key
+LoadCredential=archive-deploy-key:/etc/kivra-memory/archive-deploy-key
+ExecStartPre=/usr/bin/test -d /mnt/memory/kivra-memory/archive/.git
+ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-archive-exporter
+Restart=on-failure
+RestartSec=10s
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadOnlyPaths=/etc/kivra-memory/archive-allowed-signers /etc/kivra-memory/archive-known-hosts
+ReadWritePaths=/mnt/memory/kivra-memory/archive
+
+[Install]
+WantedBy=multi-user.target

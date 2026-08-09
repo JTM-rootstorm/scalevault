@@ -48,6 +48,8 @@ dev = [
 
 [project.scripts]
 kivra-memory-api = "kivra_memory.api.app:main"
+kivra-memory-archive-exporter = "kivra_memory.workers.archive_main:main"
+kivra-memory-github-ingress = "kivra_memory.workers.github_ingress_main:main"
 kivra-memory-worker = "kivra_memory.workers.main:main"
 kivra-memory-lifecycle-worker = "kivra_memory.workers.lifecycle_main:main"
 

@@ -1,0 +1,35 @@
+[Unit]
+Description=ScaleVault immutable GitHub proposal ingress
+After=network-online.target postgresql@17-main.service
+Wants=network-online.target
+Requires=postgresql@17-main.service
+
+[Service]
+Type=simple
+User=memory-ingress
+Group=kivra-memory
+WorkingDirectory=/opt/kivra-memory/app
+Environment=KIVRA_MEMORY_ENVIRONMENT=production
+Environment=HOME=/nonexistent
+EnvironmentFile=/etc/kivra-memory/memory-github-ingress.env
+LoadCredential=github-token:/etc/kivra-memory/github-ingress-token
+ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-github-ingress
+Restart=on-failure
+RestartSec=10s
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
