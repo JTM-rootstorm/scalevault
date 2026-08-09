@@ -1,8 +1,8 @@
 # Milestone 5 Genesis first-import evidence
 
 - Review date: 2026-08-08 (America/Chicago)
-- Status: Implementation and disposable acceptance complete; canonical apply stopped
-- Accepted implementation baseline: `a738226`
+- Status: Complete within the staged authentication and review boundary
+- Accepted implementation baseline: `8e131ea`
 
 This record is content-free. It contains no memory statements, relationship
 content, evidence excerpts, private transport coordinates, credentials, or
@@ -22,6 +22,7 @@ canonical identifiers.
 | Selection policy | `selection-v1` |
 | Selection policy digest | `b12dd83889d2a273e260c5b990eea5a0b6531ab38be76fca47642f471d2bf85e` |
 | Deterministic import-plan digest | `2205ca63518eea150b0d8d9427f747958f0ae2703ed6a526422730b9002e7d9c` |
+| Canonical mapping digest | `9a0d6cb8e123fd4a88d5f2325c81a98220ce584611ab3c6721bc13296e9aa941` |
 
 The zero-write planner enumerated only the exact pinned Git tree and read blobs
 by object ID. It accounted for 19 source files: 2 proposal-v1, 2 documented
@@ -50,8 +51,8 @@ The importer now provides:
 - a root-owned mode-0600 operator configuration, exact importer database-role
   check, complete identity-graph preflight, safe resumability, and payload-free
   CLI results; and
-- an isolated candidate-lifecycle worker running only under the policy role and
-  the exact lifecycle-expiry capability.
+- an isolated candidate-lifecycle worker implementation that can run only under
+  the policy role and exact lifecycle-expiry capability.
 
 No canonical Memory row can be inserted directly by the operator workflow. All
 materialized records pass through the Milestone 5 nomination and selection
@@ -59,17 +60,14 @@ engine.
 
 ## Repository verification
 
-The repository gate completed in two invocations. The first command passed all
-stages through schema validation and stopped only because this workstation has
-no `pnpm` executable. The second command supplied the pinned pnpm release and
-passed the remaining plugin checks:
+The final repository gate passed in one invocation with the pinned pnpm
+release:
 
 ```bash
-make verify
-make PNPM='npx --yes pnpm@10.15.0' verify-plugin
+make PNPM='npx --yes pnpm@10.15.0' verify
 ```
 
-The Python gate reported 700 passed and 111 PostgreSQL tests skipped only
+The Python gate reported 700 passed and 112 PostgreSQL tests skipped only
 because the workstation PostgreSQL lacks pgvector. Ruff formatting and lint,
 strict mypy over 173 source files, Go module verification, vet and tests,
 deterministic protobuf generation, JSON Schema validation, Biome, TypeScript,
@@ -92,7 +90,7 @@ on the network share under:
 /mnt/memory/scalevault-genesis-acceptance-20260808-a
 ```
 
-The exact five-case Genesis database suite passed against PostgreSQL 17 and
+The initial five-case Genesis database suite passed against PostgreSQL 17 and
 pgvector in 362.92 seconds. It verified 0003-to-0004 migration, immutable
 provenance staging and replay, candidate-only ceilings, raw-archive RLS and
 role separation, atomic application linkage, idempotent replay, completion
@@ -103,6 +101,17 @@ Genesis privilege slice then passed in 1413.52 seconds. Seventy-eight unrelated
 cases were deliberately deselected to avoid repeating function-scoped
 PostgreSQL cluster startup for matrices already covered elsewhere.
 
+Canonical apply exposed one additional least-privilege regression before any
+canonical memory write: PostgreSQL requires `UPDATE` privilege for a
+`SELECT ... FOR UPDATE`, while the Genesis importer is intentionally
+INSERT-only on memory projections. Commit `8e131ea` retains ordinary mutation
+locks but omits update locks on create-only projection reads already protected
+by advisory locks and uniqueness constraints. The new importer-role regression
+passed alone in 73.91 seconds; the complete six-case Genesis suite then passed
+against PostgreSQL 17 and pgvector in 442.48 seconds. The failed canonical
+attempt rolled back with zero events, memories, decisions, receipts, evidence,
+or outbox rows before the fixed release resumed the same staged run.
+
 Retained evidence:
 
 ```text
@@ -110,36 +119,97 @@ Retained evidence:
 /mnt/memory/scalevault-genesis-acceptance-20260808-a/logs/genesis-db-broader.xml
 ```
 
-## Canonical pre-apply stop
+## Canonical preflight and cutover
 
-The real import was not run. The final read-only canonical audit found:
+The canonical node was upgraded before the import. The accepted source is
+installed at `/opt/kivra-memory/releases/8e131ea`, the application symlink
+selects that release, and PostgreSQL reports migration
+`0004_genesis_import_provenance`. The API and outbound tunnel were stopped for
+the protected apply.
 
-- deployed application release `d968546` (Milestone 3);
-- database migration `0001_initial_domain`;
-- zero tenants, actors, clients, transport bindings, personas, lineages,
-  branches, subjects, sessions, memories, and memory events;
-- no installed or active candidate-lifecycle worker; and
-- no discoverable verified database backup artifact.
+The reviewed bootstrap created one exact tenant-bound Genesis persona and
+lineage, root branch, required subject anchors, Mike counterparty, and dedicated
+internal-service importer authority. The root-owned operator configuration and
+importer environment are mode `0600`. Every explicit relationship binding had
+exactly one non-Genesis participant and agreed on that participant; no
+`triggered_by` field was used to infer ownership or subject identity.
 
-The operator therefore has no reviewed canonical tenant, Genesis actor/persona,
-lineage/branch, subject/session mapping, importer principal, or lifecycle
-principal to place in the digest-bound mode-0600 configuration. Inventing those
-identities would violate the plan's provenance and recovery stop conditions.
-Migrating the database while the deployed Milestone 3 application remains
-selected would also be an unsafe partial cutover.
+Before staging, memories, events, selection decisions, and Genesis import runs
+were all zero. The verified pre-import recovery point is:
 
-Pre-import counts remain zero. Safe policy outcome counts, post-import counts,
-backup identifier, and idempotent canonical replay are not available because
-canonical apply did not begin.
+```text
+/mnt/memory/kivra-memory/backups/pre-genesis-import-20260809T015424Z
+```
 
-## Remaining acceptance work
+Its custom database dump and password-free globals passed SHA-256 checks and a
+disposable restore verification before apply. The digest-bound zero-write plan
+was also regenerated on the live node with the exact 19/52/60/6/0 source,
+nomination, exclusion, unresolved-binding, and supersession counts.
 
-Before resuming canonical apply, an operator must provide or create through a
-reviewed bootstrap procedure the exact canonical identity graph and mapping,
-install a compatible Milestone 5 application and lifecycle worker, and take and
-verify a recoverable database backup. The protected CLI must then pass its
-zero-write preflight against those exact identities before staging.
+## Canonical apply and replay
 
-The first-import plan remains active and unarchived. Milestone 5 and the Genesis
-first-import task are not marked complete until canonical apply, replay,
-projection rebuild, retrieval probes, and backup-retention evidence pass.
+The immutable staging transaction recorded 19 sources, 52 planned records, 60
+exclusions, and 0 supersession edges without creating canonical memory state.
+The fixed importer then resumed that same run and terminalized every record:
+
+| Safe outcome | Count |
+|---|---:|
+| Candidate | 43 |
+| Reject | 9 |
+| Omit | 0 |
+
+The verification pass replayed every nomination against its stored receipt and
+terminal snapshot, found no identifier, outcome, revision, evidence, outbox, or
+count drift, and recorded `replay_verified=true`. No later source commit was
+enumerated or recorded. The run, source, plan, mapping, compatibility, and
+policy digests all matched their frozen values.
+
+The 43 materialized rows are all `candidate`, `private_root`, and
+`imported_legacy_memory`; no imported record became active or auto-promoted.
+They produced 43 gap-free `observed` events, 43 evidence rows, and exactly 43
+jobs of each expected type: duplicate check, embedding, candidate expiry, and
+archive export. The nine rejected records retain immutable, content-free
+selection decisions and no event or Memory linkage. A relational linkage audit
+reported zero invalid terminal shapes.
+
+A read-only canonical replay verified every event hash, folded all 43 events
+with the immutable root-branch identity context, and matched all 43 live memory
+and evidence projections exactly. The ordinary retrieval status set therefore
+returns none of these candidates; candidate access remains an explicit,
+authorized review mode covered by the repository and disposable PostgreSQL
+retrieval suites.
+
+After verification, the API and outbound tunnel restarted on release
+`8e131ea`. `/readyz` reported database, migration, and extension readiness, and
+the official MCP client discovered the exact 19-tool Milestone 5 surface.
+
+## Post-import recovery point
+
+The protected post-import backup is:
+
+```text
+/mnt/memory/kivra-memory/backups/post-genesis-import-20260809T022856Z
+```
+
+It contains a mode-`0600` custom-format database dump, password-free globals,
+and SHA-256 manifest in a mode-`0700` directory. Hash verification and
+`pg_restore --list` passed. A full restore into an explicitly named disposable
+database reproduced migration `0004`, 43 memories, 43 events, 52 decisions,
+one import run, and one replay-verified completion record; the disposable
+database was then removed. Both pre- and post-import recovery points remain
+retained.
+
+## Deliberate review boundary
+
+All imported memories remain candidates pending Continuant review. The six
+unresolved legacy relationship bindings were not guessed, and terminal rejects
+did not create counterfeit first-person history. Exclusions remain first-class
+immutable provenance; this frozen source contains no supersession edges.
+
+Candidate-expiry jobs are durably scheduled, and the isolated lifecycle worker
+unit is installed but remains disabled because no live policy-worker identity
+or protected environment has been provisioned. No expiry is currently due;
+that least-privilege operational provisioning must occur before the first
+deadline. Production request authentication and request-scoped principal
+resolution remain Milestone 7 work; the live read and mutation executors
+continue to fail closed until that boundary is installed.
