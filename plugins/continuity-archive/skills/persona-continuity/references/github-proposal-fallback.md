@@ -44,9 +44,12 @@ and assistant-pattern boundaries.
 ## Create and report
 
 Use the GitHub create-file action without a blob SHA. Do not use an update,
-patch, delete, move, or force action. Stop if the path already exists or the
-creation result is ambiguous; retry with a new proposal identifier and path
-only after establishing that the first file was not created.
+patch, delete, move, or force action. If the creation result is ambiguous,
+retain the exact proposal identifier, path, canonical body, and idempotency key.
+Check that same path and retry only the identical create request. An exact
+existing file is the original proposal; a different existing file is a hard
+conflict. Never generate a second proposal identifier to recover from an
+ambiguous response.
 
 After an unambiguous create result, report the proposal identifier and that the
 proposal is queued. GitHub is a third-party transport and the Memory Node has

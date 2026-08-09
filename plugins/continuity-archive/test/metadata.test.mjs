@@ -93,6 +93,7 @@ test("GitHub fallback remains create-only and non-canonical", async () => {
         path_template:
             "ingress/v2/{installation_id}/{yyyy}/{mm}/{proposal_id}.json",
         create_only: true,
+        ambiguous_retry: "same_proposal_id_path_and_body",
         status_tool: "memory_ingress_status",
         canonical_commit_claim: "prohibited",
     });
@@ -115,6 +116,7 @@ test("GitHub fallback remains create-only and non-canonical", async () => {
         /standard ChatGPT GitHub integration\s+is read-only/,
     );
     assert.match(fallback, /explicitly approves this proposal action/);
+    assert.match(fallback, /Never generate a second proposal identifier/);
     assert.match(fallback, /never\s+edits the prior file/);
 });
 
