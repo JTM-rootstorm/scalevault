@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 UNIT = ROOT / "deploy/memory-node/systemd/kivra-memory-tunnel.service"
 PREFLIGHT = ROOT / "deploy/memory-node/tunnel/kivra-memory-tunnel-preflight"
+MCP_PROBE = ROOT / "deploy/memory-node/tunnel/kivra-memory-tunnel-mcp-probe"
 README = ROOT / "deploy/memory-node/tunnel/README.md"
 ENV_EXAMPLE = ROOT / "deploy/memory-node/tunnel/tunnel.env.example"
 
@@ -24,9 +25,9 @@ def test_tunnel_unit_uses_fixed_authenticated_read_route() -> None:
     target = "--mcp.server-url=url=http://127.0.0.1:8080/chatgpt/mcp,channel=main"
     header = '"Authorization: file:%d/chatgpt-mcp-authorization"'
 
-    assert unit.count(target) == 2
-    assert unit.count(f"--mcp.extra-headers={header}") == 2
-    assert unit.count(f"--mcp.discovery-extra-headers={header}") == 2
+    assert unit.count(target) == 1
+    assert unit.count(f"--mcp.extra-headers={header}") == 1
+    assert unit.count(f"--mcp.discovery-extra-headers={header}") == 1
     assert "LoadCredential=chatgpt-mcp-authorization:" in unit
     assert "http://127.0.0.1:8080/mcp,channel=main" not in unit
     assert "Bearer svb1." not in unit
@@ -37,13 +38,13 @@ def test_tunnel_unit_uses_fixed_authenticated_read_route() -> None:
     assert "--open-web-ui" not in unit
 
 
-def test_tunnel_unit_doctors_before_run_with_secret_environment_removed() -> None:
+def test_tunnel_unit_probes_before_run_with_secret_environment_removed() -> None:
     unit = UNIT.read_text(encoding="utf-8")
 
-    doctor = next(
+    probe = next(
         line
         for line in unit.splitlines()
-        if line.startswith("ExecStartPre=/usr/local/bin/tunnel-client doctor")
+        if line.startswith("ExecStartPre=/usr/local/libexec/kivra-memory-tunnel-mcp-probe")
     )
     run = next(
         line
@@ -52,7 +53,7 @@ def test_tunnel_unit_doctors_before_run_with_secret_environment_removed() -> Non
     )
     unset = " ".join(line for line in unit.splitlines() if line.startswith("UnsetEnvironment="))
 
-    assert "/chatgpt/mcp" in doctor
+    assert "/chatgpt/mcp" in probe
     assert "/chatgpt/mcp" in run
     assert "OPENAI_API_KEY" in unset
     assert "CONTROL_PLANE_API_KEY" in unset
@@ -61,8 +62,8 @@ def test_tunnel_unit_doctors_before_run_with_secret_environment_removed() -> Non
     assert "LOG_HTTP_RAW_UNSAFE" in unset
     assert "http_proxy" in unset
     assert "https_proxy" in unset
-    assert "--log.file=stdout" in doctor
     assert "--log.file=stdout" in run
+    assert "tunnel-client doctor" not in unit
 
 
 def test_tunnel_settings_and_documentation_expose_no_secret_value() -> None:
@@ -117,6 +118,39 @@ def test_preflight_rejects_noncanonical_tunnel_id(tmp_path: Path) -> None:
     assert tunnel_id not in result.stderr
 
 
+def test_mcp_probe_keeps_authorization_out_of_argv_and_output(tmp_path: Path) -> None:
+    result, arguments, config = _run_mcp_probe(tmp_path)
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert AUTHORIZATION not in arguments
+    assert config == f'header = "Authorization: {AUTHORIZATION}"\n'
+    assert "http://127.0.0.1:8080/chatgpt/mcp" in arguments
+    assert "--max-filesize\n65536\n" in arguments
+    assert "--max-time\n20\n" in arguments
+    assert "--show-error" not in arguments
+
+
+def test_mcp_probe_rejects_bad_credential_without_calling_curl(tmp_path: Path) -> None:
+    malformed = "Bearer do-not-log-this-value"
+    result, arguments, _config = _run_mcp_probe(tmp_path, authorization=malformed)
+
+    assert result.returncode != 0
+    assert "invalid format" in result.stderr
+    assert malformed not in result.stderr
+    assert arguments == ""
+
+
+def test_mcp_probe_fails_closed_on_non_success_http_status(tmp_path: Path) -> None:
+    result, arguments, _config = _run_mcp_probe(tmp_path, curl_exit=22)
+
+    assert result.returncode != 0
+    assert "authenticated initialize request failed" in result.stderr
+    assert AUTHORIZATION not in result.stderr
+    assert AUTHORIZATION not in arguments
+
+
 def _run_preflight(
     tmp_path: Path,
     *,
@@ -158,3 +192,44 @@ def _run_preflight(
         env=environment,
         text=True,
     )
+
+
+def _run_mcp_probe(
+    tmp_path: Path,
+    *,
+    authorization: str = AUTHORIZATION,
+    curl_exit: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
+    arguments_path = tmp_path / "curl-arguments"
+    config_path = tmp_path / "curl-config"
+    curl_command = tmp_path / "curl"
+    curl_command.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$@" > "$PROBE_ARGUMENTS_PATH"\n'
+        'cat > "$PROBE_CONFIG_PATH"\n'
+        'exit "$PROBE_CURL_EXIT"\n',
+        encoding="utf-8",
+    )
+    curl_command.chmod(0o755)
+    credential = tmp_path / "chatgpt-mcp-authorization"
+    credential.write_text(authorization + "\n", encoding="utf-8")
+    environment = os.environ.copy()
+    environment["PROBE_ARGUMENTS_PATH"] = str(arguments_path)
+    environment["PROBE_CONFIG_PATH"] = str(config_path)
+    environment["PROBE_CURL_EXIT"] = str(curl_exit)
+
+    result = subprocess.run(
+        [
+            str(MCP_PROBE),
+            str(curl_command),
+            str(credential),
+            "http://127.0.0.1:8080/chatgpt/mcp",
+        ],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+    arguments = arguments_path.read_text(encoding="utf-8") if arguments_path.exists() else ""
+    config = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    return result, arguments, config

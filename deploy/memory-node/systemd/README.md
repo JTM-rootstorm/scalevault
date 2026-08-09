@@ -417,6 +417,9 @@ install -D -o root -g root -m 0644 \
 install -D -o root -g root -m 0755 \
   deploy/memory-node/tunnel/kivra-memory-tunnel-preflight \
   /usr/local/libexec/kivra-memory-tunnel-preflight
+install -D -o root -g root -m 0755 \
+  deploy/memory-node/tunnel/kivra-memory-tunnel-mcp-probe \
+  /usr/local/libexec/kivra-memory-tunnel-mcp-probe
 install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-worker.service \
   /etc/systemd/system/kivra-memory-worker.service

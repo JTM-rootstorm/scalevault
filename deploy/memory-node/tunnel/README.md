@@ -24,7 +24,7 @@ currently probed Memory Node binary is `0.0.10`, whose `run --help` and
 upgrade.
 
 Create a dedicated service account with no membership in `kivra-memory` or
-other service groups, then install the preflight helper and unit:
+other service groups, then install the preflight helpers and unit:
 
 ```sh
 useradd --system --user-group --no-create-home --home-dir /nonexistent \
@@ -32,6 +32,9 @@ useradd --system --user-group --no-create-home --home-dir /nonexistent \
 install -D -o root -g root -m 0755 \
   deploy/memory-node/tunnel/kivra-memory-tunnel-preflight \
   /usr/local/libexec/kivra-memory-tunnel-preflight
+install -D -o root -g root -m 0755 \
+  deploy/memory-node/tunnel/kivra-memory-tunnel-mcp-probe \
+  /usr/local/libexec/kivra-memory-tunnel-mcp-probe
 install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-tunnel.service \
   /etc/systemd/system/kivra-memory-tunnel.service
@@ -78,14 +81,23 @@ Memory Node systemd guide. Startup and readiness must fail closed unless the
 pepper, key ID, pinned installation, and distinct persisted `secure_tunnel`
 credential row are all valid.
 
-The preflight validates the tunnel ID, client version and static-header
-features, credential readability, and exact bearer grammar without printing
-secret values. `tunnel-client doctor` then validates control-plane access and
-performs authenticated discovery and initialization against `/chatgpt/mcp`.
-Both discovery and forwarded MCP calls use the same protected Authorization
+The configuration preflight validates the tunnel ID, client version and
+static-header features, credential readability, and exact bearer grammar
+without printing secret values. A second startup preflight performs a fixed
+MCP initialize request against `/chatgpt/mcp`. It supplies Authorization to
+curl through configuration on standard input, discards the response body, and
+fails startup on a missing or malformed credential or non-success HTTP status.
+The secret never appears in curl's arguments, environment, or output. Both
+discovery and forwarded MCP calls then use the same protected Authorization
 value. Raw HTTP logging, remote UI access, configuration profiles, ambient API
 keys, proxy variables, and ambient MCP header settings are removed from the
 service environment.
+
+The installed `tunnel-client` 0.0.10 `doctor` command can report absent OAuth
+metadata as a failure even when a non-OAuth MCP server initializes correctly.
+Use `doctor` as an operator diagnostic, not as a service startup gate. The
+payload-silent authenticated initialize request and tunnel `/readyz` are the
+deployment gates for this fixed-header route.
 
 ## Activate and verify
 
@@ -102,7 +114,24 @@ The service remains disabled until all of these gates are satisfied:
 4. A wrong, missing, revoked, or caller-overridden Authorization value fails
    discovery and tool calls closed.
 
-Then validate and start the service:
+Place the non-secret secure-tunnel settings in the protected API environment,
+restart the API, and prove that the fixed route accepts the dedicated
+credential before starting the tunnel. Never check in a concrete installation
+ID:
+
+```sh
+# In /etc/kivra-memory/memory-api.env:
+KIVRA_MEMORY_CHATGPT_SECURE_TUNNEL_ENABLED=true
+KIVRA_MEMORY_CHATGPT_SECURE_TUNNEL_INSTALLATION_ID=REPLACE_WITH_UUIDV7
+
+systemctl restart kivra-memory-api.service
+/usr/local/libexec/kivra-memory-tunnel-mcp-probe \
+  /usr/bin/curl \
+  /etc/kivra-memory/chatgpt-mcp-authorization \
+  http://127.0.0.1:8080/chatgpt/mcp
+```
+
+Then validate and start the tunnel service:
 
 ```sh
 systemctl daemon-reload

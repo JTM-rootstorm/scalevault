@@ -1,0 +1,68 @@
+#!/bin/sh
+
+set -eu
+
+fail() {
+    printf '%s\n' "tunnel MCP probe failed: $1" >&2
+    exit 1
+}
+
+if [ "$#" -ne 3 ]; then
+    fail "expected curl, authorization credential, and endpoint"
+fi
+
+curl_command=$1
+authorization_credential=$2
+endpoint=$3
+
+[ "$endpoint" = "http://127.0.0.1:8080/chatgpt/mcp" ] \
+    || fail "the endpoint is not the fixed ChatGPT MCP route"
+[ -x "$curl_command" ] || fail "curl is not executable"
+[ -f "$authorization_credential" ] \
+    || fail "the authorization credential is not a regular file"
+[ ! -L "$authorization_credential" ] \
+    || fail "the authorization credential must not be a symbolic link"
+[ -r "$authorization_credential" ] \
+    || fail "the authorization credential is not readable"
+
+authorization=$(sed -n '1p' "$authorization_credential") \
+    || fail "could not inspect the authorization credential"
+authorization_lines=$(wc -l < "$authorization_credential") \
+    || fail "could not inspect the authorization credential"
+authorization_size=$(wc -c < "$authorization_credential") \
+    || fail "could not inspect the authorization credential"
+authorization_length=${#authorization}
+if [ "$authorization_lines" -gt 1 ] \
+    || { [ "$authorization_size" -ne "$authorization_length" ] \
+        && [ "$authorization_size" -ne $((authorization_length + 1)) ]; }; then
+    fail "the authorization credential must contain one value"
+fi
+
+uuid7='[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
+if ! printf '%s' "$authorization" \
+    | grep -Eq "^Bearer svb1\.${uuid7}\.${uuid7}\.[A-Za-z0-9_-]{43}$"; then
+    fail "the authorization credential has an invalid format"
+fi
+
+initialize_request='{"jsonrpc":"2.0","id":"scalevault-tunnel-startup","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"scalevault-tunnel-probe","version":"1"}}}'
+
+if ! printf 'header = "Authorization: %s"\n' "$authorization" \
+    | "$curl_command" \
+        --config - \
+        --proto '=http' \
+        --connect-timeout 5 \
+        --max-time 20 \
+        --max-filesize 65536 \
+        --max-redirs 0 \
+        --fail \
+        --silent \
+        --output /dev/null \
+        --request POST \
+        --header 'Accept: application/json, text/event-stream' \
+        --header 'Content-Type: application/json' \
+        --data-binary "$initialize_request" \
+        "$endpoint"; then
+    fail "authenticated initialize request failed"
+fi
+
+exit 0
