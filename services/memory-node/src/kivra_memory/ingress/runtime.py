@@ -181,14 +181,10 @@ def adapt_live_proposal(
             observed_at=_optional_datetime(payload, "observed_at"),
             origin_session_id=origin_session_id,
             metadata={},
-            selection_basis=SelectionBasis(
-                cast(str, _required(payload, "selection_basis", str))
-            ),
+            selection_basis=SelectionBasis(cast(str, _required(payload, "selection_basis", str))),
             epistemic_qualifiers=tuple(
                 EpistemicQualifier(value)
-                for value in cast(
-                    list[str], _required(payload, "epistemic_qualifiers", list)
-                )
+                for value in cast(list[str], _required(payload, "epistemic_qualifiers", list))
             ),
             evidence_references=evidence,
         )

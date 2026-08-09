@@ -144,11 +144,14 @@ class WebhookWakeHintVerifier:
             raise WebhookVerificationError("GitHub webhook signature was invalid")
 
         assert self._secret is not None
-        expected_signature = "sha256=" + hmac.new(
-            self._secret,
-            body,
-            hashlib.sha256,
-        ).hexdigest()
+        expected_signature = (
+            "sha256="
+            + hmac.new(
+                self._secret,
+                body,
+                hashlib.sha256,
+            ).hexdigest()
+        )
         if not hmac.compare_digest(expected_signature, signature):
             raise WebhookVerificationError("GitHub webhook signature was invalid")
 

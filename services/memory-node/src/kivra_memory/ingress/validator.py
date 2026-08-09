@@ -358,9 +358,7 @@ def _validator(schema: dict[str, object]) -> Draft202012Validator:
 
 
 _PROPOSAL_V1_VALIDATOR = _validator(_load_schema("chatgpt-memory-proposal-v1.schema.json"))
-_PROPOSAL_V2_VALIDATOR = _validator(
-    _load_decimal_schema("chatgpt-memory-proposal-v2.schema.json")
-)
+_PROPOSAL_V2_VALIDATOR = _validator(_load_decimal_schema("chatgpt-memory-proposal-v2.schema.json"))
 _CHECKPOINT_V1_VALIDATOR = _validator(_GENESIS_CHECKPOINT_V1_SCHEMA)
 _CHECKPOINT_V2_VALIDATOR = _validator(_load_schema("genesis-checkpoint-v2.schema.json"))
 

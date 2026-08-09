@@ -160,7 +160,8 @@ def _create_v2_lifecycle_function() -> None:
 
 
 def _create_result_reciprocity_function(*, allow_promoted: bool) -> None:
-    promoted = """
+    promoted = (
+        """
                 OR EXISTS (
                     SELECT 1
                     FROM public.command_receipts AS receipt
@@ -181,7 +182,10 @@ def _create_result_reciprocity_function(*, allow_promoted: bool) -> None:
                       AND decision.requested_operation = 'promote'
                       AND decision.outcome = 'promoted'
                 )
-    """ if allow_promoted else ""
+    """
+        if allow_promoted
+        else ""
+    )
     op.execute(
         sa.text(f"""
         CREATE OR REPLACE FUNCTION public.scalevault_enforce_ingress_result_reciprocity()
@@ -238,8 +242,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         op.f("ck_ingress_items_idempotency_key_length"),
         "ingress_items",
-        "declared_idempotency_key IS NULL OR "
-        "length(declared_idempotency_key) BETWEEN 1 AND 255",
+        "declared_idempotency_key IS NULL OR length(declared_idempotency_key) BETWEEN 1 AND 255",
     )
     op.create_check_constraint(
         op.f("ck_ingress_items_payload_sha256_length"),

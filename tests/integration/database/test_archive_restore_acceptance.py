@@ -277,10 +277,7 @@ def _later_event_batch(
         for path, content in first_files.items()
         if path == "archive-format.json" or path.startswith("schemas/")
     }
-    event_path = (
-        f"events/{event.created_at:%Y/%m/%d}/"
-        f"{event.sequence:012d}-{event.event_id}.json"
-    )
+    event_path = f"events/{event.created_at:%Y/%m/%d}/{event.sequence:012d}-{event.event_id}.json"
     files[event_path] = canonical_json_bytes(event.model_dump(mode="json"))
     schema_ids: dict[str, str] = {}
     for path, content in files.items():

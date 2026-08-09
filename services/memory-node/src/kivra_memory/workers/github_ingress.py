@@ -118,9 +118,7 @@ class GitHubIngressWorker:
 
         async def process_one(index: int, item: GitHubIngressWorkItem) -> None:
             async with semaphore:
-                results[index] = await self._processor.process(
-                    item.discovery, item.raw_bytes
-                )
+                results[index] = await self._processor.process(item.discovery, item.raw_bytes)
 
         async with asyncio.TaskGroup() as tasks:
             for index, item in enumerate(items):

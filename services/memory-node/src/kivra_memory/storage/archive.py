@@ -367,9 +367,7 @@ async def load_archive_batch_source(
                 func.max(MemoryEvent.sequence),
             ).where(MemoryEvent.tenant_id == tenant_id)
         )
-        tenant_event_count, tenant_min_sequence, tenant_max_sequence = (
-            tenant_prefix_result.one()
-        )
+        tenant_event_count, tenant_min_sequence, tenant_max_sequence = tenant_prefix_result.one()
         global_high_water = _require_single_tenant_global_prefix(
             next_global_sequence=next_global_sequence,
             tenant_event_count=tenant_event_count,
