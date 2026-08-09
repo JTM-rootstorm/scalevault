@@ -1,0 +1,297 @@
+"""PostgreSQL acceptance coverage for concurrent GitHub proposal ingestion."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+from collections import Counter
+from datetime import UTC, datetime
+from typing import cast
+from uuid import UUID
+
+from kivra_memory.application.github_ingress import GitHubIngressOrchestrator
+from kivra_memory.application.mutations import CommandPrincipal
+from kivra_memory.application.selection import (
+    NominationCommandLike,
+    ResolvedNominationContext,
+    SelectionEngine,
+)
+from kivra_memory.domain.enums import AuthorityClass, IngressState
+from kivra_memory.domain.identifiers import new_uuid7
+from kivra_memory.ingress.github_client import GitHubProposalObject
+from kivra_memory.policy import EvidenceKind, EvidenceSummary, EvidenceTrust
+from kivra_memory.storage.database import Database
+from kivra_memory.storage.models import (
+    CommandReceipt,
+    IngressItem,
+    Memory,
+    MemoryEvent,
+    OutboxJob,
+    SelectionDecision,
+    Subject,
+)
+from kivra_memory.workers.github_ingress import (
+    GitHubIngressIdentity,
+    GitHubIngressWorker,
+    GitHubIngressWorkItem,
+    work_item_from_proposal,
+)
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from tests.fixtures.database_seed import seed_model_layers, seed_rows
+
+from .conftest import AlembicRunner, PostgreSQLTestServer
+
+_NOW = datetime(2026, 8, 9, 12, tzinfo=UTC)
+_UUID_TIMESTAMP_MS = 1_786_276_800_000
+_PROPOSAL_COUNT = 50
+
+
+def _seed_identifier(table: str, column: str, index: int = 0) -> UUID:
+    return cast(UUID, seed_rows()[table][index][column])
+
+
+def _identifier(ordinal: int) -> UUID:
+    return new_uuid7(timestamp_ms=_UUID_TIMESTAMP_MS, random_bits=ordinal)
+
+
+def _identity() -> GitHubIngressIdentity:
+    binding = seed_rows()["transport_bindings"][2]
+    return GitHubIngressIdentity(
+        tenant_id=_seed_identifier("tenants", "tenant_id"),
+        transport_binding_id=cast(UUID, binding["transport_binding_id"]),
+        installation_id=_seed_identifier("transport_installations", "installation_id"),
+        actor_id=cast(UUID, binding["actor_id"]),
+        client_id=cast(UUID, binding["client_id"]),
+        repository_id=12_345_678,
+        branch_name="main",
+    )
+
+
+def _proposal_payload(
+    ordinal: int,
+    *,
+    project_subject_id: UUID,
+    sensitivity: int = 0,
+) -> dict[str, object]:
+    proposal_id = _identifier(1_000 + ordinal)
+    return {
+        "schema_version": 2,
+        "proposal_id": str(proposal_id),
+        "installation_id": str(_identity().installation_id),
+        "idempotency_key": f"github-acceptance:{ordinal}",
+        "operation": "nominate",
+        "persona_id": str(_seed_identifier("personas", "persona_id")),
+        "branch_id": str(_seed_identifier("branches", "branch_id")),
+        "subject_id": str(project_subject_id),
+        "subject_kind": "project",
+        "category": "project_decision",
+        "ontological_status": "literal_technical_fact",
+        "scope": "project",
+        "visibility": "restricted",
+        "statement": f"Synthetic concurrent project decision {ordinal}.",
+        "reason_to_remember": "Exercise the concurrent GitHub ingress acceptance gate.",
+        "interpretation_limits": ["Synthetic integration-test data only."],
+        "confidence": 0.9,
+        "salience": 0.8,
+        "durability": 0.7,
+        "sensitivity": sensitivity,
+        "valid_from": None,
+        "valid_to": None,
+        "observed_at": _NOW.isoformat().replace("+00:00", "Z"),
+        "origin_session_id": None,
+        "selection_basis": "verified_project_decision",
+        "epistemic_qualifiers": [],
+        "evidence_references": [
+            {
+                "evidence_key": f"synthetic-project-source:{ordinal}",
+                "opaque_reference": f"synthetic:project-source:{ordinal}",
+            }
+        ],
+        "created_at": _NOW.isoformat().replace("+00:00", "Z"),
+    }
+
+
+def _work_item(
+    ordinal: int,
+    *,
+    project_subject_id: UUID,
+    sensitivity: int = 0,
+) -> GitHubIngressWorkItem:
+    payload = _proposal_payload(
+        ordinal,
+        project_subject_id=project_subject_id,
+        sensitivity=sensitivity,
+    )
+    raw_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    proposal_id = str(payload["proposal_id"])
+    identity = _identity()
+    proposal = GitHubProposalObject(
+        repository_id=identity.repository_id,
+        commit_id=f"{ordinal + 1:040x}",
+        path=(f"ingress/v2/{identity.installation_id}/2026/08/{proposal_id}.json"),
+        blob_id=f"{ordinal + 10_000:040x}",
+        raw_sha256=hashlib.sha256(raw_bytes).hexdigest(),
+        raw_bytes=raw_bytes,
+    )
+    return work_item_from_proposal(proposal, identity=identity, discovered_at=_NOW)
+
+
+async def _seed(database: Database, *, project_subject_id: UUID) -> None:
+    tenant_id = _seed_identifier("tenants", "tenant_id")
+    async with database.tenant_session(tenant_id) as session:
+        for layer in seed_model_layers():
+            session.add_all(layer)
+            await session.flush()
+        session.add(
+            Subject(
+                subject_id=project_subject_id,
+                tenant_id=tenant_id,
+                lineage_id=_seed_identifier("lineages", "lineage_id"),
+                kind="project",
+                canonical_key="synthetic-ingress-acceptance-project",
+                display_name="Synthetic Ingress Acceptance Project",
+                persona_id=None,
+                relationship_actor_id=None,
+                project_ref="synthetic-ingress-acceptance",
+                episode_ref=None,
+                origin_session_id=None,
+                metadata_={"fixture": True},
+                created_at=_NOW,
+            )
+        )
+        await session.flush()
+
+
+async def _resolve_github_proposal(
+    _principal: CommandPrincipal,
+    command: NominationCommandLike,
+) -> ResolvedNominationContext:
+    proposal = command.proposal
+    evidence_reference = proposal.evidence_references[0]
+    return ResolvedNominationContext(
+        source_kind="github_proposal",
+        effective_authority_class=AuthorityClass.VERIFIED_PROJECT_SOURCE,
+        evidence=(
+            EvidenceSummary(
+                evidence_key=evidence_reference.evidence_key,
+                kind=EvidenceKind.PROJECT_SOURCE,
+                trust=EvidenceTrust.TRUSTED,
+            ),
+        ),
+    )
+
+
+async def _count(session: AsyncSession, model: type[object]) -> int:
+    return int(await session.scalar(select(func.count()).select_from(model)) or 0)
+
+
+async def _canonical_counts(session: AsyncSession) -> dict[str, int]:
+    return {
+        "ingress": await _count(session, IngressItem),
+        "events": await _count(session, MemoryEvent),
+        "memories": await _count(session, Memory),
+        "receipts": await _count(session, CommandReceipt),
+        "decisions": await _count(session, SelectionDecision),
+        "outbox": await _count(session, OutboxJob),
+    }
+
+
+async def test_fifty_proposals_are_atomic_idempotent_and_reject_sensitive_transport(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+) -> None:
+    """Exercise one real polled batch, duplicate delivery, and the sensitivity boundary."""
+
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    tenant_id = _seed_identifier("tenants", "tenant_id")
+    project_subject_id = _identifier(900)
+    await _seed(database, project_subject_id=project_subject_id)
+    factory = async_sessionmaker(database.engine, expire_on_commit=False)
+    selection = SelectionEngine(factory, _resolve_github_proposal)
+    orchestrator = GitHubIngressOrchestrator(factory, selection, clock=lambda: _NOW)
+    worker = GitHubIngressWorker(orchestrator, concurrency=8)
+    items = tuple(
+        _work_item(ordinal, project_subject_id=project_subject_id)
+        for ordinal in range(_PROPOSAL_COUNT)
+    )
+
+    try:
+        results = await worker.process_batch(items)
+        assert len(results) == _PROPOSAL_COUNT
+        assert {result.state for result in results} == {IngressState.ACCEPTED}
+        assert {result.disposition for result in results} == {"terminal"}
+
+        async with database.tenant_session(tenant_id) as session:
+            accepted = (
+                await session.scalars(
+                    select(IngressItem)
+                    .where(IngressItem.state == IngressState.ACCEPTED.value)
+                    .order_by(IngressItem.immutable_path)
+                )
+            ).all()
+            assert len(accepted) == _PROPOSAL_COUNT
+            assert len({row.ingress_id for row in accepted}) == _PROPOSAL_COUNT
+            assert len({row.result_event_id for row in accepted}) == _PROPOSAL_COUNT
+            assert len({row.result_memory_id for row in accepted}) == _PROPOSAL_COUNT
+            assert all(row.result_event_id is not None for row in accepted)
+            assert all(row.result_memory_id is not None for row in accepted)
+
+            decisions = (await session.scalars(select(SelectionDecision))).all()
+            assert len(decisions) == _PROPOSAL_COUNT
+            assert {row.source_kind for row in decisions} == {"github_proposal"}
+            assert {row.outcome for row in decisions} == {"active"}
+            assert {row.sensitivity for row in decisions} == {0}
+
+            jobs = (await session.scalars(select(OutboxJob))).all()
+            assert Counter(job.job_type for job in jobs) == {
+                "embed_memory": _PROPOSAL_COUNT,
+                "check_duplicates": _PROPOSAL_COUNT,
+                "export_git_batch": _PROPOSAL_COUNT,
+            }
+            committed_counts = await _canonical_counts(session)
+            assert committed_counts == {
+                "ingress": _PROPOSAL_COUNT,
+                "events": _PROPOSAL_COUNT,
+                "memories": _PROPOSAL_COUNT,
+                "receipts": _PROPOSAL_COUNT,
+                "decisions": _PROPOSAL_COUNT,
+                "outbox": _PROPOSAL_COUNT * 3,
+            }
+
+        first_replay, second_replay = await asyncio.gather(
+            worker.process_batch(items),
+            worker.process_batch(items),
+        )
+        for replay in (first_replay, second_replay):
+            assert len(replay) == _PROPOSAL_COUNT
+            assert {result.state for result in replay} == {IngressState.ACCEPTED}
+            assert {result.disposition for result in replay} == {"unchanged"}
+
+        async with database.tenant_session(tenant_id) as session:
+            assert await _canonical_counts(session) == committed_counts
+
+        sensitive = _work_item(
+            999,
+            project_subject_id=project_subject_id,
+            sensitivity=1,
+        )
+        sensitive_result = (await worker.process_batch((sensitive,)))[0]
+        assert sensitive_result.state is IngressState.QUARANTINED
+        assert sensitive_result.disposition == "terminal"
+        assert sensitive_result.code == "schema_invalid"
+
+        async with database.tenant_session(tenant_id) as session:
+            after_sensitive = await _canonical_counts(session)
+            assert after_sensitive == {**committed_counts, "ingress": _PROPOSAL_COUNT + 1}
+            sensitive_row = await session.get(IngressItem, sensitive.discovery.ingress_id)
+            assert sensitive_row is not None
+            assert sensitive_row.state == IngressState.QUARANTINED.value
+            assert sensitive_row.error_code == "schema_invalid"
+            assert sensitive_row.result_event_id is None
+            assert sensitive_row.result_memory_id is None
+    finally:
+        await database.dispose()
