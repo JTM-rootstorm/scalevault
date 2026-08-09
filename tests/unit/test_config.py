@@ -1,8 +1,10 @@
 from pathlib import Path
 from typing import TypedDict
+from uuid import UUID
 
 import pytest
 from kivra_memory.config import Settings, get_settings
+from kivra_memory.domain.identifiers import new_uuid7
 from pydantic import PostgresDsn, ValidationError
 
 
@@ -19,6 +21,10 @@ PRODUCTION_AUTH: _ProductionAuth = {
 }
 
 
+def uid(value: int) -> UUID:
+    return new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=value)
+
+
 def test_settings_use_loopback_defaults() -> None:
     settings = Settings()
 
@@ -27,6 +33,8 @@ def test_settings_use_loopback_defaults() -> None:
     assert settings.database_url is None
     assert settings.client_token_pepper_credential is None
     assert settings.client_token_pepper_key_id is None
+    assert settings.chatgpt_secure_tunnel_enabled is False
+    assert settings.chatgpt_secure_tunnel_installation_id is None
     assert settings.sealed_content_enabled is False
     assert settings.sealed_key_provider_root is None
     assert settings.sealed_digest_binding_credential is None
@@ -107,6 +115,51 @@ def test_client_token_pepper_configuration_is_paired_and_bounded() -> None:
             client_token_pepper_credential=Path("/tmp/pepper"),
             client_token_pepper_key_id="INVALID KEY",
         )
+
+
+def test_chatgpt_secure_tunnel_configuration_is_explicit_and_complete() -> None:
+    database_url = PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory")
+    with pytest.raises(ValidationError, match="installation ID is required"):
+        Settings(
+            database_url=database_url,
+            chatgpt_secure_tunnel_enabled=True,
+            client_token_pepper_credential=Path("/tmp/pepper"),
+            client_token_pepper_key_id="codex-primary-v1",
+        )
+    with pytest.raises(ValidationError, match="database_url is required"):
+        Settings(
+            chatgpt_secure_tunnel_enabled=True,
+            chatgpt_secure_tunnel_installation_id=uid(1),
+            client_token_pepper_credential=Path("/tmp/pepper"),
+            client_token_pepper_key_id="codex-primary-v1",
+        )
+    with pytest.raises(ValidationError, match="client token verifier is required"):
+        Settings(
+            database_url=database_url,
+            chatgpt_secure_tunnel_enabled=True,
+            chatgpt_secure_tunnel_installation_id=uid(1),
+        )
+    with pytest.raises(ValidationError, match="must be UUIDv7"):
+        Settings(
+            database_url=database_url,
+            chatgpt_secure_tunnel_enabled=True,
+            chatgpt_secure_tunnel_installation_id=UUID("00000000-0000-4000-8000-000000000001"),
+            client_token_pepper_credential=Path("/tmp/pepper"),
+            client_token_pepper_key_id="codex-primary-v1",
+        )
+    with pytest.raises(ValidationError, match="requires the tunnel to be enabled"):
+        Settings(chatgpt_secure_tunnel_installation_id=uid(1))
+
+    settings = Settings(
+        database_url=database_url,
+        chatgpt_secure_tunnel_enabled=True,
+        chatgpt_secure_tunnel_installation_id=uid(1),
+        client_token_pepper_credential=Path("/tmp/pepper"),
+        client_token_pepper_key_id="codex-primary-v1",
+    )
+
+    assert settings.chatgpt_secure_tunnel_enabled is True
+    assert settings.chatgpt_secure_tunnel_installation_id == uid(1)
 
 
 def test_production_requires_exact_client_token_pepper_boundary() -> None:

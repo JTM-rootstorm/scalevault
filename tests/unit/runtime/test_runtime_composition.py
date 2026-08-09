@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import pytest
 from kivra_memory.application.sealed_runtime import SealedRuntime
 from kivra_memory.config import Settings
+from kivra_memory.domain.identifiers import new_uuid7
+from kivra_memory.runtime.chatgpt import ChatGPTReadRuntime
 from kivra_memory.runtime.composition import (
     MemoryNodeRuntime,
     _read_client_token_pepper,
@@ -14,6 +16,7 @@ from kivra_memory.runtime.composition import (
 from pydantic import PostgresDsn
 
 DATABASE_URL = PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory")
+INSTALLATION_ID = new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=1)
 
 
 def credential(tmp_path: Path, value: bytes = b"p" * 32) -> Path:
@@ -205,3 +208,52 @@ async def test_production_composition_requires_effective_service_owner(
         )
 
     assert seen_owner == [os.geteuid()]
+
+
+def test_chatgpt_runtime_composition_defensively_requires_enabled_complete_settings() -> None:
+    runtime = object()
+    for settings in (
+        Settings.model_construct(
+            environment="test",
+            chatgpt_secure_tunnel_enabled=False,
+            chatgpt_secure_tunnel_installation_id=INSTALLATION_ID,
+            client_token_pepper_credential=Path("/unused"),
+            client_token_pepper_key_id="codex-primary-v1",
+        ),
+        Settings.model_construct(
+            environment="test",
+            chatgpt_secure_tunnel_enabled=True,
+            chatgpt_secure_tunnel_installation_id=None,
+            client_token_pepper_credential=Path("/unused"),
+            client_token_pepper_key_id="codex-primary-v1",
+        ),
+    ):
+        with pytest.raises(RuntimeError, match=r"^invalid_chatgpt_runtime_configuration$"):
+            ChatGPTReadRuntime.from_memory_runtime(settings, runtime)  # type: ignore[arg-type]
+
+
+async def test_chatgpt_runtime_composition_reuses_only_configured_verifier_key(
+    tmp_path: Path,
+) -> None:
+    path = credential(tmp_path)
+    settings = Settings(
+        environment="test",
+        database_url=DATABASE_URL,
+        client_token_pepper_credential=path,
+        client_token_pepper_key_id="secure-tunnel-v7",
+        chatgpt_secure_tunnel_enabled=True,
+        chatgpt_secure_tunnel_installation_id=INSTALLATION_ID,
+    )
+    runtime = MemoryNodeRuntime.from_settings(
+        settings,
+        sealed_runtime=SealedRuntime(key_provider=None, digest_binder=None),
+    )
+
+    chatgpt_runtime = ChatGPTReadRuntime.from_memory_runtime(settings, runtime)
+    hashers = vars(chatgpt_runtime.authenticator)["_hashers"]
+
+    assert set(hashers) == {"secure-tunnel-v7"}
+    assert chatgpt_runtime.installation_id == INSTALLATION_ID
+    assert chatgpt_runtime.queries is runtime.queries
+    assert chatgpt_runtime.status is runtime.status
+    await runtime.dispose()

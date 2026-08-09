@@ -7,9 +7,12 @@ from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal, Self, cast
 from urllib.parse import unquote
+from uuid import UUID
 
 from pydantic import Field, PostgresDsn, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from kivra_memory.domain.identifiers import require_uuid7
 
 _LOCAL_DATABASE_SOCKET_DIRECTORIES = {"/run/postgresql", "/var/run/postgresql"}
 _DATABASE_DESTINATION_QUERY_PARAMETERS = {"host", "hostaddr", "service", "servicefile"}
@@ -35,6 +38,8 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
     client_token_pepper_credential: Path | None = None
     client_token_pepper_key_id: str | None = None
+    chatgpt_secure_tunnel_enabled: bool = False
+    chatgpt_secure_tunnel_installation_id: UUID | None = None
     sealed_content_enabled: bool = False
     sealed_key_provider_root: Path | None = None
     sealed_digest_binding_credential: Path | None = None
@@ -76,6 +81,27 @@ class Settings(BaseSettings):
                 raise ValueError("client token pepper credential must use the production boundary")
             if self.client_token_pepper_key_id is None:
                 raise ValueError("client token pepper key ID is required in production")
+        if self.chatgpt_secure_tunnel_enabled:
+            if self.chatgpt_secure_tunnel_installation_id is None:
+                raise ValueError("ChatGPT secure tunnel installation ID is required when enabled")
+            if self.database_url is None:
+                raise ValueError("database_url is required for the ChatGPT secure tunnel")
+            if (
+                self.client_token_pepper_credential is None
+                or self.client_token_pepper_key_id is None
+            ):
+                raise ValueError("client token verifier is required for the ChatGPT secure tunnel")
+            try:
+                require_uuid7(
+                    self.chatgpt_secure_tunnel_installation_id,
+                    field_name="chatgpt_secure_tunnel_installation_id",
+                )
+            except (TypeError, ValueError):
+                raise ValueError("ChatGPT secure tunnel installation ID must be UUIDv7") from None
+        elif self.chatgpt_secure_tunnel_installation_id is not None:
+            raise ValueError(
+                "ChatGPT secure tunnel installation ID requires the tunnel to be enabled"
+            )
         if self.sealed_content_enabled:
             if (
                 self.sealed_key_provider_root is None
