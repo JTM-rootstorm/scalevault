@@ -25,6 +25,12 @@ useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-exporter
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-ingress
+groupadd --system kivra-sealed
+groupadd --system memory-purge
+useradd --system --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin --gid memory-purge memory-purge
+usermod --append --groups kivra-sealed memory-api
+usermod --append --groups kivra-memory,kivra-sealed memory-purge
 mountpoint --quiet /mnt/memory
 install -d -o root -g root -m 0755 /opt/kivra-memory/app
 install -d -o root -g kivra-memory -m 0750 /etc/kivra-memory
@@ -35,6 +41,8 @@ install -d -o memory-node -g kivra-memory -m 0700 \
   /mnt/memory/kivra-memory/node-agent
 install -d -o memory-exporter -g kivra-memory -m 0700 \
   /mnt/memory/kivra-memory/archive
+install -d -o root -g kivra-sealed -m 2770 \
+  /var/lib/kivra-memory-sealed/keys
 ```
 
 Treat an already-existing account with unexpected UID, GID, shell, home, or
@@ -54,6 +62,60 @@ exporter uses `kivra_memory_exporter`. GitHub discovery and validation use
 `kivra_memory_ingress`, while the canonical selection transaction uses a
 separate local `kivra_memory_api` connection. Never grant canonical event writes
 to the ingress role.
+
+### Optional sealed content
+
+Sealed content is disabled by default. Enabling it requires the API drop-in
+under `systemd/sealed-content/`, a root-owned mode-`0600` file containing 32 to
+128 random bytes at `/etc/kivra-memory/sealed-digest-binding`, and these API
+settings:
+
+```text
+KIVRA_MEMORY_SEALED_CONTENT_ENABLED=true
+KIVRA_MEMORY_SEALED_KEY_PROVIDER_ROOT=/var/lib/kivra-memory-sealed/keys
+KIVRA_MEMORY_SEALED_DIGEST_BINDING_CREDENTIAL=/run/credentials/kivra-memory-api.service/sealed-digest-binding
+```
+
+The local provider never writes key bytes to PostgreSQL, environment variables,
+Git, or `/mnt/memory`. Back up `/var/lib/kivra-memory-sealed/keys` and the
+digest-binding credential through a separate restricted key-recovery process.
+Restoring only PostgreSQL and the archive does not restore sealed-content
+readability. Replacing the binding credential makes existing sealed idempotency
+bindings unverifiable and requires a separately reviewed rotation procedure.
+
+Install `memory-sealed-worker.env` as `root:memory-purge` mode `0640`:
+
+```text
+KIVRA_MEMORY_PURGE_DATABASE_URL=postgresql+psycopg://kivra_memory_purge:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
+KIVRA_MEMORY_PURGE_TENANT_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_PURGE_ACTOR_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_PURGE_CLIENT_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_PURGE_TRANSPORT_BINDING_ID=REPLACE_WITH_UUIDV7
+```
+
+Those IDs must identify one unexpired `internal_service` binding with a service
+actor, a worker client scoped exactly to `memory.lifecycle.purge`, and the exact
+authorized operation `payload_purge_completed`. The worker claims only
+`purge_payload` jobs and emits only content-free startup and retry diagnostics.
+The authenticated API composition must construct both `SelectionEngine` and
+`QueryEngine` through `SealedRuntime`; setting the environment variables alone
+does not turn dependency-unavailable MCP executors into a usable sensitivity-4
+path.
+
+Install and verify the optional units only after those prerequisites exist:
+
+```sh
+install -D -o root -g root -m 0644 \
+  deploy/memory-node/systemd/kivra-memory-sealed-worker.service \
+  /etc/systemd/system/kivra-memory-sealed-worker.service
+install -D -o root -g root -m 0644 \
+  deploy/memory-node/systemd/sealed-content/kivra-memory-api.service.d/20-sealed-content.conf \
+  /etc/systemd/system/kivra-memory-api.service.d/20-sealed-content.conf
+systemctl daemon-reload
+systemd-analyze verify \
+  kivra-memory-api.service \
+  kivra-memory-sealed-worker.service
+```
 
 ### Archive exporter
 
@@ -291,6 +353,13 @@ The tunnel unit is installed separately and remains disabled until its Platform
 tunnel ID, restricted runtime credential, and ChatGPT workspace association are
 available. Its MCP target and health UI are both loopback-only; see
 `../tunnel/README.md` for the credential boundary and activation checks.
+
+The sealed-content drop-in and purge unit remain uninstalled and disabled when
+sealed content is not explicitly enabled. Before activation, provision the
+dedicated PostgreSQL role, pinned internal-service identity, separate key
+backup, and digest-binding recovery material, then exercise
+create/read/hard-forget in a disposable tenant. The key directory is
+intentionally independent of the archive/NAS mount.
 
 For exporter activation, verify the `archive_targets` row, clean branch, pinned
 Forgejo host key, deploy-key repository scope, allowed signer, signed

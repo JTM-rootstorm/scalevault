@@ -49,6 +49,7 @@ BEGIN
             ('kivra_memory_policy', true),
             ('kivra_memory_genesis_importer', true),
             ('kivra_memory_worker', true),
+            ('kivra_memory_purge', true),
             ('kivra_memory_ingress', true),
             ('kivra_memory_exporter', true)
         ) AS roles(name, can_login)
@@ -76,6 +77,8 @@ ALTER ROLE kivra_memory_genesis_importer
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_worker
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE kivra_memory_purge
+    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_ingress
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_exporter
@@ -86,6 +89,7 @@ REVOKE kivra_memory_owner FROM
     kivra_memory_policy,
     kivra_memory_genesis_importer,
     kivra_memory_worker,
+    kivra_memory_purge,
     kivra_memory_ingress,
     kivra_memory_exporter;
 REVOKE kivra_memory_migrator FROM
@@ -93,6 +97,7 @@ REVOKE kivra_memory_migrator FROM
     kivra_memory_policy,
     kivra_memory_genesis_importer,
     kivra_memory_worker,
+    kivra_memory_purge,
     kivra_memory_ingress,
     kivra_memory_exporter;
 GRANT kivra_memory_owner TO kivra_memory_migrator
@@ -127,7 +132,7 @@ BEGIN
     EXECUTE format(
         'GRANT CONNECT ON DATABASE %I TO kivra_memory_migrator, '
         'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
-        'kivra_memory_exporter, kivra_memory_policy, '
+        'kivra_memory_exporter, kivra_memory_policy, kivra_memory_purge, '
         'kivra_memory_genesis_importer',
         pg_catalog.current_database()
     );
@@ -140,6 +145,7 @@ REVOKE ALL ON SCHEMA public FROM
     kivra_memory_policy,
     kivra_memory_genesis_importer,
     kivra_memory_worker,
+    kivra_memory_purge,
     kivra_memory_ingress,
     kivra_memory_exporter;
 GRANT USAGE ON SCHEMA public TO
@@ -148,6 +154,7 @@ GRANT USAGE ON SCHEMA public TO
     kivra_memory_policy,
     kivra_memory_genesis_importer,
     kivra_memory_worker,
+    kivra_memory_purge,
     kivra_memory_ingress,
     kivra_memory_exporter;
 
@@ -156,6 +163,7 @@ REVOKE ALL ON ALL TABLES IN SCHEMA public FROM
     kivra_memory_policy,
     kivra_memory_genesis_importer,
     kivra_memory_worker,
+    kivra_memory_purge,
     kivra_memory_ingress,
     kivra_memory_exporter;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM
@@ -163,6 +171,7 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM
     kivra_memory_policy,
     kivra_memory_genesis_importer,
     kivra_memory_worker,
+    kivra_memory_purge,
     kivra_memory_ingress,
     kivra_memory_exporter;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
@@ -432,6 +441,67 @@ BEGIN
         GRANT INSERT ON TABLE public.branches TO kivra_memory_worker;
     END IF;
 
+    -- Hard-forget key destruction uses a separate exact-scope worker. It can
+    -- append only the purge-completion event/outbox record, update the one
+    -- projection and key lifecycle, and remove the forgotten embedding.
+    FOREACH table_name IN ARRAY ARRAY[
+        'actors', 'clients',
+        'transport_installations', 'transport_bindings', 'branches',
+        'memory_event_counter', 'memory_events', 'memories',
+        'memory_content_keys', 'outbox_jobs'
+    ]
+    LOOP
+        IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
+            EXECUTE format(
+                'GRANT SELECT ON TABLE public.%I TO kivra_memory_purge',
+                table_name
+            );
+        END IF;
+    END LOOP;
+    FOREACH table_name IN ARRAY ARRAY['memory_events', 'outbox_jobs']
+    LOOP
+        IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
+            EXECUTE format(
+                'GRANT INSERT ON TABLE public.%I TO kivra_memory_purge',
+                table_name
+            );
+        END IF;
+    END LOOP;
+    IF pg_catalog.to_regclass('public.memory_event_counter') IS NOT NULL THEN
+        GRANT UPDATE ON TABLE public.memory_event_counter TO kivra_memory_purge;
+    END IF;
+    IF pg_catalog.to_regclass('public.memories') IS NOT NULL THEN
+        GRANT UPDATE (
+            revision,
+            content_protection,
+            updated_at,
+            last_event_id
+        ) ON TABLE public.memories TO kivra_memory_purge;
+    END IF;
+    IF pg_catalog.to_regclass('public.memory_content_keys') IS NOT NULL THEN
+        GRANT UPDATE (
+            state,
+            destroyed_at,
+            destruction_receipt_sha256
+        ) ON TABLE public.memory_content_keys TO kivra_memory_purge;
+    END IF;
+    IF pg_catalog.to_regclass('public.memory_embeddings_v1') IS NOT NULL THEN
+        GRANT DELETE ON TABLE public.memory_embeddings_v1 TO kivra_memory_purge;
+    END IF;
+    IF pg_catalog.to_regclass('public.outbox_jobs') IS NOT NULL THEN
+        GRANT UPDATE (
+            state,
+            lease_owner,
+            lease_expires_at,
+            attempt_count,
+            available_at,
+            updated_at,
+            completed_at,
+            last_error_code,
+            last_error_summary
+        ) ON TABLE public.outbox_jobs TO kivra_memory_purge;
+    END IF;
+
     -- Ingress discovers and validates immutable external proposals. The API is
     -- the only runtime role that can accept them through the canonical event
     -- path and publish result identifiers.
@@ -598,7 +668,7 @@ BEGIN
             EXECUTE format(
                 'REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, '
                 'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
-                'kivra_memory_exporter, kivra_memory_policy, '
+                'kivra_memory_exporter, kivra_memory_policy, kivra_memory_purge, '
                 'kivra_memory_genesis_importer',
                 function_signature
             );
@@ -609,7 +679,7 @@ BEGIN
     -- remain executable only through their installed triggers.
     FOREACH runtime_role IN ARRAY ARRAY[
         'kivra_memory_api', 'kivra_memory_worker', 'kivra_memory_ingress',
-        'kivra_memory_exporter', 'kivra_memory_policy',
+        'kivra_memory_exporter', 'kivra_memory_policy', 'kivra_memory_purge',
         'kivra_memory_genesis_importer'
     ]
     LOOP
@@ -637,7 +707,8 @@ BEGIN
     END IF;
     IF sequence_name IS NOT NULL THEN
         EXECUTE format(
-            'GRANT USAGE ON SEQUENCE %s TO kivra_memory_api, kivra_memory_worker',
+            'GRANT USAGE ON SEQUENCE %s TO '
+            'kivra_memory_api, kivra_memory_worker, kivra_memory_purge',
             sequence_name
         );
         EXECUTE format(

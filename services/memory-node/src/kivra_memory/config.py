@@ -3,6 +3,7 @@
 import os
 from functools import lru_cache
 from ipaddress import ip_address
+from pathlib import Path
 from typing import Literal, Self, cast
 from urllib.parse import unquote
 
@@ -30,6 +31,9 @@ class Settings(BaseSettings):
     database_url: PostgresDsn | None = None
     database_connect_timeout_seconds: int = Field(default=3, ge=1, le=30)
     metrics_enabled: bool = True
+    sealed_content_enabled: bool = False
+    sealed_key_provider_root: Path | None = None
+    sealed_digest_binding_credential: Path | None = None
 
     @model_validator(mode="after")
     def require_production_dependencies(self) -> Self:
@@ -48,6 +52,36 @@ class Settings(BaseSettings):
                 raise ValueError("host must be loopback in production")
             if self.database_url is not None and not _is_local_database_url(self.database_url):
                 raise ValueError("database_url must use a local PostgreSQL host in production")
+        if self.sealed_content_enabled:
+            if (
+                self.sealed_key_provider_root is None
+                or not self.sealed_key_provider_root.is_absolute()
+                or ".." in self.sealed_key_provider_root.parts
+            ):
+                raise ValueError("sealed_key_provider_root must be an absolute canonical path")
+            if (
+                self.sealed_digest_binding_credential is None
+                or not self.sealed_digest_binding_credential.is_absolute()
+                or ".." in self.sealed_digest_binding_credential.parts
+            ):
+                raise ValueError(
+                    "sealed_digest_binding_credential must be an absolute canonical path"
+                )
+            if self.environment == "production" and self.sealed_key_provider_root != Path(
+                "/var/lib/kivra-memory-sealed/keys"
+            ):
+                raise ValueError("sealed_key_provider_root must use the production key boundary")
+            if self.environment == "production" and self.sealed_digest_binding_credential != Path(
+                "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
+            ):
+                raise ValueError(
+                    "sealed_digest_binding_credential must use the systemd credential boundary"
+                )
+        elif (
+            self.sealed_key_provider_root is not None
+            or self.sealed_digest_binding_credential is not None
+        ):
+            raise ValueError("sealed provider settings require sealed content to be enabled")
         return self
 
 

@@ -23,6 +23,7 @@ from kivra_memory.api.mcp import (
     dependency_unavailable_read_executor,
     dependency_unavailable_read_principal_resolver,
 )
+from kivra_memory.application.sealed_runtime import SealedRuntime
 from kivra_memory.config import Settings, get_settings
 from kivra_memory.storage.readiness import (
     DatabaseProbe,
@@ -46,10 +47,14 @@ def create_app(
     ),
     read_executor: ReadExecutor = dependency_unavailable_read_executor,
     nomination_executor: NominationExecutor = dependency_unavailable_nomination_executor,
+    sealed_runtime: SealedRuntime | None = None,
 ) -> FastAPI:
     """Create an application without storing authoritative process-local state."""
 
     runtime_settings = settings or get_settings()
+    runtime_sealed = sealed_runtime or SealedRuntime(key_provider=None, digest_binder=None)
+    if runtime_settings.sealed_content_enabled != runtime_sealed.enabled:
+        raise RuntimeError("invalid_sealed_content_configuration")
     mcp_server = create_mcp(
         mutation_executor=mutation_executor,
         read_principal_resolver=read_principal_resolver,
@@ -61,6 +66,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = runtime_settings
+        app.state.sealed_content_configured = runtime_sealed.enabled
         async with mcp_server.session_manager.run():
             yield
 
@@ -126,11 +132,12 @@ def main() -> None:
 
     try:
         settings = get_settings()
-    except (SettingsError, ValidationError):
+        sealed_runtime = SealedRuntime.from_settings(settings)
+    except (RuntimeError, SettingsError, ValidationError):
         print("ScaleVault configuration is invalid", file=sys.stderr)
         raise SystemExit(2) from None
     uvicorn.run(
-        create_app(settings),
+        create_app(settings, sealed_runtime=sealed_runtime),
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level.lower(),

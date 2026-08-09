@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.application.mutations import CommandPrincipal
@@ -25,7 +26,6 @@ from kivra_memory.security.keys import ContentKeyReference, KeyProvider, KeyProv
 from kivra_memory.storage.event_store import append_memory_event
 from kivra_memory.storage.live_projection import (
     load_projection_state_for_update,
-    stage_live_projection,
     validate_live_event,
 )
 from kivra_memory.storage.models import (
@@ -258,7 +258,33 @@ async def handle_purge_payload_job(
         session, event=event, branch=_branch_state(branch_row)
     )
     projection_after = validate_live_event(before, event)
-    await stage_live_projection(session, before=before, after=projection_after, event=event)
+    if projection_after.memories.get(memory_id) != after:
+        raise SealedContentPurgeError("invalid_job")
+    projection_update = cast(
+        CursorResult[object],
+        await session.execute(
+            update(Memory)
+            .where(
+                Memory.tenant_id == state.tenant_id,
+                Memory.lineage_id == state.lineage_id,
+                Memory.branch_id == state.branch_id,
+                Memory.memory_id == state.memory_id,
+                Memory.revision == state.revision,
+                Memory.last_event_id == source_event_id,
+                Memory.status == "tombstoned",
+                Memory.content_protection == "envelope_encrypted",
+                Memory.content_key_id == state.content_key_id,
+            )
+            .values(
+                revision=after.revision,
+                content_protection="cryptographically_erased",
+                updated_at=completed_at,
+                last_event_id=event.event_id,
+            )
+        ),
+    )
+    if projection_update.rowcount != 1:
+        raise SealedContentPurgeError("invalid_job")
     key_row.state = "destroyed"
     key_row.destroyed_at = completed_at
     key_row.destruction_receipt_sha256 = receipt_sha256

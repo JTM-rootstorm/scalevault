@@ -1,0 +1,37 @@
+[Unit]
+Description=ScaleVault sealed-content purge worker
+After=postgresql@17-main.service
+Requires=postgresql@17-main.service
+ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys
+
+[Service]
+Type=simple
+User=memory-purge
+Group=memory-purge
+SupplementaryGroups=kivra-memory kivra-sealed
+WorkingDirectory=/opt/kivra-memory/app
+Environment=KIVRA_MEMORY_ENVIRONMENT=production
+EnvironmentFile=/etc/kivra-memory/memory-sealed-worker.env
+ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-sealed-worker
+Restart=on-failure
+RestartSec=5s
+UMask=0007
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/kivra-memory-sealed/keys
+
+[Install]
+WantedBy=multi-user.target

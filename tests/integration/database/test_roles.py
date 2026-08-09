@@ -35,6 +35,7 @@ RUNTIME_ROLES = (
     "kivra_memory_policy",
     "kivra_memory_genesis_importer",
     "kivra_memory_worker",
+    "kivra_memory_purge",
     "kivra_memory_ingress",
     "kivra_memory_exporter",
 )
@@ -233,6 +234,7 @@ def test_role_bootstrap_upgrades_m1_ownership_and_is_idempotent(
         ("kivra_memory_migrator", True, False, False, False, False, False, False),
         ("kivra_memory_owner", False, False, False, False, False, False, False),
         ("kivra_memory_policy", True, False, False, False, False, False, False),
+        ("kivra_memory_purge", True, False, False, False, False, False, False),
         ("kivra_memory_worker", True, False, False, False, False, False, False),
     ]
 
@@ -471,6 +473,33 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
             "SELECT",
             "INSERT,UPDATE,DELETE,TRUNCATE",
         ),
+        ("kivra_memory_purge", "memory_events", "SELECT,INSERT", "UPDATE,DELETE,TRUNCATE"),
+        ("kivra_memory_purge", "memories", "SELECT", "INSERT,DELETE,TRUNCATE"),
+        (
+            "kivra_memory_purge",
+            "memory_content_keys",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_purge",
+            "memory_embeddings_v1",
+            "DELETE",
+            "SELECT,INSERT,UPDATE,TRUNCATE",
+        ),
+        ("kivra_memory_purge", "outbox_jobs", "SELECT,INSERT", "DELETE,TRUNCATE"),
+        (
+            "kivra_memory_purge",
+            "transport_installations",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_purge",
+            "selection_decisions",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
         ("kivra_memory_ingress", "ingress_items", "SELECT", "INSERT,UPDATE,DELETE,TRUNCATE"),
         (
             "kivra_memory_ingress",
@@ -617,6 +646,11 @@ def test_content_key_roles_have_only_exact_lifecycle_update_columns(
             "destroyed_at",
             "destruction_receipt_sha256",
         },
+        "kivra_memory_purge": {
+            "state",
+            "destroyed_at",
+            "destruction_receipt_sha256",
+        },
     }
     all_columns = {
         "content_key_id",
@@ -642,6 +676,105 @@ def test_content_key_roles_have_only_exact_lifecycle_update_columns(
                     {"role": role, "column": column},
                 ).scalar_one()
                 assert bool(has_update) is (column in allowed)
+
+
+def test_purge_role_has_only_handler_required_table_and_column_privileges(
+    role_secured_database: AlembicRunner,
+) -> None:
+    selectable = {
+        "actors",
+        "clients",
+        "transport_installations",
+        "transport_bindings",
+        "branches",
+        "memory_event_counter",
+        "memory_events",
+        "memories",
+        "memory_content_keys",
+        "outbox_jobs",
+    }
+    insertable = {"memory_events", "outbox_jobs"}
+    table_updatable = {"memory_event_counter"}
+    deletable = {"memory_embeddings_v1"}
+    outbox_update_columns = {
+        "state",
+        "lease_owner",
+        "lease_expires_at",
+        "attempt_count",
+        "available_at",
+        "updated_at",
+        "completed_at",
+        "last_error_code",
+        "last_error_summary",
+    }
+    memory_update_columns = {
+        "revision",
+        "content_protection",
+        "updated_at",
+        "last_event_id",
+    }
+    with role_secured_database.engine.begin() as connection:
+        table_names = tuple(
+            connection.execute(
+                text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+                )
+            ).scalars()
+        )
+        for table_name in table_names:
+            qualified = f"public.{table_name}"
+            for privilege, expected in (
+                ("SELECT", table_name in selectable),
+                ("INSERT", table_name in insertable),
+                ("UPDATE", table_name in table_updatable),
+                ("DELETE", table_name in deletable),
+                ("TRUNCATE", False),
+            ):
+                actual = connection.execute(
+                    text("SELECT has_table_privilege(:role, :table_name, :privilege)"),
+                    {
+                        "role": "kivra_memory_purge",
+                        "table_name": qualified,
+                        "privilege": privilege,
+                    },
+                ).scalar_one()
+                assert bool(actual) is expected, (table_name, privilege)
+
+        outbox_columns = tuple(
+            connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'outbox_jobs'"
+                )
+            ).scalars()
+        )
+        for column in outbox_columns:
+            has_update = connection.execute(
+                text(
+                    "SELECT has_column_privilege('kivra_memory_purge', "
+                    "'public.outbox_jobs', :column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
+            assert bool(has_update) is (column in outbox_update_columns)
+
+        memory_columns = tuple(
+            connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'memories'"
+                )
+            ).scalars()
+        )
+        for column in memory_columns:
+            has_update = connection.execute(
+                text(
+                    "SELECT has_column_privilege('kivra_memory_purge', "
+                    "'public.memories', :column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
+            assert bool(has_update) is (column in memory_update_columns)
 
 
 def test_ingress_can_only_append_content_free_provider_violation_columns(
@@ -688,6 +821,7 @@ def test_other_runtime_roles_have_no_genesis_table_privileges(
         "kivra_memory_api",
         "kivra_memory_policy",
         "kivra_memory_worker",
+        "kivra_memory_purge",
         "kivra_memory_ingress",
     )
     with role_secured_database.engine.begin() as connection:
@@ -902,6 +1036,10 @@ def test_bootstrap_removes_existing_public_grants_and_uses_actual_outbox_sequenc
         ).scalar_one()
         assert connection.execute(
             text("SELECT has_sequence_privilege('kivra_memory_worker', :sequence, 'USAGE')"),
+            {"sequence": sequence_name},
+        ).scalar_one()
+        assert connection.execute(
+            text("SELECT has_sequence_privilege('kivra_memory_purge', :sequence, 'USAGE')"),
             {"sequence": sequence_name},
         ).scalar_one()
         assert connection.execute(

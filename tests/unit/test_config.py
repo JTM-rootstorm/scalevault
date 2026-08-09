@@ -11,6 +11,61 @@ def test_settings_use_loopback_defaults() -> None:
     assert settings.host == "127.0.0.1"
     assert settings.port == 8080
     assert settings.database_url is None
+    assert settings.sealed_content_enabled is False
+    assert settings.sealed_key_provider_root is None
+    assert settings.sealed_digest_binding_credential is None
+
+
+def test_sealed_content_requires_an_explicit_absolute_provider_root() -> None:
+    with pytest.raises(ValidationError, match="sealed_key_provider_root"):
+        Settings(sealed_content_enabled=True)
+    with pytest.raises(ValidationError, match="sealed_key_provider_root"):
+        Settings(sealed_content_enabled=True, sealed_key_provider_root=Path("relative"))
+    with pytest.raises(ValidationError, match="require sealed content to be enabled"):
+        Settings(sealed_key_provider_root=Path("/tmp/keys"))
+    with pytest.raises(ValidationError, match="sealed_digest_binding_credential"):
+        Settings(
+            sealed_content_enabled=True,
+            sealed_key_provider_root=Path("/tmp/keys"),
+        )
+    with pytest.raises(ValidationError, match="sealed_digest_binding_credential"):
+        Settings(
+            sealed_content_enabled=True,
+            sealed_key_provider_root=Path("/tmp/keys"),
+            sealed_digest_binding_credential=Path("relative-binding"),
+        )
+
+
+def test_production_sealed_content_uses_separate_local_key_boundary() -> None:
+    database_url = PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory")
+    with pytest.raises(ValidationError, match="production key boundary"):
+        Settings(
+            environment="production",
+            database_url=database_url,
+            sealed_content_enabled=True,
+            sealed_key_provider_root=Path("/mnt/memory/kivra-memory/sealed-keys"),
+            sealed_digest_binding_credential=Path("/run/credentials/test/binding"),
+        )
+
+    with pytest.raises(ValidationError, match="systemd credential boundary"):
+        Settings(
+            environment="production",
+            database_url=database_url,
+            sealed_content_enabled=True,
+            sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
+            sealed_digest_binding_credential=Path("/etc/kivra-memory/binding"),
+        )
+
+    settings = Settings(
+        environment="production",
+        database_url=database_url,
+        sealed_content_enabled=True,
+        sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
+        sealed_digest_binding_credential=Path(
+            "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
+        ),
+    )
+    assert settings.sealed_content_enabled is True
 
 
 def test_production_requires_database_url() -> None:
