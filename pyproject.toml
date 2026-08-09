@@ -53,6 +53,7 @@ kivra-memory-github-ingress = "kivra_memory.workers.github_ingress_main:main"
 kivra-memory-worker = "kivra_memory.workers.main:main"
 kivra-memory-lifecycle-worker = "kivra_memory.workers.lifecycle_main:main"
 kivra-memory-sealed-worker = "kivra_memory.workers.sealed_main:main"
+kivra-memory-diagnose = "kivra_memory.tools.diagnostics:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["services/memory-node/src/kivra_memory"]
