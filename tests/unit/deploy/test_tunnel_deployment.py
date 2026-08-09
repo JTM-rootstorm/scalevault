@@ -50,9 +50,7 @@ def test_tunnel_unit_doctors_before_run_with_secret_environment_removed() -> Non
         for line in unit.splitlines()
         if line.startswith("ExecStart=/usr/local/bin/tunnel-client run")
     )
-    unset = " ".join(
-        line for line in unit.splitlines() if line.startswith("UnsetEnvironment=")
-    )
+    unset = " ".join(line for line in unit.splitlines() if line.startswith("UnsetEnvironment="))
 
     assert "/chatgpt/mcp" in doctor
     assert "/chatgpt/mcp" in run
