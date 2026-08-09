@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from kivra_memory.application import sealed_runtime
 from kivra_memory.application.sealed_runtime import SealedRuntime
 from kivra_memory.config import Settings
 from kivra_memory.security.local_key_provider import (
@@ -92,3 +94,51 @@ def test_digest_credential_is_bounded_canonical_and_never_reflected(tmp_path: Pa
     credential.symlink_to(tmp_path / "binding-target")
     with pytest.raises(RuntimeError, match="invalid_sealed_content_configuration"):
         SealedRuntime.from_settings(settings)
+
+
+def test_production_digest_credential_requires_service_effective_uid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path("/var/lib/kivra-memory-sealed/keys")
+    credential = Path(
+        "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
+    )
+    settings = Settings.model_construct(
+        environment="production",
+        sealed_content_enabled=True,
+        sealed_key_provider_root=root,
+        sealed_digest_binding_credential=credential,
+    )
+    provider = MagicMock()
+    provider_factory = MagicMock(return_value=provider)
+    reader = MagicMock(return_value=b"b" * 32)
+    monkeypatch.setattr(os, "geteuid", MagicMock(return_value=971))
+    monkeypatch.setattr(sealed_runtime, "LocalDirectoryKeyProvider", provider_factory)
+    monkeypatch.setattr(sealed_runtime, "_read_digest_binding_secret", reader)
+
+    runtime = SealedRuntime.from_settings(settings)
+
+    provider_factory.assert_called_once_with(root, required_owner_uid=0)
+    reader.assert_called_once_with(credential, required_owner_uid=971)
+    assert runtime.key_provider is provider
+
+
+def test_digest_credential_reader_rejects_owner_other_than_effective_uid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    credential = _binding_credential(tmp_path)
+    actual = credential.stat()
+    foreign = list(actual)
+    foreign[4] = actual.st_uid + 1
+    monkeypatch.setattr(
+        os,
+        "fstat",
+        MagicMock(return_value=os.stat_result(foreign)),
+    )
+
+    with pytest.raises(ValueError):
+        sealed_runtime._read_digest_binding_secret(
+            credential,
+            required_owner_uid=actual.st_uid,
+        )

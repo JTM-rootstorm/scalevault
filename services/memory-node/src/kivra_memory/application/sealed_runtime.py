@@ -63,7 +63,9 @@ class SealedRuntime:
             digest_binder = HmacSha256SealedDigestBinder(
                 _read_digest_binding_secret(
                     credential,
-                    required_owner_uid=0 if settings.environment == "production" else None,
+                    required_owner_uid=(
+                        os.geteuid() if settings.environment == "production" else None
+                    ),
                 )
             )
         except Exception:
