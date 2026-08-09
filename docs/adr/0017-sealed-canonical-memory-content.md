@@ -30,6 +30,15 @@ interpretation limits, evidence text, and content-bearing metadata are absent
 from plaintext event, projection, archive, logs, errors, fingerprints, search
 documents, and outbox payloads.
 
+Command-receipt and selection-input identities for sealed writes use
+purpose-separated HMAC-SHA-256 under a stable server-only binding secret. The
+secret is provisioned and restored outside PostgreSQL and the archive, is
+distinct from content-encryption keys, and is required before a sealed write is
+accepted. Unkeyed content hashes are never persisted for sealed input. Losing
+or rotating this secret without an explicit migration prevents sealed
+idempotency replay and duplicate correlation, so startup fails closed when the
+configured binding is unavailable.
+
 The envelope records an algorithm/version identifier, content-key UUID, 96-bit
 nonce, ciphertext including authentication tag, canonical AAD hash, and a safe
 summary. Ciphertext bytes are Base64 at JSON boundaries and raw bytes in the
@@ -50,12 +59,27 @@ version, and algorithm. A nonce may never repeat for one DEK. Key lookup,
 encryption, and decryption occur only in a narrow provider adapter; missing or
 ambiguous key material never downgrades to plaintext.
 
+Provider provisioning is idempotent on purpose-separated, keyed stable memory
+and content-key identifiers. A transaction that fails after provisioning may
+leave an unreachable provider record; it is not destroyed immediately because
+commit outcome can be uncertain and a retry must reuse the same identity.
+Orphan reconciliation is an audited maintenance operation and may destroy only
+a key proven to have no canonical reference.
+
 Sensitivity four requires sealing for new canonical writes. Sensitivities zero
 and one remain plaintext-capable. Sensitivities two and three may be sealed by
 an explicit authorized caller or policy outcome; they are not automatically
 upgraded in this milestone. GitHub ingress is sensitivity zero only and can
 never submit or request a sealed envelope because its plaintext has already
 crossed the GitHub disclosure boundary.
+
+Milestone 6 accepts sealed creation only when policy selects `active`. Sealed
+candidate creation, promotion, expiry, ordinary revision, conflict mutation,
+retirement, and visibility change fail closed until a later event contract
+defines re-encryption and lifecycle behavior. Hard tombstone and purge
+completion preserve the exact original envelope and content-key identity;
+authorized reads recover and verify the original creation AAD coordinates
+rather than substituting the latest transition event.
 
 ### Search and reads
 
@@ -98,4 +122,3 @@ archive or database snapshot.
   from sensitive plaintext by an unreviewed remote service.
 - Tests must prove that a plaintext canary is absent from database event and
   projection rows, archives, logs, errors, and derivative jobs.
-

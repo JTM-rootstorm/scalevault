@@ -604,6 +604,10 @@ class RetrievalRepository:
             return None
         if (
             not isinstance(payload, MemoryCreatedPayloadV3)
+            or payload.memory.tenant_id != tenant_id
+            or payload.memory.lineage_id != lineage_id
+            or payload.memory.branch_id != branch_id
+            or payload.memory.memory_id != memory_id
             or payload.memory.revision != 1
             or payload.memory.content_key_id != content_key_id
             or payload.memory.sealed_content != sealed_content
