@@ -1,0 +1,36 @@
+{
+    "schema_version": 2,
+    "proposal_id": "019c0000-0000-7000-8000-000000000021",
+    "installation_id": "019c0000-0000-7000-8000-000000000022",
+    "idempotency_key": "github-proposal:synthetic-001",
+    "operation": "nominate",
+    "persona_id": "019c0000-0000-7000-8000-000000000023",
+    "branch_id": "019c0000-0000-7000-8000-000000000024",
+    "subject_id": "019c0000-0000-7000-8000-000000000025",
+    "subject_kind": "project",
+    "category": "project_decision",
+    "ontological_status": "literal_technical_fact",
+    "scope": "project",
+    "visibility": "restricted",
+    "statement": "Synthetic project decision used only for contract validation.",
+    "reason_to_remember": "The synthetic decision affects later test steps.",
+    "interpretation_limits": [],
+    "confidence": 0.750000,
+    "salience": 0.800000,
+    "durability": 0.900000,
+    "sensitivity": 0,
+    "valid_from": null,
+    "valid_to": null,
+    "observed_at": "2026-08-09T12:00:00Z",
+    "origin_session_id": null,
+    "selection_basis": "verified_project_decision",
+    "epistemic_qualifiers": [],
+    "evidence_references": [
+        {
+            "evidence_key": "synthetic-project-source",
+            "opaque_reference": "project-source:synthetic-decision"
+        }
+    ],
+    "evidence_summary": "Visible synthetic evidence summary with no private source content.",
+    "created_at": "2026-08-09T12:00:00Z"
+}

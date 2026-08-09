@@ -7,10 +7,12 @@ private payload values.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from hashlib import sha256
 from importlib.resources import files
@@ -51,6 +53,10 @@ _PROPOSAL_PATH = re.compile(
     r"^ingress/v1/(?P<installation>[0-9a-fA-F-]{36})/"
     r"(?P<year>[0-9]{4})/(?P<month>0[1-9]|1[0-2])/(?P<item>[0-9a-fA-F-]{36})\.json$"
 )
+_PROPOSAL_V2_PATH = re.compile(
+    r"^ingress/v2/(?P<installation>[0-9a-f-]{36})/"
+    r"(?P<year>[0-9]{4})/(?P<month>0[1-9]|1[0-2])/(?P<item>[0-9a-f-]{36})\.json$"
+)
 _CHECKPOINT_V1_PATH = re.compile(
     r"^ingress/checkpoints/v1/genesis/(?P<year>[0-9]{4})/"
     r"(?P<month>0[1-9]|1[0-2])/(?P<item>[^/]+)\.json$"
@@ -62,9 +68,10 @@ _CHECKPOINT_V2_PATH = re.compile(
 
 
 class IngressFormat(StrEnum):
-    """The three formats admitted by the frozen first-import contract."""
+    """Versioned ingress formats selected from immutable create-only paths."""
 
     PROPOSAL_V1 = "proposal-v1"
+    PROPOSAL_V2 = "proposal-v2"
     GENESIS_CHECKPOINT_V1 = "genesis-checkpoint-v1"
     GENESIS_CHECKPOINT_V2 = "genesis-checkpoint-v2"
 
@@ -329,6 +336,19 @@ def _load_schema(name: str) -> dict[str, object]:
     return cast(dict[str, object], parsed)
 
 
+def _load_decimal_schema(name: str) -> dict[str, object]:
+    """Preserve exact ``multipleOf`` decimals for runtime score validation."""
+
+    resource = files("kivra_memory.ingress").joinpath("schemas", name)
+    try:
+        parsed = json.loads(resource.read_text(encoding="utf-8"), parse_float=Decimal)
+    except (json.JSONDecodeError, OSError) as exc:  # pragma: no cover - installation corruption
+        raise RuntimeError("checked-in ingress schema is unavailable or invalid") from exc
+    if not isinstance(parsed, dict):  # pragma: no cover - checked-in invariant
+        raise RuntimeError("checked-in ingress schema must be a JSON object")
+    return cast(dict[str, object], parsed)
+
+
 def _validator(schema: dict[str, object]) -> Draft202012Validator:
     try:
         Draft202012Validator.check_schema(schema)
@@ -338,6 +358,9 @@ def _validator(schema: dict[str, object]) -> Draft202012Validator:
 
 
 _PROPOSAL_V1_VALIDATOR = _validator(_load_schema("chatgpt-memory-proposal-v1.schema.json"))
+_PROPOSAL_V2_VALIDATOR = _validator(
+    _load_decimal_schema("chatgpt-memory-proposal-v2.schema.json")
+)
 _CHECKPOINT_V1_VALIDATOR = _validator(_GENESIS_CHECKPOINT_V1_SCHEMA)
 _CHECKPOINT_V2_VALIDATOR = _validator(_load_schema("genesis-checkpoint-v2.schema.json"))
 
@@ -351,6 +374,7 @@ def _classify_path(source_path: str) -> tuple[IngressFormat, re.Match[str]]:
     ):
         raise IngressValidationError(ValidationCode.INVALID_PATH)
     for format_, pattern in (
+        (IngressFormat.PROPOSAL_V2, _PROPOSAL_V2_PATH),
         (IngressFormat.PROPOSAL_V1, _PROPOSAL_PATH),
         (IngressFormat.GENESIS_CHECKPOINT_V1, _CHECKPOINT_V1_PATH),
         (IngressFormat.GENESIS_CHECKPOINT_V2, _CHECKPOINT_V2_PATH),
@@ -367,6 +391,8 @@ def _schema_version(payload: Mapping[str, JsonValue]) -> IngressFormat:
     version = payload.get("schema_version")
     if version == 1:
         return IngressFormat.PROPOSAL_V1
+    if version == 2:
+        return IngressFormat.PROPOSAL_V2
     if version == "genesis-checkpoint-v1":
         return IngressFormat.GENESIS_CHECKPOINT_V1
     if version == "genesis-checkpoint-v2":
@@ -383,7 +409,15 @@ def _validate_schema(
     source_git_blob_sha: str | None,
     raw_sha256: str,
 ) -> tuple[CompatibilityCode, ...]:
-    errors: list[ValidationError] = list(validator.iter_errors(payload))
+    validation_payload: Mapping[str, object] = payload
+    if format_ is IngressFormat.PROPOSAL_V2:
+        exact_payload = dict(payload)
+        for score_name in ("confidence", "salience", "durability"):
+            score = exact_payload.get(score_name)
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                exact_payload[score_name] = Decimal(str(score))
+        validation_payload = exact_payload
+    errors: list[ValidationError] = list(validator.iter_errors(validation_payload))
     if not errors:
         return ()
     observed_errors = (
@@ -425,7 +459,7 @@ def _require_path_identity(
     match: re.Match[str],
     payload: Mapping[str, JsonValue],
 ) -> str:
-    if format_ is IngressFormat.PROPOSAL_V1:
+    if format_ in {IngressFormat.PROPOSAL_V1, IngressFormat.PROPOSAL_V2}:
         source_id = payload["proposal_id"]
         installation_id = payload["installation_id"]
         created_at = _parse_created_at(payload["created_at"])
@@ -586,6 +620,7 @@ def validate_ingress(
 
     validator = {
         IngressFormat.PROPOSAL_V1: _PROPOSAL_V1_VALIDATOR,
+        IngressFormat.PROPOSAL_V2: _PROPOSAL_V2_VALIDATOR,
         IngressFormat.GENESIS_CHECKPOINT_V1: _CHECKPOINT_V1_VALIDATOR,
         IngressFormat.GENESIS_CHECKPOINT_V2: _CHECKPOINT_V2_VALIDATOR,
     }[payload_format]

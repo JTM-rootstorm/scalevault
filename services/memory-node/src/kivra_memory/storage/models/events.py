@@ -121,9 +121,14 @@ class IngressItem(Base):
             ),
             name="state_values",
         ),
-        sha256_check("payload_sha256", name="payload_sha256_length"),
         CheckConstraint(
-            "length(declared_idempotency_key) BETWEEN 1 AND 255", name="idempotency_key_length"
+            "declared_idempotency_key IS NULL OR "
+            "length(declared_idempotency_key) BETWEEN 1 AND 255",
+            name="idempotency_key_length",
+        ),
+        CheckConstraint(
+            "payload_sha256 IS NULL OR octet_length(payload_sha256) = 32",
+            name="payload_sha256_length",
         ),
         CheckConstraint(
             "validated_at IS NULL OR validated_at >= discovered_at", name="validation_order"
@@ -153,8 +158,6 @@ class IngressItem(Base):
                     "external_object_id",
                     "commit_id",
                     "blob_id",
-                    "declared_idempotency_key",
-                    "payload_sha256",
                     "discovered_at",
                 ),
             }
@@ -174,8 +177,8 @@ class IngressItem(Base):
     external_object_id: Mapped[str] = mapped_column(String(255), nullable=False)
     commit_id: Mapped[str] = mapped_column(String(255), nullable=False)
     blob_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    declared_idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    payload_sha256: Mapped[bytes] = mapped_column(LargeBinary(), nullable=False)
+    declared_idempotency_key: Mapped[str | None] = mapped_column(String(255))
+    payload_sha256: Mapped[bytes | None] = mapped_column(LargeBinary())
     state: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'discovered'")
     )

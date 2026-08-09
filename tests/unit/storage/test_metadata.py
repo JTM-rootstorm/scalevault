@@ -294,8 +294,6 @@ def test_ingress_provenance_is_immutable() -> None:
         "external_object_id",
         "commit_id",
         "blob_id",
-        "declared_idempotency_key",
-        "payload_sha256",
         "discovered_at",
     )
 

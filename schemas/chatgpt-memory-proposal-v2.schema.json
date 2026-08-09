@@ -1,0 +1,183 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/chatgpt-memory-proposal-v2.schema.json",
+    "title": "ScaleVault ChatGPT memory proposal v2",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "proposal_id",
+        "installation_id",
+        "idempotency_key",
+        "operation",
+        "persona_id",
+        "branch_id",
+        "subject_id",
+        "subject_kind",
+        "category",
+        "ontological_status",
+        "scope",
+        "visibility",
+        "statement",
+        "reason_to_remember",
+        "interpretation_limits",
+        "confidence",
+        "salience",
+        "durability",
+        "sensitivity",
+        "selection_basis",
+        "epistemic_qualifiers",
+        "evidence_references",
+        "created_at"
+    ],
+    "properties": {
+        "schema_version": { "const": 2 },
+        "proposal_id": { "$ref": "#/$defs/uuid_v7" },
+        "installation_id": { "$ref": "#/$defs/uuid_v7" },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "operation": { "const": "nominate" },
+        "persona_id": { "$ref": "#/$defs/uuid_v7" },
+        "branch_id": { "$ref": "#/$defs/uuid_v7" },
+        "subject_id": { "$ref": "#/$defs/uuid_v7" },
+        "subject_kind": { "enum": ["persona", "relationship", "project", "episode"] },
+        "category": {
+            "enum": [
+                "stable_fact",
+                "user_preference",
+                "assistant_preference_like_pattern",
+                "boundary_or_permission",
+                "interaction_convention",
+                "relationship_pattern",
+                "emergent_tendency",
+                "episodic_anchor",
+                "project_decision",
+                "project_state",
+                "procedure",
+                "open_question",
+                "interpretation",
+                "external_fact"
+            ]
+        },
+        "ontological_status": {
+            "enum": [
+                "literal_user_fact",
+                "literal_technical_fact",
+                "assistant_self_description",
+                "observed_assistant_behavior",
+                "interaction_convention",
+                "fictional_or_roleplayed_scene",
+                "hypothesis",
+                "uncertain"
+            ]
+        },
+        "scope": { "enum": ["persona", "relationship", "project", "episodic"] },
+        "visibility": { "enum": ["private_root", "restricted"] },
+        "statement": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "reason_to_remember": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "interpretation_limits": {
+            "type": "array",
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "confidence": { "$ref": "#/$defs/unit_score" },
+        "salience": { "$ref": "#/$defs/unit_score" },
+        "durability": { "$ref": "#/$defs/unit_score" },
+        "sensitivity": { "const": 0 },
+        "valid_from": { "type": ["string", "null"], "format": "date-time" },
+        "valid_to": { "type": ["string", "null"], "format": "date-time" },
+        "observed_at": { "type": ["string", "null"], "format": "date-time" },
+        "origin_session_id": {
+            "oneOf": [{ "$ref": "#/$defs/uuid_v7" }, { "type": "null" }]
+        },
+        "selection_basis": {
+            "enum": [
+                "routine_banter",
+                "explicit_user_correction",
+                "explicit_user_preference",
+                "explicit_user_permission",
+                "verified_project_decision",
+                "assistant_observation",
+                "assistant_interpretation",
+                "meaningful_episodic_anchor",
+                "explicit_user_request"
+            ]
+        },
+        "epistemic_qualifiers": {
+            "type": "array",
+            "maxItems": 16,
+            "uniqueItems": true,
+            "items": {
+                "enum": [
+                    "roleplay_not_literal",
+                    "assistant_pattern_not_subjective_experience",
+                    "single_episode_not_stable_pattern",
+                    "subjective_experience_unresolved"
+                ]
+            }
+        },
+        "evidence_references": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["evidence_key", "opaque_reference"],
+                "properties": {
+                    "evidence_key": { "type": "string", "minLength": 1, "maxLength": 255 },
+                    "opaque_reference": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                    }
+                }
+            }
+        },
+        "evidence_summary": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "created_at": { "type": "string", "format": "date-time" }
+    },
+    "oneOf": [
+        {
+            "properties": {
+                "scope": { "const": "persona" },
+                "subject_kind": { "const": "persona" },
+                "origin_session_id": { "type": "null" }
+            }
+        },
+        {
+            "properties": {
+                "scope": { "const": "relationship" },
+                "subject_kind": { "const": "relationship" },
+                "origin_session_id": { "type": "null" }
+            }
+        },
+        {
+            "properties": {
+                "scope": { "const": "project" },
+                "subject_kind": { "const": "project" },
+                "origin_session_id": { "type": "null" }
+            }
+        },
+        {
+            "required": ["origin_session_id"],
+            "properties": {
+                "scope": { "const": "episodic" },
+                "subject_kind": { "const": "episode" },
+                "origin_session_id": { "$ref": "#/$defs/uuid_v7" }
+            }
+        }
+    ],
+    "$defs": {
+        "uuid_v7": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "unit_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "multipleOf": 0.000001
+        }
+    }
+}

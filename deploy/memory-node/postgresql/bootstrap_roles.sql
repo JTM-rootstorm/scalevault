@@ -448,12 +448,12 @@ BEGIN
             immutable_path,
             external_object_id,
             commit_id,
-            blob_id,
-            declared_idempotency_key,
-            payload_sha256
+            blob_id
         ) ON TABLE public.ingress_items TO kivra_memory_ingress;
         GRANT UPDATE (
             state,
+            declared_idempotency_key,
+            payload_sha256,
             error_code,
             safe_diagnostic,
             validated_at,

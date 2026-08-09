@@ -642,11 +642,11 @@ def test_column_grants_keep_ingress_validation_separate_from_api_processing(
         "external_object_id",
         "commit_id",
         "blob_id",
-        "declared_idempotency_key",
-        "payload_sha256",
     )
     ingress_update_columns = (
         "state",
+        "declared_idempotency_key",
+        "payload_sha256",
         "error_code",
         "safe_diagnostic",
         "validated_at",
@@ -678,7 +678,13 @@ def test_column_grants_keep_ingress_validation_separate_from_api_processing(
                 ),
                 {"column": column},
             ).scalar_one()
-        for column in ("state", "result_event_id", "result_memory_id"):
+        for column in (
+            "state",
+            "result_event_id",
+            "result_memory_id",
+            "declared_idempotency_key",
+            "payload_sha256",
+        ):
             assert not connection.execute(
                 text(
                     "SELECT has_column_privilege("
@@ -838,11 +844,10 @@ def test_ingress_validation_trigger_and_api_processing_dml(
                     "INSERT INTO ingress_items ("
                     "ingress_id, tenant_id, transport_binding_id, installation_id, actor_id, "
                     "client_id, provider, repository_external_id, branch_name, immutable_path, "
-                    "external_object_id, commit_id, blob_id, declared_idempotency_key, "
-                    "payload_sha256) VALUES ("
+                    "external_object_id, commit_id, blob_id) VALUES ("
                     ":ingress_id, :tenant_id, :binding_id, :installation_id, :actor_id, "
                     ":client_id, 'github', 'synthetic/repository', 'main', :immutable_path, "
-                    ":external_object_id, :commit_id, :blob_id, :idempotency_key, :digest)"
+                    ":external_object_id, :commit_id, :blob_id)"
                 ),
                 {
                     "ingress_id": ingress_id,
@@ -855,16 +860,20 @@ def test_ingress_validation_trigger_and_api_processing_dml(
                     "external_object_id": f"synthetic-object-{ordinal}",
                     "commit_id": f"synthetic-commit-{ordinal}",
                     "blob_id": f"synthetic-blob-{ordinal}",
-                    "idempotency_key": f"synthetic-idempotency-{ordinal}",
-                    "digest": bytes(32),
                 },
             )
             connection.execute(
                 text(
                     "UPDATE ingress_items SET state = 'validated', "
-                    "validated_at = CURRENT_TIMESTAMP WHERE ingress_id = :ingress_id"
+                    "declared_idempotency_key = :idempotency_key, "
+                    "payload_sha256 = :digest, validated_at = CURRENT_TIMESTAMP "
+                    "WHERE ingress_id = :ingress_id"
                 ),
-                {"ingress_id": ingress_id},
+                {
+                    "ingress_id": ingress_id,
+                    "idempotency_key": f"synthetic-idempotency-{ordinal}",
+                    "digest": bytes(32),
+                },
             )
         for ingress_id, terminal_state in (
             (rejected_ingress_id, "rejected"),

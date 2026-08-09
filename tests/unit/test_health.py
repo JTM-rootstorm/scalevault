@@ -6,6 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app, main
 from kivra_memory.config import Settings, get_settings
 from kivra_memory.storage.readiness import (
+    EXPECTED_ALEMBIC_HEAD,
     MINIMUM_EXTENSION_VERSIONS,
     DatabaseReadiness,
     _extension_status,
@@ -35,7 +36,7 @@ class _ReadinessConnection:
         self,
         *,
         version_table_exists: bool = True,
-        versions: tuple[str, ...] = ("0004_genesis_import_provenance",),
+        versions: tuple[str, ...] = (EXPECTED_ALEMBIC_HEAD,),
         extensions: Mapping[str, str] = MINIMUM_EXTENSION_VERSIONS,
     ) -> None:
         self._version_table_exists = version_table_exists

@@ -8,7 +8,7 @@ from typing import Literal
 from psycopg import AsyncConnection
 from pydantic import PostgresDsn
 
-EXPECTED_ALEMBIC_HEAD = "0004_genesis_import_provenance"
+EXPECTED_ALEMBIC_HEAD = "0006_sealed_canonical_content"
 MINIMUM_EXTENSION_VERSIONS = {
     "citext": "1.6",
     "pg_trgm": "1.6",
