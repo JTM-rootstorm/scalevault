@@ -217,8 +217,7 @@ def _manifest_material(
         if (
             raw_sha != bytes(source.raw_sha256)
             or parsed_canonical != bytes(source.parsed_canonical_json)
-            or hashlib.sha256(parsed_canonical).digest()
-            != bytes(source.parsed_canonical_sha256)
+            or hashlib.sha256(parsed_canonical).digest() != bytes(source.parsed_canonical_sha256)
             or blob_sha != source.blob_object_id
         ):
             raise GenesisImportStorageError("source_content_digest_mismatch")
@@ -572,9 +571,7 @@ class GenesisImportRepository:
         ).one_or_none()
         if row is None:
             raise GenesisImportStorageError("planned_record_context_mismatch")
-        actual_mapping_sha256 = hashlib.sha256(
-            canonical_json_bytes(row.mapping_metadata)
-        ).digest()
+        actual_mapping_sha256 = hashlib.sha256(canonical_json_bytes(row.mapping_metadata)).digest()
         if actual_mapping_sha256 != mapping_metadata_sha256:
             raise GenesisImportStorageError("planned_record_mapping_mismatch")
         return PendingGenesisRecord(
@@ -675,10 +672,14 @@ class GenesisImportRepository:
                 for exclusion in exclusions
                 if exclusion.source_id in corrected_sources
             }
-            if "candidate-0b388348-39d8-46da-b78c-956dbe1e02e5" not in corrected_record_ids or not {
-                "exclusion-dca9d34c-7b22-4ce2-885d-e3ba8f1c4f54",
-                "exclusion-087d1403-46ed-43d3-93e2-14e5bbf3794c",
-            } <= corrected_exclusion_ids:
+            if (
+                "candidate-0b388348-39d8-46da-b78c-956dbe1e02e5" not in corrected_record_ids
+                or not {
+                    "exclusion-dca9d34c-7b22-4ce2-885d-e3ba8f1c4f54",
+                    "exclusion-087d1403-46ed-43d3-93e2-14e5bbf3794c",
+                }
+                <= corrected_exclusion_ids
+            ):
                 raise GenesisImportStorageError("compatibility_identity_mismatch")
 
         existing_run = await self._session.scalar(
@@ -710,9 +711,13 @@ class GenesisImportRepository:
         try:
             async with self._session.begin_nested():
                 self._session.add(run)
+                await self._session.flush()
                 self._session.add_all(sources)
+                await self._session.flush()
                 self._session.add_all(records)
+                await self._session.flush()
                 self._session.add_all(exclusions)
+                await self._session.flush()
                 self._session.add_all(supersessions)
                 await self._session.flush()
         except IntegrityError:

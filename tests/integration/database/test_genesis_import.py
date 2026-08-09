@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -28,6 +29,7 @@ from kivra_memory.application.genesis_import import (
 )
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import SelectionExecutionError
+from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import (
     SubjectKind,
 )
@@ -39,8 +41,10 @@ from kivra_memory.storage.database import Database
 from kivra_memory.storage.genesis_import import (
     GenesisImportRepository,
     GenesisImportStorageError,
+    _manifest_material,
 )
 from kivra_memory.storage.models import (
+    Actor,
     Client,
     CommandReceipt,
     GenesisImportRecord,
@@ -50,6 +54,7 @@ from kivra_memory.storage.models import (
     Memory,
     MemoryEvent,
     SelectionDecision,
+    Subject,
     TransportBinding,
 )
 from psycopg import Connection
@@ -70,7 +75,7 @@ from .conftest import (
 
 _NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
 _POLICY_SHA = bytes.fromhex("b12dd83889d2a273e260c5b990eea5a0b6531ab38be76fca47642f471d2bf85e")
-_PARSER_VERSIONS = {
+_PARSER_VERSIONS: dict[str, object] = {
     "scalevault.ingress.proposal.v1": "proposal-v1.schema.1",
     "scalevault.ingress.genesis-checkpoint.v1": "checkpoint-v1.documented.1",
     "scalevault.ingress.genesis-checkpoint.v2": "checkpoint-v2.schema.1",
@@ -120,7 +125,7 @@ def _seed_id(table: str, field: str) -> UUID:
 def _plan_rows() -> _PlanRows:
     tenant_id = _seed_id("tenants", "tenant_id")
     plan = _plan()
-    subject_id = _seed_id("subjects", "subject_id")
+    relationship_subject_id = new_uuid7()
     mappings = GenesisCanonicalMappings(
         contract_version="scalevault-genesis-canonical-mappings-v1",
         genesis_actor_reference="kivra:genesis",
@@ -132,19 +137,19 @@ def _plan_rows() -> _PlanRows:
             GenesisSubjectMapping(
                 subject_kind=SubjectKind.RELATIONSHIP,
                 source_reference="relationship:private",
-                subject_id=subject_id,
+                subject_id=relationship_subject_id,
             ),
             GenesisSubjectMapping(
                 subject_kind=SubjectKind.GLOBAL,
                 source_reference="genesis-import:terminal",
-                subject_id=subject_id,
+                subject_id=_seed_id("subjects", "subject_id"),
             ),
         ),
     )
     authority = GenesisImporterAuthority(
         contract_version="scalevault-genesis-importer-authority-v1",
         tenant_id=tenant_id,
-        actor_id=cast(UUID, seed_rows()["actors"][0]["actor_id"]),
+        actor_id=new_uuid7(),
         client_id=new_uuid7(),
         transport_binding_id=new_uuid7(),
     )
@@ -157,7 +162,26 @@ def _plan_rows() -> _PlanRows:
         mappings=mappings,
         importer_authority=authority,
     )
-    return _PlanRows(prepare_genesis_import(plan, config), mappings, authority)
+    prepared = prepare_genesis_import(plan, config)
+    prepared.run.parser_schema_versions = _PARSER_VERSIONS
+    plan_digest = hashlib.sha256(
+        canonical_json_bytes(
+            _manifest_material(
+                prepared.run,
+                prepared.sources,
+                prepared.records,
+                prepared.exclusions,
+                prepared.supersessions,
+            )
+        )
+    ).digest()
+    prepared.run.plan_sha256 = plan_digest
+    prepared = replace(
+        prepared,
+        plan_context=prepared.plan_context.model_copy(update={"plan_sha256": plan_digest.hex()}),
+        run_context=prepared.run_context.model_copy(update={"plan_sha256": plan_digest.hex()}),
+    )
+    return _PlanRows(prepared, mappings, authority)
 
 
 async def _application_context(database: Database, rows: _PlanRows) -> _ApplicationContext:
@@ -166,6 +190,36 @@ async def _application_context(database: Database, rows: _PlanRows) -> _Applicat
     client_id = rows.authority.client_id
     binding_id = rows.authority.transport_binding_id
     async with database.tenant_session(tenant_id) as session:
+        session.add(
+            Actor(
+                actor_id=importer_actor_id,
+                tenant_id=tenant_id,
+                handle=f"synthetic-genesis-importer-{importer_actor_id}",
+                display_name="Synthetic Genesis Importer",
+                kind="service",
+                metadata_={"fixture_role": "genesis_importer"},
+                created_at=_NOW,
+                revoked_at=None,
+            )
+        )
+        session.add(
+            Subject(
+                subject_id=rows.mappings.subjects[0].subject_id,
+                tenant_id=tenant_id,
+                lineage_id=rows.mappings.lineage_id,
+                kind="relationship",
+                canonical_key="synthetic-genesis-relationship",
+                display_name="Synthetic Genesis Relationship",
+                persona_id=None,
+                relationship_actor_id=cast(UUID, seed_rows()["actors"][0]["actor_id"]),
+                project_ref=None,
+                episode_ref=None,
+                origin_session_id=None,
+                metadata_={"fixture_role": "genesis_relationship"},
+                created_at=_NOW,
+            )
+        )
+        await session.flush()
         session.add(
             Client(
                 client_id=client_id,
@@ -190,7 +244,7 @@ async def _application_context(database: Database, rows: _PlanRows) -> _Applicat
                 transport_kind="internal_service",
                 disclosure_boundary="internal",
                 installation_id=None,
-                authorized_operations={"operations": ["genesis_import"]},
+                authorized_operations={"operations": ["observed"]},
                 created_at=_NOW,
                 valid_until=None,
             )
@@ -665,7 +719,9 @@ async def test_application_commits_selection_receipt_event_projection_and_termin
             run=context.run,
             source_record=second_source,
         )
-        assert second.outcome == "candidate"
+        assert second.outcome == "omit"
+        assert second.event_id is None
+        assert second.memory_id is None
 
         async with database.tenant_session(tenant_id) as session:
             repository = GenesisImportRepository(session)
@@ -690,6 +746,9 @@ async def test_application_commits_selection_receipt_event_projection_and_termin
             )
         assert later_replay == completed
         assert later_replay.completed_at == _NOW
+        assert completed.candidate_count == 1
+        assert completed.omit_count == 1
+        assert completed.reject_count == 0
 
 
 class _FailingTerminalRepository:

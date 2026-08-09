@@ -196,11 +196,11 @@ class GenesisImportSource(Base):
             "AND checkpoint_id = "
             "'genesis-checkpoint-20260807T124400-0500-4cb2fa62-a30e-4e46-a165-c24031dcce20' "
             "AND raw_compatibility_values = "
-            "'{\"/candidates/1/disposition\":\"federation_shared_candidate\","
-            "\"/candidates/1/scope\":\"federation\","
-            "\"/candidates/1/binding/visibility\":\"federation_shared_candidate\","
-            "\"/exclusions/0/scope\":\"federation\","
-            "\"/exclusions/1/scope\":\"federation\"}'::jsonb)",
+            '\'{"/candidates/1/disposition":"federation_shared_candidate",'
+            '"/candidates/1/scope":"federation",'
+            '"/candidates/1/binding/visibility":"federation_shared_candidate",'
+            '"/exclusions/0/scope":"federation",'
+            '"/exclusions/1/scope":"federation"}\'::jsonb)',
             name="compatibility_correction_shape",
         ),
         sha256_check("raw_sha256", name="raw_sha256_length"),
@@ -246,7 +246,9 @@ class GenesisImportSource(Base):
     binding_metadata: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     provenance_metadata: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     compatibility_correction_version: Mapped[str | None] = mapped_column(String(64))
-    raw_compatibility_values: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    raw_compatibility_values: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
     archived_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
