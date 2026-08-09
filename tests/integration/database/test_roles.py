@@ -709,9 +709,7 @@ def test_content_key_roles_have_only_exact_lifecycle_update_columns(
 def test_api_can_update_only_credential_last_used_audit() -> None:
     source = ROLE_BOOTSTRAP.read_text(encoding="utf-8")
     expected = (
-        "GRANT UPDATE (\n"
-        "            last_used_at\n"
-        "        ) ON TABLE public.client_credentials"
+        "GRANT UPDATE (\n            last_used_at\n        ) ON TABLE public.client_credentials"
     )
     assert expected in source
 
@@ -785,16 +783,19 @@ def test_credential_admin_role_has_exact_secret_safe_identity_privileges(
                 ("INSERT", column in credential_insert),
                 ("UPDATE", column == "revoked_at"),
             ):
-                assert bool(
-                    connection.execute(
-                        text(
-                            "SELECT has_column_privilege("
-                            "'kivra_memory_credential_admin', "
-                            "'public.client_credentials', :column, :privilege)"
-                        ),
-                        {"column": column, "privilege": privilege},
-                    ).scalar_one()
-                ) is expected
+                assert (
+                    bool(
+                        connection.execute(
+                            text(
+                                "SELECT has_column_privilege("
+                                "'kivra_memory_credential_admin', "
+                                "'public.client_credentials', :column, :privilege)"
+                            ),
+                            {"column": column, "privilege": privilege},
+                        ).scalar_one()
+                    )
+                    is expected
+                )
 
         assert not connection.execute(
             text(

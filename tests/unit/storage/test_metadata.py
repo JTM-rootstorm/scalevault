@@ -143,17 +143,13 @@ def test_client_credentials_are_secret_safe_and_immutably_attributed() -> None:
         if isinstance(constraint, CheckConstraint)
     }
     assert checks["ck_client_credentials_secret_hash_format"] == (
-        "secret_hash IS NULL OR "
-        "secret_hash ~ '^hmac-sha256-v1:[A-Za-z0-9_-]{43}$'"
+        "secret_hash IS NULL OR secret_hash ~ '^hmac-sha256-v1:[A-Za-z0-9_-]{43}$'"
     )
-    assert "secret_hash_key_id IS NOT NULL" in checks[
-        "ck_client_credentials_material_matches_kind"
-    ]
+    assert "secret_hash_key_id IS NOT NULL" in checks["ck_client_credentials_material_matches_kind"]
     binding = next(
         constraint
         for constraint in credentials.constraints
-        if isinstance(constraint, ForeignKeyConstraint)
-        and constraint.name == "transport_binding"
+        if isinstance(constraint, ForeignKeyConstraint) and constraint.name == "transport_binding"
     )
     assert binding.column_keys == [
         "tenant_id",

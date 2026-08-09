@@ -82,14 +82,20 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
             credential_id=issued.metadata.credential_id,
         )
 
-        assert await lookup_repository.lookup(
-            _tenant_id(),
-            issued.metadata.credential_id,
-        ) is None
-        assert await lookup_repository.lookup(
-            _tenant_id(),
-            replacement.metadata.credential_id,
-        ) is not None
+        assert (
+            await lookup_repository.lookup(
+                _tenant_id(),
+                issued.metadata.credential_id,
+            )
+            is None
+        )
+        assert (
+            await lookup_repository.lookup(
+                _tenant_id(),
+                replacement.metadata.credential_id,
+            )
+            is not None
+        )
         listed = await repository.list_bearer_credentials(tenant_id=_tenant_id(), client_id=None)
         assert len(listed) == 2
         assert listed[0].revoked_at == _NOW + timedelta(minutes=1)

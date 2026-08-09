@@ -130,9 +130,7 @@ class CredentialRepository:
 
         async def operation(session: AsyncSession) -> CredentialLookup | None:
             row = (
-                await session.execute(
-                    _credential_lookup_statement(tenant_hint, credential_id)
-                )
+                await session.execute(_credential_lookup_statement(tenant_hint, credential_id))
             ).one_or_none()
             if row is None:
                 return None
@@ -278,9 +276,7 @@ class CredentialAdminStorageRepository:
                     kind="interactive",
                     transport_kind=TransportKind.DIRECT_PRIVATE.value,
                     scopes=list(issuance.client_scopes),
-                    capability_profile=issuance.client_capability_profile.model_dump(
-                        mode="json"
-                    ),
+                    capability_profile=issuance.client_capability_profile.model_dump(mode="json"),
                     created_at=issuance.created_at,
                 )
             )
@@ -293,9 +289,7 @@ class CredentialAdminStorageRepository:
                     transport_kind=TransportKind.DIRECT_PRIVATE.value,
                     disclosure_boundary="private_node",
                     installation_id=None,
-                    authorized_operations={
-                        "operations": list(issuance.authorized_operations)
-                    },
+                    authorized_operations={"operations": list(issuance.authorized_operations)},
                     created_at=issuance.created_at,
                     valid_until=None,
                 )
@@ -479,10 +473,7 @@ async def _load_state(
         .join(
             TransportBinding,
             (TransportBinding.tenant_id == ClientCredential.tenant_id)
-            & (
-                TransportBinding.transport_binding_id
-                == ClientCredential.transport_binding_id
-            )
+            & (TransportBinding.transport_binding_id == ClientCredential.transport_binding_id)
             & (TransportBinding.actor_id == ClientCredential.actor_id)
             & (TransportBinding.client_id == ClientCredential.client_id),
         )
@@ -525,8 +516,7 @@ def _state_is_active(
         and credential.created_at <= used_at
         and state.tenant.state == "active"
         and state.actor.kind == "agent"
-        and state.actor.metadata_.get("provisioning_contract")
-        == "scalevault-codex-installation-v1"
+        and state.actor.metadata_.get("provisioning_contract") == "scalevault-codex-installation-v1"
         and state.actor.revoked_at is None
         and client.kind == "interactive"
         and client.revoked_at is None
@@ -569,11 +559,7 @@ def _monotonic_audit_timestamp(
 
 def _identity_from_state(state: _CredentialState) -> CredentialIdentity:
     scopes = tuple(state.client.scopes)
-    if (
-        not scopes
-        or len(scopes) != len(set(scopes))
-        or not set(scopes) <= ALLOWED_CLIENT_SCOPES
-    ):
+    if not scopes or len(scopes) != len(set(scopes)) or not set(scopes) <= ALLOWED_CLIENT_SCOPES:
         raise CredentialStorageError
     try:
         capability = ClientCapabilityProfile.model_validate(state.client.capability_profile)

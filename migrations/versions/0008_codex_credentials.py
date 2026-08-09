@@ -128,14 +128,12 @@ def _replace_credential_constraints() -> None:
     op.create_check_constraint(
         op.f("ck_client_credentials_secret_hash_format"),
         "client_credentials",
-        "secret_hash IS NULL OR "
-        "secret_hash ~ '^hmac-sha256-v1:[A-Za-z0-9_-]{43}$'",
+        "secret_hash IS NULL OR secret_hash ~ '^hmac-sha256-v1:[A-Za-z0-9_-]{43}$'",
     )
     op.create_check_constraint(
         op.f("ck_client_credentials_secret_hash_key_id_format"),
         "client_credentials",
-        "secret_hash_key_id IS NULL OR "
-        "secret_hash_key_id ~ '^[a-z][a-z0-9_.-]{0,63}$'",
+        "secret_hash_key_id IS NULL OR secret_hash_key_id ~ '^[a-z][a-z0-9_.-]{0,63}$'",
     )
     op.create_check_constraint(
         op.f("ck_client_credentials_last_used_order"),
@@ -284,31 +282,19 @@ def downgrade() -> None:
         sa.text("DROP TRIGGER trg_client_credentials_lifecycle ON public.client_credentials")
     )
     op.execute(
+        sa.text("DROP TRIGGER trg_client_credentials_lifecycle_insert ON public.client_credentials")
+    )
+    op.execute(sa.text("DROP FUNCTION public.scalevault_enforce_client_credential_lifecycle()"))
+    op.execute(
         sa.text(
-            "DROP TRIGGER trg_client_credentials_lifecycle_insert "
-            "ON public.client_credentials"
+            "DROP TRIGGER trg_client_credentials_truncate_forbidden ON public.client_credentials"
         )
     )
     op.execute(
-        sa.text("DROP FUNCTION public.scalevault_enforce_client_credential_lifecycle()")
+        sa.text("DROP TRIGGER trg_client_credentials_delete_forbidden ON public.client_credentials")
     )
     op.execute(
-        sa.text(
-            "DROP TRIGGER trg_client_credentials_truncate_forbidden "
-            "ON public.client_credentials"
-        )
-    )
-    op.execute(
-        sa.text(
-            "DROP TRIGGER trg_client_credentials_delete_forbidden "
-            "ON public.client_credentials"
-        )
-    )
-    op.execute(
-        sa.text(
-            "DROP TRIGGER trg_client_credentials_immutable_fields "
-            "ON public.client_credentials"
-        )
+        sa.text("DROP TRIGGER trg_client_credentials_immutable_fields ON public.client_credentials")
     )
     op.drop_index(
         "uq_client_credentials_active_binding",

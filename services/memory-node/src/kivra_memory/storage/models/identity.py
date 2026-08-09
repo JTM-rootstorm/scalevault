@@ -153,13 +153,11 @@ class ClientCredential(Base):
             name="material_matches_kind",
         ),
         CheckConstraint(
-            "secret_hash IS NULL OR "
-            "secret_hash ~ '^hmac-sha256-v1:[A-Za-z0-9_-]{43}$'",
+            "secret_hash IS NULL OR secret_hash ~ '^hmac-sha256-v1:[A-Za-z0-9_-]{43}$'",
             name="secret_hash_format",
         ),
         CheckConstraint(
-            "secret_hash_key_id IS NULL OR "
-            "secret_hash_key_id ~ '^[a-z][a-z0-9_.-]{0,63}$'",
+            "secret_hash_key_id IS NULL OR secret_hash_key_id ~ '^[a-z][a-z0-9_.-]{0,63}$'",
             name="secret_hash_key_id_format",
         ),
         CheckConstraint(
