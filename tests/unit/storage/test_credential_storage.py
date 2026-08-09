@@ -134,6 +134,14 @@ def test_first_phase_lookup_selects_only_verifier_locator_columns() -> None:
     assert [cast(Table, table).name for table in statement.get_final_froms()] == [
         "client_credentials"
     ]
+    sql = str(statement)
+    assert "client_credentials.revoked_at IS NULL" in sql
+    assert "client_credentials.created_at <= CURRENT_TIMESTAMP" in sql
+    assert "client_credentials.expires_at IS NULL" in sql
+    assert "client_credentials.expires_at > CURRENT_TIMESTAMP" in sql
+    assert "client_credentials.secret_hash IS NOT NULL" in sql
+    assert "client_credentials.secret_hash_key_id IS NOT NULL" in sql
+    assert " JOIN " not in sql
 
 
 def test_direct_bearer_requires_exact_provisioning_marker() -> None:

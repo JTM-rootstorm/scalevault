@@ -545,6 +545,14 @@ def _credential_lookup_statement(
         ClientCredential.tenant_id == tenant_hint,
         ClientCredential.credential_id == credential_id,
         ClientCredential.kind == "bearer_token",
+        ClientCredential.revoked_at.is_(None),
+        ClientCredential.created_at <= func.current_timestamp(),
+        (
+            ClientCredential.expires_at.is_(None)
+            | (ClientCredential.expires_at > func.current_timestamp())
+        ),
+        ClientCredential.secret_hash.is_not(None),
+        ClientCredential.secret_hash_key_id.is_not(None),
     )
 
 

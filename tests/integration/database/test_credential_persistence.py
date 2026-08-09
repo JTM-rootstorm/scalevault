@@ -13,7 +13,7 @@ from kivra_memory.storage.credentials import (
 )
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import ClientCredential
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from tests.fixtures.database_seed import seed_model_layers, seed_rows
 
@@ -42,13 +42,14 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
             for layer in seed_model_layers():
                 session.add_all(layer)
                 await session.flush()
+            database_now = cast(datetime, await session.scalar(select(func.current_timestamp())))
 
         repository = CredentialAdminStorageRepository(database.session_factory)
         admin = CredentialAdminService(
             repository,
             token_pepper=_PEPPER,
             secret_hash_key_id=_KEY_ID,
-            now=lambda: _NOW,
+            now=lambda: database_now,
         )
         capability = ClientCapabilityProfile(
             contract_version="scalevault-client-capability-v1",
@@ -76,7 +77,7 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
             repository,
             token_pepper=_PEPPER,
             secret_hash_key_id=_KEY_ID,
-            now=lambda: _NOW + timedelta(minutes=1),
+            now=lambda: database_now,
         ).rotate(
             tenant_id=_tenant_id(),
             credential_id=issued.metadata.credential_id,
@@ -96,10 +97,71 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
             )
             is not None
         )
+        revoked = await CredentialAdminService(
+            repository,
+            token_pepper=_PEPPER,
+            secret_hash_key_id=_KEY_ID,
+            now=lambda: database_now,
+        ).revoke(
+            tenant_id=_tenant_id(),
+            credential_id=replacement.metadata.credential_id,
+        )
+        assert revoked.revoked_at == database_now
+        assert (
+            await lookup_repository.lookup(
+                _tenant_id(),
+                replacement.metadata.credential_id,
+            )
+            is None
+        )
+
+        expired = await CredentialAdminService(
+            repository,
+            token_pepper=_PEPPER,
+            secret_hash_key_id=_KEY_ID,
+            now=lambda: database_now - timedelta(hours=2),
+        ).create(
+            tenant_id=_tenant_id(),
+            host_label="expired-host",
+            environment_label="integration",
+            scopes=("memory.write.nominate",),
+            capability_profile=capability,
+            expires_at=database_now - timedelta(hours=1),
+        )
+        not_yet_valid = await CredentialAdminService(
+            repository,
+            token_pepper=_PEPPER,
+            secret_hash_key_id=_KEY_ID,
+            now=lambda: database_now + timedelta(hours=1),
+        ).create(
+            tenant_id=_tenant_id(),
+            host_label="future-host",
+            environment_label="integration",
+            scopes=("memory.write.nominate",),
+            capability_profile=capability,
+        )
+        assert (
+            await lookup_repository.lookup(
+                _tenant_id(),
+                expired.metadata.credential_id,
+            )
+            is None
+        )
+        assert (
+            await lookup_repository.lookup(
+                _tenant_id(),
+                not_yet_valid.metadata.credential_id,
+            )
+            is None
+        )
+
         listed = await repository.list_bearer_credentials(tenant_id=_tenant_id(), client_id=None)
-        assert len(listed) == 2
-        assert listed[0].revoked_at == _NOW + timedelta(minutes=1)
-        assert listed[1].revoked_at is None
+        assert len(listed) == 4
+        listed_by_id = {row.credential_id: row for row in listed}
+        assert listed_by_id[issued.metadata.credential_id].revoked_at == database_now
+        assert listed_by_id[replacement.metadata.credential_id].revoked_at == database_now
+        assert listed_by_id[expired.metadata.credential_id].revoked_at is None
+        assert listed_by_id[not_yet_valid.metadata.credential_id].revoked_at is None
 
         async with database.tenant_session(_tenant_id()) as session:
             rows = (
@@ -107,7 +169,7 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
                     select(ClientCredential).order_by(ClientCredential.created_at)
                 )
             ).all()
-        assert len(rows) == 2
+        assert len(rows) == 4
         assert all(
             row.secret_hash is not None
             and _VERIFIER.fullmatch(row.secret_hash) is not None
