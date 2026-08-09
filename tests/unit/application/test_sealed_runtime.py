@@ -100,9 +100,7 @@ def test_production_digest_credential_requires_service_effective_uid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = Path("/var/lib/kivra-memory-sealed/keys")
-    credential = Path(
-        "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
-    )
+    credential = Path("/run/credentials/kivra-memory-api.service/sealed-digest-binding")
     settings = Settings.model_construct(
         environment="production",
         sealed_content_enabled=True,

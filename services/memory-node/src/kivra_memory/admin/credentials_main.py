@@ -177,9 +177,7 @@ def _capability_from_arguments(
 ) -> ClientCapabilityProfile:
     has_read_scope = any(scope.startswith("memory.read.") for scope in scopes)
     explicit_capability = bool(
-        arguments.read_memory_scope
-        or arguments.read_visibility
-        or arguments.allow_candidates
+        arguments.read_memory_scope or arguments.read_visibility or arguments.allow_candidates
     )
     if not has_read_scope:
         if explicit_capability:

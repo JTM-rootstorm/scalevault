@@ -176,9 +176,7 @@ def test_main_reports_only_fixed_failure(
         "_parser",
         MagicMock(
             return_value=SimpleNamespace(
-                parse_args=MagicMock(
-                    return_value=SimpleNamespace(config=Path("/safe/config"))
-                )
+                parse_args=MagicMock(return_value=SimpleNamespace(config=Path("/safe/config")))
             )
         ),
     )

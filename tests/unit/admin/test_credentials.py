@@ -32,9 +32,7 @@ def _capability(*, readable: bool = True) -> ClientCapabilityProfile:
         contract_version="scalevault-client-capability-v1",
         read=(
             ReadCapability(
-                allowed_memory_scopes=frozenset(
-                    {MemoryScope.GLOBAL, MemoryScope.PROJECT}
-                ),
+                allowed_memory_scopes=frozenset({MemoryScope.GLOBAL, MemoryScope.PROJECT}),
                 allowed_visibilities=frozenset(
                     {MemoryVisibility.PRIVATE_ROOT, MemoryVisibility.RESTRICTED}
                 ),
@@ -85,6 +83,7 @@ class _Repository:
         record = _metadata(issuance)
         self.records = (record,)
         return record
+
     async def list_bearer_credentials(
         self, *, tenant_id: object, client_id: object | None
     ) -> tuple[CredentialMetadata, ...]:

@@ -254,9 +254,7 @@ async def _seeded_codex_runtime(database_url: str) -> AsyncIterator[_CodexRuntim
             for layer in seed_model_layers():
                 session.add_all(layer)
                 await session.flush()
-            session.add_all(
-                (_subject(subject_ids[0], 1), _subject(subject_ids[1], 2))
-            )
+            session.add_all((_subject(subject_ids[0], 1), _subject(subject_ids[1], 2)))
             await session.flush()
 
         session_factory = database.session_factory
@@ -363,9 +361,10 @@ async def test_distinct_authenticated_codex_clients_write_concurrently_with_prov
             ),
         )
         results = await asyncio.gather(
-            *(engine.execute(identity.command_principal, command) for identity, command in zip(
-                runtime.identities, commands, strict=True
-            ))
+            *(
+                engine.execute(identity.command_principal, command)
+                for identity, command in zip(runtime.identities, commands, strict=True)
+            )
         )
 
         assert {result.outcome for result in results} == {"candidate"}
@@ -429,8 +428,7 @@ async def test_distinct_authenticated_codex_clients_write_concurrently_with_prov
         assert all(
             event.ingress_id is None
             and event.client_id in status_by_client
-            and event.transport_binding_id
-            == status_by_client[event.client_id].transport_binding_id
+            and event.transport_binding_id == status_by_client[event.client_id].transport_binding_id
             for event in events
         )
         assert all(
@@ -440,16 +438,13 @@ async def test_distinct_authenticated_codex_clients_write_concurrently_with_prov
             == status_by_client[decision.client_id].transport_binding_id
             for decision in decisions
         )
-        evidence_keys = {
-            cast(str, item.source_reference["evidence_key"]) for item in evidence
-        }
+        evidence_keys = {cast(str, item.source_reference["evidence_key"]) for item in evidence}
         expected_evidence = {
             cast(UUID, result.memory_id): _attestation_evidence_key(identity)
             for result, identity in zip(results, runtime.identities, strict=True)
         }
         assert {
-            item.memory_id: cast(str, item.source_reference["evidence_key"])
-            for item in evidence
+            item.memory_id: cast(str, item.source_reference["evidence_key"]) for item in evidence
         } == expected_evidence
         assert all(
             item.source_type == "assistant_observation"
@@ -637,9 +632,7 @@ async def test_subagent_sessions_share_credential_identity_but_keep_session_prov
 
         assert {event.session_id for event in events} == set(session_ids)
         assert {event.client_id for event in events} == {status.client_id}
-        assert {event.transport_binding_id for event in events} == {
-            status.transport_binding_id
-        }
+        assert {event.transport_binding_id for event in events} == {status.transport_binding_id}
         assert {receipt.client_id for receipt in receipts} == {status.client_id}
 
 
@@ -696,9 +689,7 @@ async def test_same_authenticated_source_cannot_self_promote_candidate(
         assert memories[0].status == "candidate"
         assert memories[0].revision == 1
         assert len(evidence) == 1
-        assert evidence[0].source_reference == {
-            "evidence_key": _attestation_evidence_key(identity)
-        }
+        assert evidence[0].source_reference == {"evidence_key": _attestation_evidence_key(identity)}
         assert [event.operation for event in events] == ["observed"]
         assert all(event.operation != "candidate_promoted" for event in events)
         assert receipt_count == decision_count == 2
@@ -728,9 +719,7 @@ async def test_routine_banter_canary_persists_only_content_free_audit_receipts(
         async with runtime.database.tenant_session(tenant_id) as session:
             receipt = await session.get(CommandReceipt, result.receipt_id)
             decision = await session.scalar(
-                select(SelectionDecision).where(
-                    SelectionDecision.decision_id == result.decision_id
-                )
+                select(SelectionDecision).where(SelectionDecision.decision_id == result.decision_id)
             )
             counts = {
                 model.__tablename__: int(
@@ -809,10 +798,7 @@ async def test_caller_supplied_direct_evidence_is_ignored_for_server_attestation
         assert memory is not None
         assert len(evidence) == 1
         server_key = cast(str, evidence[0].source_reference["evidence_key"])
-        assert (
-            re.fullmatch(r"direct-client-observation-v1:[0-9a-f]{64}", server_key)
-            is not None
-        )
+        assert re.fullmatch(r"direct-client-observation-v1:[0-9a-f]{64}", server_key) is not None
         assert server_key == _attestation_evidence_key(runtime.identities[0])
         assert evidence[0].source_type == "assistant_observation"
         assert evidence[0].trust_classification == "trusted"

@@ -175,9 +175,7 @@ class CredentialAdminService:
         now: Callable[[], datetime] | None = None,
     ) -> None:
         if not isinstance(token_pepper, bytes) or not (
-            TOKEN_PEPPER_MINIMUM_BYTES
-            <= len(token_pepper)
-            <= TOKEN_PEPPER_MAXIMUM_BYTES
+            TOKEN_PEPPER_MINIMUM_BYTES <= len(token_pepper) <= TOKEN_PEPPER_MAXIMUM_BYTES
         ):
             raise CredentialAdminError("credential_admin_configuration_invalid")
         if re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", secret_hash_key_id) is None:
@@ -359,11 +357,7 @@ def _require_scopes(
 def _authorized_operations(scopes: Sequence[str]) -> tuple[str, ...]:
     return tuple(
         sorted(
-            {
-                operation
-                for scope in scopes
-                for operation in _WRITE_SCOPE_OPERATIONS.get(scope, ())
-            }
+            {operation for scope in scopes for operation in _WRITE_SCOPE_OPERATIONS.get(scope, ())}
         )
     )
 

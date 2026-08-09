@@ -99,11 +99,7 @@ def write_one_time_secret(path: Path, token: str) -> None:
     destination_reserved = False
     try:
         destination = Path(path)
-        if (
-            not destination.is_absolute()
-            or ".." in destination.parts
-            or not destination.name
-        ):
+        if not destination.is_absolute() or ".." in destination.parts or not destination.name:
             raise ValueError
         parent = destination.parent
         if parent.resolve(strict=True) != parent:

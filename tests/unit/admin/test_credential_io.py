@@ -23,8 +23,7 @@ def _settings(tmp_path: Path, *, database_url: str | None = None) -> CredentialA
         tmp_path / "database-url",
         (
             database_url
-            or "postgresql+psycopg://kivra_memory_credential_admin:secret@"
-            "127.0.0.1/kivra_memory"
+            or "postgresql+psycopg://kivra_memory_credential_admin:secret@127.0.0.1/kivra_memory"
         ).encode(),
     )
     pepper = _protected_file(tmp_path / "pepper", bytes(range(32)))
