@@ -138,6 +138,105 @@ systemd-analyze verify \
   kivra-memory-sealed-worker.service
 ```
 
+### Direct Codex bearer credentials
+
+Direct Codex authentication is disabled until the API has a dedicated bearer
+token pepper. Generate the pepper locally, outside the checkout, and retain it
+through the host's restricted credential-recovery process:
+
+```sh
+umask 077
+openssl rand 64 > /etc/kivra-memory/client-token-pepper
+chown root:root /etc/kivra-memory/client-token-pepper
+chmod 0600 /etc/kivra-memory/client-token-pepper
+install -D -o root -g root -m 0644 \
+  deploy/memory-node/systemd/client-auth/kivra-memory-api.service.d/30-client-token-auth.conf \
+  /etc/systemd/system/kivra-memory-api.service.d/30-client-token-auth.conf
+systemctl daemon-reload
+systemd-analyze verify kivra-memory-api.service
+```
+
+The drop-in exposes only the fixed credential path
+`/run/credentials/kivra-memory-api.service/client-token-pepper`; the pepper is
+never placed in an environment variable. Production API startup fails closed
+when direct authentication is enabled but this exact protected credential is
+missing, linked, malformed, or outside the systemd credential boundary.
+`KIVRA_MEMORY_CLIENT_TOKEN_PEPPER_KEY_ID=codex-primary-v1` is a non-secret,
+bounded selector and must exactly match `secret_hash_key_id` in the operator
+configuration. The API accepts neither the credential path nor key ID alone.
+
+The operator CLI uses the dedicated `kivra_memory_credential_admin` PostgreSQL
+role. Store its local database URL in a root-owned mode-`0600` file, not in an
+environment variable or command argument. Install a root-owned mode-`0600`
+`/etc/kivra-memory/credential-admin.json` with exactly these fields:
+
+```json
+{
+  "database_url_file": "/etc/kivra-memory/credential-admin-database-url",
+  "secret_hash_key_id": "codex-primary-v1",
+  "token_pepper_file": "/etc/kivra-memory/client-token-pepper"
+}
+```
+
+The database URL file contains the percent-encoded local URL for only that
+role. The CLI rejects remote database destinations, symlinks, non-`0600`
+configuration or secret files, hard links, unknown configuration fields, and
+pepper material outside 32 through 128 bytes.
+
+Provision one installation identity per Codex host and environment. The
+default profile grants the non-destructive read tools, transport status, and
+`memory.write.nominate`; its read ceiling excludes scene-local records,
+candidates, and sensitivity four. Link, conflict, retire, and forget scopes are
+explicit opt-ins. Legacy aggregate or observe/remember/revise scopes and
+`memory.admin` cannot be issued by this CLI.
+
+```sh
+install -d -o root -g root -m 0700 /run/kivra-memory-credential-output
+kivra-memory-credential-admin create \
+  --tenant-id REPLACE_WITH_UUIDV7 \
+  --host-label workstation-one \
+  --environment-label production \
+  --secret-output /run/kivra-memory-credential-output/codex-token
+```
+
+The output is created atomically with mode `0600` and is never overwritten.
+Import it immediately into the host's OS credential store, then remove the
+temporary file. `--secret-stdout` is an explicit alternative for a direct pipe
+into a trusted credential-store command; do not use it through terminal
+recording, shell tracing, logs, or command substitution. The token is emitted
+once and is never stored in PostgreSQL.
+
+List safe metadata and independently revoke a credential by its tenant and
+credential UUID:
+
+```sh
+kivra-memory-credential-admin list-metadata \
+  --tenant-id REPLACE_WITH_UUIDV7
+kivra-memory-credential-admin revoke \
+  --tenant-id REPLACE_WITH_UUIDV7 \
+  --credential-id REPLACE_WITH_UUIDV7
+```
+
+Rotation atomically revokes the old credential and inserts a replacement bound
+to the same actor, client, and immutable transport binding. It emits only the
+new token through the same explicit output policy:
+
+```sh
+kivra-memory-credential-admin rotate \
+  --tenant-id REPLACE_WITH_UUIDV7 \
+  --credential-id REPLACE_WITH_UUIDV7 \
+  --secret-output /run/kivra-memory-credential-output/codex-token-next
+```
+
+If publishing the one-time output fails after the database transaction, use
+`list-metadata` to identify the replacement and revoke or rotate it again; the
+old token remains revoked. Global pepper replacement is a maintenance event:
+one API process accepts exactly one key ID and never tries unrelated peppers.
+Provision replacements under the new key during an explicitly reviewed
+cutover, restart with the new systemd credential, and revoke any superseded
+credentials. Losing the pepper requires credential reissuance but does not
+affect canonical memory, sealed-content, or archive recovery.
+
 ### Archive exporter
 
 Install `/etc/kivra-memory/memory-archive-exporter.env` as root-owned mode
