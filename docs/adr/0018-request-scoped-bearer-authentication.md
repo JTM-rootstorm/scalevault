@@ -120,6 +120,27 @@ cached across requests. Implementations may cache only non-authoritative
 parsing work; revocation and binding validity must take effect on the next
 database lookup.
 
+### Direct nomination provenance
+
+Bearer authentication establishes a source identity, not the truth of a
+nomination. The direct nomination resolver never trusts or persists evidence
+keys or opaque references supplied by the MCP caller. For the constrained
+assistant-observation candidate shape defined by ADR 0013, the server derives
+one stable source key from canonical JSON containing exactly the authenticated
+tenant, actor, client, and transport-binding UUIDs. The key excludes the bearer
+credential, logical session, command and receipt identifiers, idempotency key,
+and nomination payload. It is therefore stable across credential rotation and
+subagent or session changes for one provisioned client, but differs for a
+different client.
+
+The resulting `trusted` evidence classification means only that those source
+anchors passed request-scoped authentication. It is not user testimony,
+semantic validation, or independent corroboration. Repeated observations from
+the same source key cannot count as new candidate evidence or promote a
+candidate. Credentials eligible for this path are provisioned as direct,
+interactive agent clients with the exact nomination capability; authentication
+does not infer that role from a caller claim.
+
 ## Consequences
 
 - Every Codex host can be distinguished and revoked independently in audit

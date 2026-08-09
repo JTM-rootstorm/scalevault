@@ -60,6 +60,21 @@ only where the profile explicitly permits one. Until trusted request-scoped
 resolution exists for a transport, that transport cannot claim semantic policy
 classification from raw text.
 
+The Milestone 7 direct-private resolver recognizes one deliberately narrow
+candidate source: an authenticated assistant observation with the accepted
+category, ontology, scope, and private-visibility shape. It discards every
+caller-supplied evidence key and opaque reference. The server instead supplies
+exactly one `trusted` `assistant_observation` evidence record whose key is
+`direct-client-observation-v1:` followed by lowercase SHA-256 over canonical
+JSON containing only the authenticated tenant, actor, client, and transport-
+binding UUIDs. Credential, session, command, idempotency, and nomination
+payload fields are excluded. Thus retries and credential rotations for the
+same provisioned client remain one evidence source, distinct clients remain
+distinct sources, and repeated claims by one client cannot self-corroborate or
+self-promote a candidate. Here `trusted` means authenticated source provenance;
+it does not assert semantic truth, user confirmation, or independent
+corroboration. Other direct authority claims remain unresolved and fail closed.
+
 ### Selection decisions
 
 Every evaluation appends one immutable selection decision, including omissions

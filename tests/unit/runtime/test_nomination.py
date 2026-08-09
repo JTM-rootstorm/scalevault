@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 from kivra_memory.api.mcp import NominationWireRequest
+from kivra_memory.application import selection as selection_module
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import ResolvedNominationContext
 from kivra_memory.domain.enums import (
@@ -17,6 +18,8 @@ from kivra_memory.domain.enums import (
 )
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.policy import (
+    EvidenceKind,
+    EvidenceTrust,
     NominationEvidenceReference,
     NominationProposal,
     PolicyOutcome,
@@ -31,11 +34,11 @@ def uid(value: int) -> UUID:
     return new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=value)
 
 
-def principal() -> CommandPrincipal:
+def principal(*, client_ordinal: int = 3) -> CommandPrincipal:
     return CommandPrincipal(
         tenant_id=uid(1),
         actor_id=uid(2),
-        client_id=uid(3),
+        client_id=uid(client_ordinal),
         transport_binding_id=uid(4),
         scopes=frozenset({"memory.write.nominate"}),
     )
@@ -109,7 +112,7 @@ async def test_routine_banter_is_a_content_free_deterministic_omit() -> None:
     assert policy_outcome(command_value, resolved) is PolicyOutcome.OMIT
 
 
-async def test_assistant_observation_cannot_upgrade_caller_evidence_to_trusted() -> None:
+async def test_assistant_observation_uses_only_server_owned_source_evidence() -> None:
     canary = "OPAQUE-REFERENCE-MUST-NOT-SURVIVE"
     command_value = command(
         SelectionBasis.ASSISTANT_OBSERVATION,
@@ -124,9 +127,32 @@ async def test_assistant_observation_cannot_upgrade_caller_evidence_to_trusted()
     resolved = await DirectNominationResolver().resolve(principal(), command_value)
 
     assert resolved.content_signals == frozenset()
-    assert resolved.evidence == ()
+    assert len(resolved.evidence) == 1
+    assert resolved.evidence[0].evidence_key.startswith("direct-client-observation-v1:")
+    assert resolved.evidence[0].kind is EvidenceKind.ASSISTANT_OBSERVATION
+    assert resolved.evidence[0].trust is EvidenceTrust.TRUSTED
+    assert "episode:one" not in resolved.model_dump_json()
     assert canary not in resolved.model_dump_json()
-    assert policy_outcome(command_value, resolved) is PolicyOutcome.REJECT
+    assert policy_outcome(command_value, resolved) is PolicyOutcome.CANDIDATE
+
+
+async def test_direct_observation_source_is_stable_per_binding_and_distinct_per_client() -> None:
+    first_command = command(SelectionBasis.ASSISTANT_OBSERVATION)
+    second_command = first_command.model_copy(
+        update={
+            "idempotency_key": "direct-nomination:a-different-command",
+            "logical_session_id": uid(90),
+        }
+    )
+    resolver = DirectNominationResolver()
+
+    first = await resolver.resolve(principal(), first_command)
+    repeated = await resolver.resolve(principal(), second_command)
+    other_client = await resolver.resolve(principal(client_ordinal=30), first_command)
+
+    assert first.evidence[0].evidence_key == repeated.evidence[0].evidence_key
+    assert first.evidence[0].evidence_key != other_client.evidence[0].evidence_key
+    assert selection_module._new_candidate_evidence(first.evidence, repeated.evidence) == ()
 
 
 @pytest.mark.parametrize(
