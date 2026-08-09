@@ -117,4 +117,3 @@ ETags are opaque worker checkpoint data, not authentication.
   semantic metadata.
 - Fifty-file concurrency and poll/webhook replay tests are release-blocking for
   enabling the service.
-
