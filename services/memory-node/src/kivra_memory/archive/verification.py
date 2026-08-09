@@ -188,7 +188,7 @@ def verify_archive_batch(
                                 "archive event failed its checked-in JSON schema"
                             ) from None
                 try:
-                    event = MemoryEvent.model_validate(parsed)
+                    event = MemoryEvent.model_validate_json(batch.files[path])
                 except (TypeError, ValueError):
                     raise ArchiveVerificationError("archive event contract is invalid") from None
                 if event_sequence_from_path(path) != event.sequence:
