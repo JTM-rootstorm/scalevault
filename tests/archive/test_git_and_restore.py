@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from kivra_memory.archive.codec import SnapshotData, SnapshotTable
@@ -11,6 +14,7 @@ from kivra_memory.archive.git import (
     GitSigningConfig,
     GitSigningError,
     ProcessResult,
+    VerifiedGitCommit,
     archive_commit_message,
 )
 from kivra_memory.archive.restore import (
@@ -18,13 +22,19 @@ from kivra_memory.archive.restore import (
     RestorePreflightError,
     build_restore_plan,
 )
-from kivra_memory.archive.verification import VerifiedArchiveBatch
+from kivra_memory.archive.verification import (
+    VerifiedArchive,
+    VerifiedArchiveBatch,
+    VerifiedArchiveCommit,
+)
 from kivra_memory.domain.events import MemoryEvent
 
 from .test_manifest import manifest
 
 SHA = "a" * 40
 TREE = "b" * 40
+OTHER_SHA = "c" * 40
+TIMESTAMP = "2026-08-09T12:30:45.123456Z"
 
 
 class RecordingRunner:
@@ -60,14 +70,13 @@ def signer(runner: RecordingRunner) -> GitCommitSigner:
 
 def test_signer_uses_fixed_argv_stdin_and_isolated_environment() -> None:
     runner = RecordingRunner([ProcessResult(0, stdout=(SHA + "\n").encode())])
-    timestamp = "2026-08-09T12:30:45.123456Z"
 
     assert (
         signer(runner).sign_commit(
             tree_sha=TREE,
             parent_sha=SHA,
             message=archive_commit_message(1, 2),
-            timestamp=timestamp,
+            timestamp=TIMESTAMP,
         )
         == SHA
     )
@@ -78,7 +87,7 @@ def test_signer_uses_fixed_argv_stdin_and_isolated_environment() -> None:
     assert stdin == b"memory-export: events 1..2\n"
     assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
     assert environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
-    assert environment["GIT_AUTHOR_DATE"] == timestamp
+    assert environment["GIT_AUTHOR_DATE"] == TIMESTAMP
     assert "HOME" not in environment and "SSH_AUTH_SOCK" not in environment
     assert timeout == 30
 
@@ -92,6 +101,162 @@ def test_signature_verification_requires_pinned_signer_identity() -> None:
     runner = RecordingRunner([ProcessResult(0, stderr=b'Good "git" signature for other')])
     with pytest.raises(GitSigningError, match="identity"):
         signer(runner).verify_commit(SHA)
+
+    prefix = b'Good "git" signature for archive@scalevault.evil with ED25519 key SHA256:test\n'
+    runner = RecordingRunner([ProcessResult(0, stderr=prefix)])
+    with pytest.raises(GitSigningError, match="identity"):
+        signer(runner).verify_commit(SHA)
+
+
+def _raw_commit(
+    *,
+    parent: str | None = None,
+    message: bytes = b"memory-export: events 1..1\n",
+) -> bytes:
+    epoch = int(datetime.fromisoformat(TIMESTAMP.replace("Z", "+00:00")).timestamp())
+    parent_header = b"" if parent is None else f"parent {parent}\n".encode()
+    identity = f"ScaleVault Archive <archive@scalevault.invalid> {epoch} +0000".encode()
+    return b"".join(
+        (
+            f"tree {TREE}\n".encode(),
+            parent_header,
+            b"author " + identity + b"\n",
+            b"committer " + identity + b"\n",
+            b"gpgsig -----BEGIN SSH SIGNATURE-----\n",
+            b" fake\n",
+            b" -----END SSH SIGNATURE-----\n",
+            b"\n" + message,
+        )
+    )
+
+
+def _blob_entry(path: str, content: bytes) -> bytes:
+    digest = hashlib.sha1(
+        b"blob " + str(len(content)).encode() + b"\0" + content,
+        usedforsecurity=False,
+    ).hexdigest()
+    return f"100644 blob {digest}\t{path}\0".encode()
+
+
+def _tree_output(files: dict[str, bytes]) -> bytes:
+    return b"".join(_blob_entry(path, content) for path, content in sorted(files.items()))
+
+
+def test_archive_commit_verification_rejects_unsigned_and_forged_chain() -> None:
+    unsigned = RecordingRunner([ProcessResult(1)])
+    with pytest.raises(GitSigningError, match="signature verification"):
+        signer(unsigned).verify_archive_commit(
+            SHA,
+            expected_parent_sha=None,
+            expected_message="memory-export: events 1..1\n",
+            expected_timestamp=TIMESTAMP,
+            expected_files={"manifest.json": b"{}"},
+        )
+
+    good_signature = b'Good "git" signature for archive@scalevault with ED25519 key SHA256:test\n'
+    forged = RecordingRunner(
+        [
+            ProcessResult(0, stderr=good_signature),
+            ProcessResult(0, stdout=_raw_commit(parent=OTHER_SHA)),
+        ]
+    )
+    with pytest.raises(GitSigningError, match="first-parent"):
+        signer(forged).verify_archive_commit(
+            SHA,
+            expected_parent_sha=None,
+            expected_message="memory-export: events 1..1\n",
+            expected_timestamp=TIMESTAMP,
+            expected_files={"manifest.json": b"{}"},
+        )
+
+
+def test_archive_commit_verification_binds_exact_batch_blob() -> None:
+    signature = b'Good "git" signature for archive@scalevault with ED25519 key SHA256:test\n'
+    runner = RecordingRunner(
+        [
+            ProcessResult(0, stderr=signature),
+            ProcessResult(0, stdout=_raw_commit()),
+            ProcessResult(0, stdout=_tree_output({"manifest.json": b"forged"})),
+        ]
+    )
+    with pytest.raises(GitSigningError, match="batch bytes"):
+        signer(runner).verify_archive_commit(
+            SHA,
+            expected_parent_sha=None,
+            expected_message="memory-export: events 1..1\n",
+            expected_timestamp=TIMESTAMP,
+            expected_files={"manifest.json": b"{}"},
+        )
+
+
+def test_archive_commit_verification_accepts_exact_signed_identity() -> None:
+    signature = b'Good "git" signature for archive@scalevault with ED25519 key SHA256:test\n'
+    manifest_bytes = b"{}"
+    runner = RecordingRunner(
+        [
+            ProcessResult(0, stderr=signature),
+            ProcessResult(0, stdout=_raw_commit()),
+            ProcessResult(0, stdout=_tree_output({"manifest.json": manifest_bytes})),
+        ]
+    )
+
+    verified = signer(runner).verify_archive_commit(
+        SHA,
+        expected_parent_sha=None,
+        expected_message="memory-export: events 1..1\n",
+        expected_timestamp=TIMESTAMP,
+        expected_files={"manifest.json": manifest_bytes},
+    )
+
+    assert verified == VerifiedGitCommit(commit_sha=SHA, tree_sha=TREE, parent_sha=None)
+
+
+def test_archive_commit_chain_accepts_exact_second_batch_tree_with_prior_files_removed() -> None:
+    signature = b'Good "git" signature for archive@scalevault with ED25519 key SHA256:test\n'
+    first_files = {
+        "events/first.json": b"first",
+        "manifest.json": b"manifest-one",
+    }
+    second_files = {
+        "events/second.json": b"second",
+        "manifest.json": b"manifest-two",
+    }
+    runner = RecordingRunner(
+        [
+            ProcessResult(0, stderr=signature),
+            ProcessResult(0, stdout=_raw_commit()),
+            ProcessResult(0, stdout=_tree_output(first_files)),
+            ProcessResult(0, stderr=signature),
+            ProcessResult(
+                0,
+                stdout=_raw_commit(
+                    parent=SHA,
+                    message=b"memory-export: events 2..2\n",
+                ),
+            ),
+            ProcessResult(0, stdout=_tree_output(second_files)),
+        ]
+    )
+    verifier = signer(runner)
+
+    first = verifier.verify_archive_commit(
+        SHA,
+        expected_parent_sha=None,
+        expected_message="memory-export: events 1..1\n",
+        expected_timestamp=TIMESTAMP,
+        expected_files=first_files,
+    )
+    second = verifier.verify_archive_commit(
+        OTHER_SHA,
+        expected_parent_sha=SHA,
+        expected_message="memory-export: events 2..2\n",
+        expected_timestamp=TIMESTAMP,
+        expected_files=second_files,
+    )
+
+    assert first.parent_sha is None
+    assert second.parent_sha == SHA
+    assert "events/first.json" not in second_files
 
 
 @pytest.mark.parametrize("dirty", ["rows", "workers", "transaction", "live"])
@@ -132,8 +297,23 @@ def test_restore_plan_uses_latest_snapshot_and_only_later_events() -> None:
         snapshot=None,
     )
 
-    plan = build_restore_plan((first, second))
+    archive = VerifiedArchive(
+        commits=(
+            VerifiedArchiveCommit(
+                git=VerifiedGitCommit(commit_sha=SHA, tree_sha=TREE, parent_sha=None),
+                batch=first,
+            ),
+            VerifiedArchiveCommit(
+                git=VerifiedGitCommit(commit_sha=OTHER_SHA, tree_sha=TREE, parent_sha=SHA),
+                batch=second,
+            ),
+        )
+    )
+    plan = build_restore_plan(archive)
 
     assert plan.snapshot_high_water_sequence == 2
     assert [event.sequence for event in plan.events_to_replay] == [3, 4]
     assert plan.final_high_water_sequence == 4
+
+    with pytest.raises(RestorePreflightError, match="signed verified archive"):
+        build_restore_plan(cast(VerifiedArchive, (first, second)))

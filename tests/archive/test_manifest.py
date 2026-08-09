@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from kivra_memory.archive.models import (
 )
 from kivra_memory.archive.verification import (
     ArchiveBatch,
+    ArchiveReadLimits,
     ArchiveVerificationError,
     VerifiedArchiveBatch,
     parse_manifest,
@@ -104,6 +106,61 @@ def test_directory_reader_rejects_symlinks_and_hardlinks(tmp_path: Path) -> None
     (tmp_path / "hard").hardlink_to(target)
     with pytest.raises(ArchiveVerificationError, match="link or special"):
         read_archive_directory(tmp_path)
+
+
+def test_directory_reader_bounds_count_file_size_and_total_before_reads(tmp_path: Path) -> None:
+    (tmp_path / "manifest.json").write_bytes(b"{}")
+    (tmp_path / "payload").write_bytes(b"data")
+
+    with pytest.raises(ArchiveVerificationError, match="file count"):
+        read_archive_directory(
+            tmp_path,
+            limits=ArchiveReadLimits(max_files=1, max_file_size=10, max_total_size=10),
+        )
+    with pytest.raises(ArchiveVerificationError, match="file size"):
+        read_archive_directory(
+            tmp_path,
+            limits=ArchiveReadLimits(max_files=2, max_file_size=3, max_total_size=10),
+        )
+    with pytest.raises(ArchiveVerificationError, match="total size"):
+        read_archive_directory(
+            tmp_path,
+            limits=ArchiveReadLimits(max_files=2, max_file_size=10, max_total_size=5),
+        )
+
+
+def test_directory_reader_rejects_symlink_replacement_during_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "manifest.json").write_bytes(b"{}")
+    payload = archive / "payload"
+    payload.write_bytes(b"expected")
+    replacement = tmp_path / "replacement"
+    replacement.write_bytes(b"attacker")
+    original_open = os.open
+    replaced = False
+
+    def replacing_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal replaced
+        if path == "payload" and dir_fd is not None and not replaced:
+            replaced = True
+            payload.unlink()
+            payload.symlink_to(replacement)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", replacing_open)
+    with pytest.raises(ArchiveVerificationError, match="symbolic link"):
+        read_archive_directory(archive)
+    assert replaced
 
 
 def test_archive_batch_is_an_exact_file_set() -> None:

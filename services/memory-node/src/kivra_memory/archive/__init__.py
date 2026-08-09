@@ -15,6 +15,7 @@ from kivra_memory.archive.git import (
     GitSigningError,
     ProcessResult,
     ProcessRunner,
+    VerifiedGitCommit,
     archive_commit_message,
 )
 from kivra_memory.archive.models import (
@@ -39,20 +40,27 @@ from kivra_memory.archive.restore import (
 )
 from kivra_memory.archive.verification import (
     ArchiveBatch,
+    ArchiveCommitBatch,
+    ArchiveReadLimits,
     ArchiveVerificationError,
+    VerifiedArchive,
     VerifiedArchiveBatch,
+    VerifiedArchiveCommit,
     parse_manifest,
     read_archive_directory,
     verify_archive_batch,
     verify_manifest_chain,
+    verify_signed_archive,
 )
 
 __all__ = [
     "ARCHIVE_FORMAT",
     "MANIFEST_PATH",
     "ArchiveBatch",
+    "ArchiveCommitBatch",
     "ArchiveFile",
     "ArchiveManifest",
+    "ArchiveReadLimits",
     "ArchiveValidationError",
     "ArchiveVerificationError",
     "GitCommitSigner",
@@ -70,7 +78,10 @@ __all__ = [
     "SnapshotLimits",
     "SnapshotReference",
     "SnapshotTable",
+    "VerifiedArchive",
     "VerifiedArchiveBatch",
+    "VerifiedArchiveCommit",
+    "VerifiedGitCommit",
     "archive_commit_message",
     "build_manifest",
     "build_restore_plan",
@@ -84,4 +95,5 @@ __all__ = [
     "validate_archive_path",
     "verify_archive_batch",
     "verify_manifest_chain",
+    "verify_signed_archive",
 ]

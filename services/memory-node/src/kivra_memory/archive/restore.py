@@ -6,12 +6,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from kivra_memory.archive.codec import SnapshotData, SnapshotLimits, SnapshotTable
+from kivra_memory.archive.git import GitCommitSigner
 from kivra_memory.archive.verification import (
-    ArchiveBatch,
+    ArchiveCommitBatch,
     ArchiveVerificationError,
-    VerifiedArchiveBatch,
-    verify_archive_batch,
+    VerifiedArchive,
     verify_manifest_chain,
+    verify_signed_archive,
 )
 from kivra_memory.domain.events import MemoryEvent
 
@@ -77,27 +78,32 @@ class RestorePlan:
 
 
 def preflight_restore(
-    batches: Sequence[ArchiveBatch],
+    commits: Sequence[ArchiveCommitBatch],
     destination: RestoreDestinationState,
     *,
+    signer: GitCommitSigner,
     snapshot_limits: SnapshotLimits | None = None,
 ) -> RestorePlan:
-    """Verify all untrusted bytes and destination state without opening a transaction."""
+    """Verify signed Git history, all bytes, and destination before a transaction."""
 
     destination.require_safe()
     try:
-        verified = tuple(
-            verify_archive_batch(batch, snapshot_limits=snapshot_limits) for batch in batches
+        verified = verify_signed_archive(
+            commits,
+            signer,
+            snapshot_limits=snapshot_limits,
         )
-        verify_manifest_chain(verified)
         return build_restore_plan(verified)
     except ArchiveVerificationError:
         raise RestorePreflightError("archive restore input failed verification") from None
 
 
-def build_restore_plan(batches: Sequence[VerifiedArchiveBatch]) -> RestorePlan:
+def build_restore_plan(archive: VerifiedArchive) -> RestorePlan:
     """Select the latest validated snapshot and only the events that follow it."""
 
+    if not isinstance(archive, VerifiedArchive):
+        raise RestorePreflightError("restore planning requires a signed verified archive")
+    batches = archive.batches
     if not batches:
         raise RestorePreflightError("archive restore input is empty")
     verify_manifest_chain(batches)
