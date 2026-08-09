@@ -90,7 +90,12 @@ class KeyProvider(Protocol):
         lineage_id: UUID,
         memory_id: UUID,
     ) -> ContentKeyReference:
-        """Generate and retain a new independent 256-bit content key."""
+        """Generate and retain a new independent 256-bit content key.
+
+        Retries with the same content-key and canonical identity must return the
+        same reference without replacing key material. Reuse with a different
+        identity must fail closed.
+        """
         ...
 
     async def get_key(self, reference: ContentKeyReference) -> ContentKeyMaterial:
@@ -98,7 +103,12 @@ class KeyProvider(Protocol):
         ...
 
     async def destroy_key(self, reference: ContentKeyReference) -> KeyDestructionReceipt:
-        """Irreversibly destroy a content key and return an opaque receipt."""
+        """Irreversibly destroy a content key and return an opaque receipt.
+
+        Destruction must be idempotent: retries after a successful destruction
+        return the same stable receipt so a database transaction can safely
+        record completion after an interrupted attempt.
+        """
         ...
 
 
