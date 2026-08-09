@@ -50,7 +50,9 @@ def test_tunnel_unit_doctors_before_run_with_secret_environment_removed() -> Non
         for line in unit.splitlines()
         if line.startswith("ExecStart=/usr/local/bin/tunnel-client run")
     )
-    unset = next(line for line in unit.splitlines() if line.startswith("UnsetEnvironment="))
+    unset = " ".join(
+        line for line in unit.splitlines() if line.startswith("UnsetEnvironment=")
+    )
 
     assert "/chatgpt/mcp" in doctor
     assert "/chatgpt/mcp" in run
@@ -59,6 +61,10 @@ def test_tunnel_unit_doctors_before_run_with_secret_environment_removed() -> Non
     assert "MCP_EXTRA_HEADERS" in unset
     assert "MCP_DISCOVERY_EXTRA_HEADERS" in unset
     assert "LOG_HTTP_RAW_UNSAFE" in unset
+    assert "http_proxy" in unset
+    assert "https_proxy" in unset
+    assert "--log.file=stdout" in doctor
+    assert "--log.file=stdout" in run
 
 
 def test_tunnel_settings_and_documentation_expose_no_secret_value() -> None:
