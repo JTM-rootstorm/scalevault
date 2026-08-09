@@ -348,8 +348,8 @@ async def test_all_non_create_operations_commit_atomic_projection_receipt_and_ou
             assert stored_memories[memory_ids[4]].content_key_id == content_key_id
             content_key = await session.get(MemoryContentKey, content_key_id)
             assert content_key is not None
-            assert content_key.state == "active"
-            assert content_key.destruction_requested_at is None
+            assert content_key.state == "destruction_requested"
+            assert content_key.destruction_requested_at is not None
 
             conflict = await session.get(MemoryConflict, opened.conflict_id)
             assert conflict is not None
