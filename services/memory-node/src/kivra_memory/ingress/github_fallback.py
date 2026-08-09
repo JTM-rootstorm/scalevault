@@ -33,9 +33,9 @@ GITHUB_FALLBACK_REPOSITORY_OWNER = "JTM-rootstorm"
 GITHUB_FALLBACK_REPOSITORY_NAME = "scalevault-memory-ingress"
 GITHUB_FALLBACK_BRANCH = "main"
 GITHUB_FALLBACK_PREFIX = "ingress/v2"
-GITHUB_FALLBACK_PRIVACY_WARNING: Final[
-    Literal["github_third_party_non_sensitive_only"]
-] = "github_third_party_non_sensitive_only"
+GITHUB_FALLBACK_PRIVACY_WARNING: Final[Literal["github_third_party_non_sensitive_only"]] = (
+    "github_third_party_non_sensitive_only"
+)
 _OBJECT_ID = re.compile(r"[0-9a-f]{40}")
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
@@ -63,9 +63,9 @@ class GitHubProposalFallbackConfig:
     default_branch: str = GITHUB_FALLBACK_BRANCH
     ingress_prefix: str = GITHUB_FALLBACK_PREFIX
     schema_version: Literal[2] = 2
-    privacy_warning: Literal[
-        "github_third_party_non_sensitive_only"
-    ] = GITHUB_FALLBACK_PRIVACY_WARNING
+    privacy_warning: Literal["github_third_party_non_sensitive_only"] = (
+        GITHUB_FALLBACK_PRIVACY_WARNING
+    )
     maximum_proposal_bytes: int = MAX_PROPOSAL_BYTES
     external_source_commit: str = GITHUB_INGRESS_BOOTSTRAP_COMMIT
     external_source_tree: str = GITHUB_INGRESS_BOOTSTRAP_TREE

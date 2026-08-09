@@ -112,13 +112,8 @@ class GitHubProviderHeadRepository:
         for value in (expected_commit_id, expected_tree_id, commit_id, tree_id):
             if _OBJECT_ID.fullmatch(value) is None:
                 raise ValueError("GitHub object ID is invalid")
-        if (
-            etag is not None
-            and (
-                not etag
-                or len(etag) > 1024
-                or any(character in etag for character in "\r\n\x00")
-            )
+        if etag is not None and (
+            not etag or len(etag) > 1024 or any(character in etag for character in "\r\n\x00")
         ):
             raise ValueError("GitHub ETag is invalid")
         row = await self._load_locked(session, identity)

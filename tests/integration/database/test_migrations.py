@@ -439,6 +439,7 @@ def test_existing_0009_database_adds_and_removes_ingress_provider_heads(
         assert _current_revision(connection) == "0009_secure_tunnel_binding"
         assert "ingress_provider_heads" not in inspect(connection).get_table_names()
 
+
 def test_genesis_downgrade_fails_closed_after_a_genesis_decision(
     bootstrapped_alembic_runner: AlembicRunner,
 ) -> None:

@@ -264,9 +264,7 @@ class IngressProviderHead(Base):
             "bootstrap_tree_id = '2de813150fe3952e6538abc5db9c2254d835a70e'",
             name="bootstrap_tree_pin",
         ),
-        CheckConstraint(
-            "last_verified_commit_id ~ '^[0-9a-f]{40}$'", name="last_commit_format"
-        ),
+        CheckConstraint("last_verified_commit_id ~ '^[0-9a-f]{40}$'", name="last_commit_format"),
         CheckConstraint("last_verified_tree_id ~ '^[0-9a-f]{40}$'", name="last_tree_format"),
         CheckConstraint("length(branch_name) BETWEEN 1 AND 255", name="branch_name_length"),
         CheckConstraint("etag IS NULL OR length(etag) BETWEEN 1 AND 1024", name="etag_length"),

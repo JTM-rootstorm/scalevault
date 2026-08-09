@@ -75,9 +75,7 @@ def _tree_entry(path: str, payload: bytes) -> dict[str, object]:
     }
 
 
-def _tree(
-    entries: list[dict[str, object]], *, tree_id: str = TREE_ID
-) -> dict[str, object]:
+def _tree(entries: list[dict[str, object]], *, tree_id: str = TREE_ID) -> dict[str, object]:
     return {"sha": tree_id, "truncated": False, "tree": entries}
 
 
@@ -192,7 +190,7 @@ def test_poll_rejects_changed_or_removed_known_path_before_blob_fetch() -> None:
         GitHubSnapshotPoller(_client(transport)).poll(
             trusted_commit_id=COMMIT_ID,
             trusted_tree_id=TREE_ID,
-            known_objects={old_path: "f" * 40, _path(3): "e" * 40}
+            known_objects={old_path: "f" * 40, _path(3): "e" * 40},
         )
 
     assert len(transport.calls) == 3

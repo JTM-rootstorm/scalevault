@@ -114,12 +114,14 @@ def test_ingress_provider_head_pins_bootstrap_and_immutable_identity() -> None:
         for constraint in head.constraints
         if isinstance(constraint, CheckConstraint)
     }
-    assert "84233835924ade0e3cf26bb995717c880c75ff5c" in checks[
-        "ck_ingress_provider_heads_bootstrap_commit_pin"
-    ]
-    assert "2de813150fe3952e6538abc5db9c2254d835a70e" in checks[
-        "ck_ingress_provider_heads_bootstrap_tree_pin"
-    ]
+    assert (
+        "84233835924ade0e3cf26bb995717c880c75ff5c"
+        in checks["ck_ingress_provider_heads_bootstrap_commit_pin"]
+    )
+    assert (
+        "2de813150fe3952e6538abc5db9c2254d835a70e"
+        in checks["ck_ingress_provider_heads_bootstrap_tree_pin"]
+    )
     assert set(head.info["scalevault_immutable_fields"]) >= {
         "tenant_id",
         "repository_external_id",
