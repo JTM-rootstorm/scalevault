@@ -123,11 +123,17 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
             {MemoryScope.PERSONA, MemoryScope.RELATIONSHIP}
         )
 
+        async with database.tenant_session(_tenant_id()) as session:
+            rotation_now = cast(
+                datetime,
+                await session.scalar(select(func.current_timestamp())),
+            )
+
         replacement = await CredentialAdminService(
             repository,
             token_pepper=_PEPPER,
             secret_hash_key_id=_KEY_ID,
-            now=lambda: database_now,
+            now=lambda: rotation_now,
         ).rotate(
             tenant_id=_tenant_id(),
             credential_id=issued.metadata.credential_id,
@@ -151,12 +157,12 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
             repository,
             token_pepper=_PEPPER,
             secret_hash_key_id=_KEY_ID,
-            now=lambda: database_now,
+            now=lambda: rotation_now,
         ).revoke(
             tenant_id=_tenant_id(),
             credential_id=replacement.metadata.credential_id,
         )
-        assert revoked.revoked_at == database_now
+        assert revoked.revoked_at == rotation_now
         assert (
             await lookup_repository.lookup(
                 _tenant_id(),
@@ -174,7 +180,7 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
             tenant_id=_tenant_id(),
             host_label="expired-host",
             environment_label="integration",
-            scopes=("memory.write.nominate",),
+            scopes=("memory.read.context", "memory.write.nominate"),
             capability_profile=capability,
             expires_at=database_now - timedelta(hours=1),
         )
@@ -187,7 +193,7 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
             tenant_id=_tenant_id(),
             host_label="future-host",
             environment_label="integration",
-            scopes=("memory.write.nominate",),
+            scopes=("memory.read.context", "memory.write.nominate"),
             capability_profile=capability,
         )
         assert (
@@ -208,8 +214,8 @@ async def test_admin_create_and_rotate_persist_only_versioned_verifiers(
         listed = await repository.list_bearer_credentials(tenant_id=_tenant_id(), client_id=None)
         assert len(listed) == 4
         listed_by_id = {row.credential_id: row for row in listed}
-        assert listed_by_id[issued.metadata.credential_id].revoked_at == database_now
-        assert listed_by_id[replacement.metadata.credential_id].revoked_at == database_now
+        assert listed_by_id[issued.metadata.credential_id].revoked_at == rotation_now
+        assert listed_by_id[replacement.metadata.credential_id].revoked_at == rotation_now
         assert listed_by_id[expired.metadata.credential_id].revoked_at is None
         assert listed_by_id[not_yet_valid.metadata.credential_id].revoked_at is None
 
