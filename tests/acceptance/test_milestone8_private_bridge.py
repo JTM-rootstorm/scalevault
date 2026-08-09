@@ -279,9 +279,8 @@ async def test_secure_tunnel_discovers_only_read_tools_and_mutations_are_uncalla
     assert discovered == READ_TOOL_NAMES
     assert discovered.isdisjoint(MUTATION_TOOL_NAMES)
     for rejection_result in mutation_attempts.values():
-        rejection = cast(dict[str, Any], rejection_result.structuredContent)
-        assert rejection["ok"] is False
-        assert rejection["error"]["code"] == "invalid_input"
+        assert rejection_result.isError is True
+        assert rejection_result.structuredContent is None
     assert surface.repository.resolved_call is None
     assert all(
         tool.annotations is not None
