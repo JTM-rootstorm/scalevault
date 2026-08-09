@@ -118,6 +118,36 @@ def test_preflight_rejects_noncanonical_tunnel_id(tmp_path: Path) -> None:
     assert tunnel_id not in result.stderr
 
 
+def test_preflight_rejects_hard_linked_credential(tmp_path: Path) -> None:
+    result = _run_preflight(tmp_path, hard_link_authorization=True)
+
+    assert result.returncode != 0
+    assert "exactly one hard link" in result.stderr
+    assert AUTHORIZATION not in result.stderr
+
+
+def test_preflight_rejects_group_readable_credential(tmp_path: Path) -> None:
+    result = _run_preflight(tmp_path, authorization_mode=0o640)
+
+    assert result.returncode != 0
+    assert "must not grant group or other permissions" in result.stderr
+    assert AUTHORIZATION not in result.stderr
+
+
+def test_preflight_rejects_hard_linked_control_plane_credential(tmp_path: Path) -> None:
+    result = _run_preflight(tmp_path, hard_link_control_plane=True)
+
+    assert result.returncode != 0
+    assert "exactly one hard link" in result.stderr
+
+
+def test_preflight_rejects_group_readable_control_plane_credential(tmp_path: Path) -> None:
+    result = _run_preflight(tmp_path, control_plane_mode=0o640)
+
+    assert result.returncode != 0
+    assert "must not grant group or other permissions" in result.stderr
+
+
 def test_mcp_probe_keeps_authorization_out_of_argv_and_output(tmp_path: Path) -> None:
     result, arguments, config = _run_mcp_probe(tmp_path)
 
@@ -151,6 +181,25 @@ def test_mcp_probe_fails_closed_on_non_success_http_status(tmp_path: Path) -> No
     assert AUTHORIZATION not in arguments
 
 
+def test_mcp_probe_rejects_hard_linked_or_readable_by_group_credential(
+    tmp_path: Path,
+) -> None:
+    linked, linked_arguments, _config = _run_mcp_probe(
+        tmp_path / "linked", hard_link_authorization=True
+    )
+    readable, readable_arguments, _config = _run_mcp_probe(
+        tmp_path / "readable", authorization_mode=0o640
+    )
+
+    assert linked.returncode != 0
+    assert "exactly one hard link" in linked.stderr
+    assert readable.returncode != 0
+    assert "must not grant group or other permissions" in readable.stderr
+    assert linked_arguments == readable_arguments == ""
+    assert AUTHORIZATION not in linked.stderr
+    assert AUTHORIZATION not in readable.stderr
+
+
 def _run_preflight(
     tmp_path: Path,
     *,
@@ -158,6 +207,10 @@ def _run_preflight(
     include_header_flags: bool = True,
     tunnel_id: str = "tunnel_0123456789abcdef0123456789abcdef",
     version: str = "0.0.10+test",
+    authorization_mode: int = 0o600,
+    hard_link_authorization: bool = False,
+    control_plane_mode: int = 0o600,
+    hard_link_control_plane: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     tunnel_client = tmp_path / "tunnel-client"
     flags = "--mcp.extra-headers --mcp.discovery-extra-headers" if include_header_flags else ""
@@ -175,8 +228,14 @@ def _run_preflight(
     tunnel_client.chmod(0o755)
     control_plane = tmp_path / "control-plane-api-key"
     control_plane.write_text("sk-test-control-plane-credential\n", encoding="utf-8")
+    control_plane.chmod(control_plane_mode)
+    if hard_link_control_plane:
+        os.link(control_plane, tmp_path / "control-plane-api-key-linked")
     chatgpt_authorization = tmp_path / "chatgpt-mcp-authorization"
     chatgpt_authorization.write_text(authorization + "\n", encoding="utf-8")
+    chatgpt_authorization.chmod(authorization_mode)
+    if hard_link_authorization:
+        os.link(chatgpt_authorization, tmp_path / "chatgpt-mcp-authorization-linked")
 
     environment = os.environ.copy()
     environment["CONTROL_PLANE_TUNNEL_ID"] = tunnel_id
@@ -199,7 +258,10 @@ def _run_mcp_probe(
     *,
     authorization: str = AUTHORIZATION,
     curl_exit: int = 0,
+    authorization_mode: int = 0o600,
+    hard_link_authorization: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], str, str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     arguments_path = tmp_path / "curl-arguments"
     config_path = tmp_path / "curl-config"
     curl_command = tmp_path / "curl"
@@ -213,6 +275,9 @@ def _run_mcp_probe(
     curl_command.chmod(0o755)
     credential = tmp_path / "chatgpt-mcp-authorization"
     credential.write_text(authorization + "\n", encoding="utf-8")
+    credential.chmod(authorization_mode)
+    if hard_link_authorization:
+        os.link(credential, tmp_path / "chatgpt-mcp-authorization-linked")
     environment = os.environ.copy()
     environment["PROBE_ARGUMENTS_PATH"] = str(arguments_path)
     environment["PROBE_CONFIG_PATH"] = str(config_path)

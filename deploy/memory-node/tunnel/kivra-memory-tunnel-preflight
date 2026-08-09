@@ -55,6 +55,16 @@ for credential_path in "$control_plane_credential" "$chatgpt_authorization_crede
     [ -f "$credential_path" ] || fail "a required credential is not a regular file"
     [ ! -L "$credential_path" ] || fail "a required credential must not be a symbolic link"
     [ -r "$credential_path" ] || fail "a required credential is not readable"
+    credential_links=$(stat -c '%h' -- "$credential_path") \
+        || fail "could not inspect a required credential"
+    [ "$credential_links" -eq 1 ] \
+        || fail "a required credential must have exactly one hard link"
+    credential_mode=$(stat -c '%a' -- "$credential_path") \
+        || fail "could not inspect a required credential"
+    case "$credential_mode" in
+        [0-7]00) ;;
+        *) fail "a required credential must not grant group or other permissions" ;;
+    esac
 done
 
 control_plane_size=$(wc -c < "$control_plane_credential") \

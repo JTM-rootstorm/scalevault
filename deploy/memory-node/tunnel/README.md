@@ -52,7 +52,7 @@ contain exactly one setting and no shell expansion:
 CONTROL_PLANE_TUNNEL_ID=tunnel_REPLACE_WITH_32_LOWERCASE_HEX_CHARACTERS
 ```
 
-Install two distinct root-owned mode-`0600` secret files:
+Install two distinct root-owned mode-`0600`, single-link secret files:
 
 - `/etc/kivra-memory/tunnel-api-key` contains the restricted OpenAI runtime API
   key used only to poll the tunnel control plane.
@@ -82,11 +82,13 @@ pepper, key ID, pinned installation, and distinct persisted `secure_tunnel`
 credential row are all valid.
 
 The configuration preflight validates the tunnel ID, client version and
-static-header features, credential readability, and exact bearer grammar
-without printing secret values. A second startup preflight performs a fixed
-MCP initialize request against `/chatgpt/mcp`. It supplies Authorization to
-curl through configuration on standard input, discards the response body, and
-fails startup on a missing or malformed credential or non-success HTTP status.
+static-header features, credential readability, link count, owner-only mode,
+and exact bearer grammar without printing secret values. It accepts the
+service-owned mode-`0400` copies created by systemd. A second startup preflight
+performs a fixed MCP initialize request against `/chatgpt/mcp`. It supplies
+Authorization to curl through configuration on standard input, discards the
+response body, and fails startup on a missing or malformed credential or
+non-success HTTP status.
 The secret never appears in curl's arguments, environment, or output. Both
 discovery and forwarded MCP calls then use the same protected Authorization
 value. Raw HTTP logging, remote UI access, configuration profiles, ambient API
