@@ -289,7 +289,7 @@ def test_role_bootstrap_is_safe_before_migrating_an_existing_0004_database(
 
     with alembic_runner.engine.begin() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0009_secure_tunnel_binding"
+            "0010_ingress_provider_heads"
         )
         assert connection.execute(
             text(
@@ -597,6 +597,12 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
             "SELECT",
             "INSERT,UPDATE,DELETE,TRUNCATE",
         ),
+        (
+            "kivra_memory_ingress",
+            "ingress_provider_heads",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
         ("kivra_memory_ingress", "memory_events", "", "SELECT,INSERT,UPDATE,DELETE,TRUNCATE"),
         (
             "kivra_memory_ingress",
@@ -623,6 +629,12 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
         (
             "kivra_memory_exporter",
             "ingress_provider_violations",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_exporter",
+            "ingress_provider_heads",
             "SELECT",
             "INSERT,UPDATE,DELETE,TRUNCATE",
         ),
@@ -807,6 +819,7 @@ def test_credential_admin_role_has_exact_secret_safe_identity_privileges(
         "transport_binding_id",
         "kind",
         "public_hint",
+        "secret_hash_key_id",
         "created_at",
         "expires_at",
         "last_used_at",
@@ -861,6 +874,131 @@ def test_credential_admin_role_has_exact_secret_safe_identity_privileges(
                 "'public.client_credentials', 'secret_hash', 'SELECT')"
             )
         ).scalar_one()
+        identity_privileges = {
+            "actors": {
+                "SELECT": {
+                    "tenant_id",
+                    "actor_id",
+                    "handle",
+                    "display_name",
+                    "kind",
+                    "metadata",
+                    "revoked_at",
+                },
+                "INSERT": {
+                    "actor_id",
+                    "tenant_id",
+                    "handle",
+                    "display_name",
+                    "kind",
+                    "metadata",
+                    "created_at",
+                },
+            },
+            "clients": {
+                "SELECT": {
+                    "tenant_id",
+                    "client_id",
+                    "public_id",
+                    "display_name",
+                    "kind",
+                    "transport_kind",
+                    "scopes",
+                    "capability_profile",
+                    "revoked_at",
+                },
+                "INSERT": {
+                    "client_id",
+                    "tenant_id",
+                    "public_id",
+                    "display_name",
+                    "kind",
+                    "transport_kind",
+                    "scopes",
+                    "capability_profile",
+                    "created_at",
+                },
+            },
+            "transport_bindings": {
+                "SELECT": {
+                    "transport_binding_id",
+                    "tenant_id",
+                    "actor_id",
+                    "client_id",
+                    "transport_kind",
+                    "disclosure_boundary",
+                    "installation_id",
+                    "authorized_operations",
+                    "valid_until",
+                },
+                "INSERT": {
+                    "transport_binding_id",
+                    "tenant_id",
+                    "actor_id",
+                    "client_id",
+                    "transport_kind",
+                    "disclosure_boundary",
+                    "installation_id",
+                    "authorized_operations",
+                    "created_at",
+                    "valid_until",
+                },
+            },
+            "transport_installations": {
+                "SELECT": {
+                    "installation_id",
+                    "tenant_id",
+                    "route_key",
+                    "capability_profile",
+                    "revoked_at",
+                },
+                "INSERT": {
+                    "installation_id",
+                    "tenant_id",
+                    "route_key",
+                    "capability_profile",
+                    "enrolled_at",
+                    "health_state",
+                },
+            },
+        }
+        for table_name, privileges in identity_privileges.items():
+            identity_columns = tuple(
+                connection.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = :table_name"
+                    ),
+                    {"table_name": table_name},
+                ).scalars()
+            )
+            for column in identity_columns:
+                for privilege in ("SELECT", "INSERT", "UPDATE"):
+                    expected = column in privileges.get(privilege, set())
+                    assert (
+                        bool(
+                            connection.execute(
+                                text(
+                                    "SELECT has_column_privilege("
+                                    "'kivra_memory_credential_admin', :table, "
+                                    ":column, :privilege)"
+                                ),
+                                {
+                                    "table": f"public.{table_name}",
+                                    "column": column,
+                                    "privilege": privilege,
+                                },
+                            ).scalar_one()
+                        )
+                        is expected
+                    )
+            assert not connection.execute(
+                text(
+                    "SELECT has_table_privilege('kivra_memory_credential_admin', "
+                    ":table, 'DELETE,TRUNCATE')"
+                ),
+                {"table": f"public.{table_name}"},
+            ).scalar_one()
         for table_name in ("memory_events", "memories", "memory_evidence"):
             assert not connection.execute(
                 text(
@@ -915,6 +1053,75 @@ async def test_credential_admin_role_executes_create_list_rotate_and_revoke(
         )
         listed = await service.list_metadata(tenant_id=tenant_id)
         assert [row.credential_id for row in listed] == [issued.metadata.credential_id]
+
+        authorization: str | None = None
+
+        def load_or_create(proposed: str) -> str:
+            nonlocal authorization
+            authorization = authorization or proposed
+            return authorization
+
+        secure_installation_id = new_uuid7()
+        secure = await service.create_or_load_secure_tunnel(
+            tenant_id=tenant_id,
+            actor_id=new_uuid7(),
+            installation_id=secure_installation_id,
+            tunnel_label="role-chatgpt",
+            scopes=("memory.status.ingress", "memory.status.transport"),
+            capability_profile=ClientCapabilityProfile(
+                contract_version="scalevault-client-capability-v1",
+                read=None,
+            ),
+            authorization_artifact=load_or_create,
+        )
+        retry = await service.create_or_load_secure_tunnel(
+            tenant_id=tenant_id,
+            actor_id=secure.actor_id,
+            installation_id=secure_installation_id,
+            tunnel_label="role-chatgpt",
+            scopes=secure.scopes,
+            capability_profile=secure.capability_profile,
+            authorization_artifact=load_or_create,
+        )
+        assert retry.credential_id == secure.credential_id
+        replacement_authorization: str | None = None
+
+        def load_or_create_replacement(proposed: str) -> str:
+            nonlocal replacement_authorization
+            replacement_authorization = replacement_authorization or proposed
+            return replacement_authorization
+
+        secure_rotated = await CredentialAdminService(
+            repository,
+            token_pepper=bytes(range(32)),
+            secret_hash_key_id="role-test-v1",
+            now=lambda: now + timedelta(minutes=1),
+        ).rotate_secure_tunnel(
+            tenant_id=tenant_id,
+            credential_id=secure.credential_id,
+            authorization_artifact=load_or_create_replacement,
+        )
+        secure_rotation_retry = await CredentialAdminService(
+            repository,
+            token_pepper=bytes(range(32)),
+            secret_hash_key_id="role-test-v1",
+            now=lambda: now + timedelta(minutes=2),
+        ).rotate_secure_tunnel(
+            tenant_id=tenant_id,
+            credential_id=secure.credential_id,
+            authorization_artifact=load_or_create_replacement,
+        )
+        assert secure_rotation_retry.credential_id == secure_rotated.credential_id
+        secure_revoked = await CredentialAdminService(
+            repository,
+            token_pepper=bytes(range(32)),
+            secret_hash_key_id="role-test-v1",
+            now=lambda: now + timedelta(minutes=3),
+        ).revoke(
+            tenant_id=tenant_id,
+            credential_id=secure_rotated.credential_id,
+        )
+        assert secure_revoked.revoked_at == now + timedelta(minutes=3)
 
         rotated = await CredentialAdminService(
             repository,

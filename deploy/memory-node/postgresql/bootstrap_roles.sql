@@ -201,9 +201,9 @@ BEGIN
             'kivra_memory_genesis_importer';
     END IF;
 
-    -- Credential administration owns only distinguishable direct-private
-    -- identity issuance and bearer lifecycle audit. It cannot read verifier
-    -- material back, delete identity, or reach memory/event payload tables.
+    -- Credential administration owns only distinguishable direct-private and
+    -- secure-tunnel identity issuance plus bearer lifecycle audit. It cannot
+    -- read verifier material back, delete identity, or reach memory/event payloads.
     IF pg_catalog.to_regclass('public.alembic_compatibility') IS NOT NULL THEN
         GRANT SELECT ON TABLE public.alembic_compatibility
             TO kivra_memory_credential_admin;
@@ -218,7 +218,11 @@ BEGIN
         GRANT SELECT (
             tenant_id,
             actor_id,
-            metadata
+            handle,
+            display_name,
+            kind,
+            metadata,
+            revoked_at
         ) ON TABLE public.actors TO kivra_memory_credential_admin;
         GRANT INSERT (
             actor_id,
@@ -234,8 +238,13 @@ BEGIN
         GRANT SELECT (
             tenant_id,
             client_id,
+            public_id,
+            display_name,
+            kind,
+            transport_kind,
             scopes,
-            capability_profile
+            capability_profile,
+            revoked_at
         ) ON TABLE public.clients TO kivra_memory_credential_admin;
         GRANT INSERT (
             client_id,
@@ -250,6 +259,17 @@ BEGIN
         ) ON TABLE public.clients TO kivra_memory_credential_admin;
     END IF;
     IF pg_catalog.to_regclass('public.transport_bindings') IS NOT NULL THEN
+        GRANT SELECT (
+            transport_binding_id,
+            tenant_id,
+            actor_id,
+            client_id,
+            transport_kind,
+            disclosure_boundary,
+            installation_id,
+            authorized_operations,
+            valid_until
+        ) ON TABLE public.transport_bindings TO kivra_memory_credential_admin;
         GRANT INSERT (
             transport_binding_id,
             tenant_id,
@@ -262,6 +282,23 @@ BEGIN
             created_at,
             valid_until
         ) ON TABLE public.transport_bindings TO kivra_memory_credential_admin;
+    END IF;
+    IF pg_catalog.to_regclass('public.transport_installations') IS NOT NULL THEN
+        GRANT SELECT (
+            installation_id,
+            tenant_id,
+            route_key,
+            capability_profile,
+            revoked_at
+        ) ON TABLE public.transport_installations TO kivra_memory_credential_admin;
+        GRANT INSERT (
+            installation_id,
+            tenant_id,
+            route_key,
+            capability_profile,
+            enrolled_at,
+            health_state
+        ) ON TABLE public.transport_installations TO kivra_memory_credential_admin;
     END IF;
     -- These attribution and audit columns arrive in migration 0008. The
     -- bootstrap must remain safe at older revisions so it can establish the
@@ -287,6 +324,7 @@ BEGIN
             transport_binding_id,
             kind,
             public_hint,
+            secret_hash_key_id,
             created_at,
             expires_at,
             last_used_at,
@@ -638,7 +676,7 @@ BEGIN
     FOREACH table_name IN ARRAY ARRAY[
         'alembic_compatibility', 'tenants', 'actors', 'clients',
         'transport_installations', 'transport_bindings', 'branches', 'sessions',
-        'ingress_items', 'ingress_provider_violations'
+        'ingress_items', 'ingress_provider_violations', 'ingress_provider_heads'
     ]
     LOOP
         IF pg_catalog.to_regclass(format('public.%I', table_name)) IS NOT NULL THEN
@@ -684,6 +722,27 @@ BEGIN
             observed_provenance_sha256
         ) ON TABLE public.ingress_provider_violations TO kivra_memory_ingress;
     END IF;
+    IF pg_catalog.to_regclass('public.ingress_provider_heads') IS NOT NULL THEN
+        GRANT INSERT (
+            tenant_id,
+            provider,
+            repository_external_id,
+            branch_name,
+            installation_id,
+            transport_binding_id,
+            bootstrap_commit_id,
+            bootstrap_tree_id,
+            last_verified_commit_id,
+            last_verified_tree_id,
+            etag
+        ) ON TABLE public.ingress_provider_heads TO kivra_memory_ingress;
+        GRANT UPDATE (
+            last_verified_commit_id,
+            last_verified_tree_id,
+            etag,
+            verified_at
+        ) ON TABLE public.ingress_provider_heads TO kivra_memory_ingress;
+    END IF;
 
     -- Export is read-only except for its append-only checkpoint ledger.
     FOREACH table_name IN ARRAY ARRAY[
@@ -693,7 +752,8 @@ BEGIN
         'genesis_import_runs', 'genesis_import_sources',
         'genesis_import_exclusions', 'genesis_import_records',
         'genesis_import_supersessions', 'genesis_import_run_results',
-        'ingress_items', 'ingress_provider_violations', 'memory_events',
+        'ingress_items', 'ingress_provider_violations', 'ingress_provider_heads',
+        'memory_events',
         'command_receipts', 'memories',
         'memory_evidence', 'memory_links', 'memory_conflicts',
         'memory_conflict_members', 'selection_decisions', 'memory_content_keys',
