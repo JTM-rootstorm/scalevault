@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Literal, Never
 from uuid import UUID
@@ -331,8 +332,14 @@ def _event(
 class MutationEngine:
     """Execute all v1 direct and synthetic-ingress commands through one seam."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
         self._session_factory = session_factory
+        self._clock = clock
 
     async def execute(
         self, principal: CommandPrincipal, command: DirectMutationCommand
@@ -341,7 +348,7 @@ class MutationEngine:
         receipt_id = new_uuid7()
         aggregate_id = new_uuid7()
         correlation_id = new_uuid7()
-        created_at = datetime.now(UTC)
+        created_at = self._clock()
         # Conflict commands can revise 32 memories. Allocate every possible
         # side-effect identity before the retry loop so retries cannot change
         # a logical job's UUID.
@@ -1060,6 +1067,7 @@ class MutationEngine:
                 aggregate_type=aggregate_type,
                 aggregate_id=aggregate_id,
                 references=references,
+                available_at=event.created_at,
                 job_uuid=job_id,
             )
 

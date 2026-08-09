@@ -313,11 +313,12 @@ async def test_retry_callback_reuses_attempt_identity_and_timestamp(
     monkeypatch.setattr(MutationEngine, "_attempt", fake_attempt)
     monkeypatch.setattr(mutations_module, "run_serializable_transaction", fake_transaction)
 
-    response = await MutationEngine(MagicMock()).execute(principal(), command())
+    response = await MutationEngine(MagicMock(), clock=lambda: NOW).execute(principal(), command())
 
     assert response == result()
     assert len(identities) == 2
     assert identities[0] == identities[1]
+    assert identities[0][4] == NOW
     job_ids = cast(tuple[UUID, ...], identities[0][-1])
     assert len(job_ids) == 34
     assert len(set(job_ids)) == 34
@@ -327,6 +328,7 @@ def _job_event() -> MemoryEvent:
     event = MagicMock(spec=MemoryEvent)
     event.event_id = uid(80)
     event.sequence = 17
+    event.created_at = NOW
     return cast(MemoryEvent, event)
 
 
@@ -380,6 +382,28 @@ def test_create_and_revision_duplicate_scheduling_is_content_sensitive() -> None
         "embed_memory",
         "export_git_batch",
     ]
+
+
+async def test_mutation_outbox_jobs_use_the_event_clock_for_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enqueue = AsyncMock()
+    monkeypatch.setattr(mutations_module, "enqueue_outbox_job", enqueue)
+    event = _job_event()
+    revised = memory().model_copy(update={"revision": 4})
+
+    await MutationEngine(MagicMock(), clock=lambda: NOW)._enqueue_jobs(
+        MagicMock(),
+        principal=principal(),
+        command=command(),
+        event=event,
+        payload=MemoryTransitionPayload(previous_revision=3, memory=revised),
+        result=result(),
+        job_ids=(uid(81), uid(82), uid(83)),
+    )
+
+    assert enqueue.await_count == 3
+    assert all(call.kwargs["available_at"] == NOW for call in enqueue.await_args_list)
 
 
 @pytest.mark.parametrize("terminal_type", [RetireCommand, ForgetCommand])

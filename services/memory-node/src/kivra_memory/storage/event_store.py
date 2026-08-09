@@ -13,8 +13,10 @@ commits nor rolls it back.
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Never
 
 from pydantic import ValidationError
@@ -23,13 +25,20 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.domain.constraints import MemoryConstraintContext, validate_memory_constraints
-from kivra_memory.domain.enums import AuthorityClass, EventOperation, TransportKind
+from kivra_memory.domain.enums import (
+    AuthorityClass,
+    EventOperation,
+    MemoryStatus,
+    MemoryVisibility,
+    TransportKind,
+)
 from kivra_memory.domain.errors import DomainConstraintError, DomainError
 from kivra_memory.domain.events import (
     ConflictOpenedPayload,
     ConflictResolvedPayload,
     EventContractError,
     MemoryCreatedPayload,
+    MemoryCreatedPayloadV2,
     MemoryEvent,
     MemoryState,
     MemoryStateV3,
@@ -64,6 +73,12 @@ class EventStoreError(DomainError):
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(code={self.code!r})"
+
+
+class LegacyGenesisPlaintextAuthorization(Enum):
+    """Explicit non-persisted capability for the frozen ADR0014 import only."""
+
+    ADR0014_FIRST_IMPORT = "adr0014_first_import"
 
 
 def _reject(code: str, message: str) -> Never:
@@ -113,7 +128,51 @@ def _after_images(event: MemoryEvent) -> tuple[MemoryState, ...]:
     return ()
 
 
-def _validate_after_image_constraints(binding: TransportBinding, event: MemoryEvent) -> None:
+def _is_authorized_legacy_genesis_plaintext(
+    binding: TransportBinding,
+    event: MemoryEvent,
+    memory: MemoryState,
+) -> bool:
+    """Recognize only the frozen ADR0014 v2 imported-candidate shape."""
+
+    payload = event.typed_payload()
+    return bool(
+        binding.transport_kind == TransportKind.INTERNAL_SERVICE.value
+        and event.schema_version == 2
+        and event.payload_version == 2
+        and event.policy_version == 2
+        and event.normalization_version == 1
+        and event.operation is EventOperation.OBSERVED
+        and event.session_id is None
+        and event.ingress_id is None
+        and re.fullmatch(r"genesis-import-v1:[0-9a-f]{64}", event.idempotency_key)
+        and isinstance(payload, MemoryCreatedPayloadV2)
+        and payload.memory == memory
+        and memory.status is MemoryStatus.CANDIDATE
+        and memory.visibility is MemoryVisibility.PRIVATE_ROOT
+        and memory.authority_class is AuthorityClass.IMPORTED_LEGACY_MEMORY
+        and memory.content_protection == "plaintext"
+        and bool(payload.evidence)
+        and all(
+            item.source_type == "import_manifest"
+            and item.trust_classification == "trusted"
+            and item.excerpt is None
+            and item.content_sha256 is None
+            and set(item.source_reference) == {"evidence_key"}
+            and isinstance(item.source_reference["evidence_key"], str)
+            and item.source_reference["evidence_key"].startswith("import-manifest:")
+            and item.metadata == {}
+            for item in payload.evidence
+        )
+    )
+
+
+def _validate_after_image_constraints(
+    binding: TransportBinding,
+    event: MemoryEvent,
+    *,
+    legacy_genesis_plaintext_authorization: LegacyGenesisPlaintextAuthorization | None = None,
+) -> None:
     try:
         transport_kind = TransportKind(binding.transport_kind)
     except ValueError:
@@ -149,11 +208,24 @@ def _validate_after_image_constraints(binding: TransportBinding, event: MemoryEv
             raise EventStoreError(
                 error.code, "memory after-image violates accepted constraints"
             ) from None
-        if memory.sensitivity == 4 and not isinstance(memory, MemoryStateV3):
+        if (
+            memory.sensitivity == 4
+            and not isinstance(memory, MemoryStateV3)
+            and not (
+                legacy_genesis_plaintext_authorization
+                is LegacyGenesisPlaintextAuthorization.ADR0014_FIRST_IMPORT
+                and _is_authorized_legacy_genesis_plaintext(binding, event, memory)
+            )
+        ):
             _reject("sealed_content_required", "sensitivity-four writes require sealed content")
 
 
-def _validate_transport(binding: TransportBinding, event: MemoryEvent) -> None:
+def _validate_transport(
+    binding: TransportBinding,
+    event: MemoryEvent,
+    *,
+    legacy_genesis_plaintext_authorization: LegacyGenesisPlaintextAuthorization | None = None,
+) -> None:
     if not _operation_is_authorized(binding, event.operation):
         _reject("operation_not_authorized", "transport binding does not authorize the operation")
 
@@ -167,7 +239,11 @@ def _validate_transport(binding: TransportBinding, event: MemoryEvent) -> None:
     elif event.ingress_id is not None:
         _reject("ingress_forbidden", "non-GitHub event cannot contain ingress provenance")
 
-    _validate_after_image_constraints(binding, event)
+    _validate_after_image_constraints(
+        binding,
+        event,
+        legacy_genesis_plaintext_authorization=legacy_genesis_plaintext_authorization,
+    )
 
 
 def _reject_ingress() -> Never:
@@ -256,7 +332,12 @@ def _event_row(event: MemoryEvent) -> MemoryEventRow:
     )
 
 
-async def _append_memory_event(session: AsyncSession, builder: EventBuilder) -> MemoryEvent:
+async def _append_memory_event(
+    session: AsyncSession,
+    builder: EventBuilder,
+    *,
+    legacy_genesis_plaintext_authorization: LegacyGenesisPlaintextAuthorization | None = None,
+) -> MemoryEvent:
     """Perform event insertion inside the caller-owned transaction."""
 
     counter_result = await session.execute(
@@ -331,7 +412,11 @@ async def _append_memory_event(session: AsyncSession, builder: EventBuilder) -> 
     elif binding.transport_kind == TransportKind.RELAY.value:
         _reject("binding_installation_unavailable", "transport binding is unavailable")
 
-    _validate_transport(binding, event)
+    _validate_transport(
+        binding,
+        event,
+        legacy_genesis_plaintext_authorization=legacy_genesis_plaintext_authorization,
+    )
     ingress = await _lock_github_ingress(session, binding, event)
 
     row = _event_row(event)
@@ -347,7 +432,12 @@ async def _append_memory_event(session: AsyncSession, builder: EventBuilder) -> 
     return event
 
 
-async def append_memory_event(session: AsyncSession, builder: EventBuilder) -> MemoryEvent:
+async def append_memory_event(
+    session: AsyncSession,
+    builder: EventBuilder,
+    *,
+    legacy_genesis_plaintext_authorization: LegacyGenesisPlaintextAuthorization | None = None,
+) -> MemoryEvent:
     """Allocate, authorize, validate, and stage one immutable event atomically.
 
     The singleton counter is locked before calling ``builder``. The counter is
@@ -357,7 +447,11 @@ async def append_memory_event(session: AsyncSession, builder: EventBuilder) -> M
     """
 
     try:
-        return await _append_memory_event(session, builder)
+        return await _append_memory_event(
+            session,
+            builder,
+            legacy_genesis_plaintext_authorization=legacy_genesis_plaintext_authorization,
+        )
     except EventStoreError:
         raise
     except SQLAlchemyError as error:

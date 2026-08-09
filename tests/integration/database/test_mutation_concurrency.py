@@ -220,6 +220,8 @@ async def _seeded_engine(
     *,
     project_subject_id: UUID | None = None,
     ingress: IngressItem | None = None,
+    ingress_idempotency_key: str | None = None,
+    ingress_payload_sha256: bytes | None = None,
 ) -> AsyncIterator[tuple[Database, MutationEngine]]:
     database = Database(database_url)
     tenant_id = _seed_identifier("tenants", "tenant_id")
@@ -247,8 +249,12 @@ async def _seeded_engine(
                     )
                 )
             if ingress is not None:
+                if ingress_idempotency_key is None or ingress_payload_sha256 is None:
+                    raise ValueError("ingress validation semantics are required")
                 session.add(ingress)
                 await session.flush()
+                ingress.declared_idempotency_key = ingress_idempotency_key
+                ingress.payload_sha256 = ingress_payload_sha256
                 ingress.state = "validated"
                 ingress.validated_at = _NOW
             await session.flush()
@@ -487,8 +493,8 @@ async def test_direct_and_validated_ingress_share_engine_and_commit_ingress_atom
         external_object_id="synthetic-object",
         commit_id="synthetic-commit",
         blob_id="synthetic-blob",
-        declared_idempotency_key=ingress_key,
-        payload_sha256=bytes(32),
+        declared_idempotency_key=None,
+        payload_sha256=None,
         state="discovered",
         discovered_at=_NOW - timedelta(minutes=1),
         validated_at=None,
@@ -497,6 +503,8 @@ async def test_direct_and_validated_ingress_share_engine_and_commit_ingress_atom
         postgresql_server.database_url,
         project_subject_id=project_subject_id,
         ingress=ingress,
+        ingress_idempotency_key=ingress_key,
+        ingress_payload_sha256=bytes(32),
     ) as (database, _legacy_engine):
         factory = async_sessionmaker(database.engine, expire_on_commit=False)
         engine = SelectionEngine(factory, _project_context)

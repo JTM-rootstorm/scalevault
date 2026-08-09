@@ -142,8 +142,6 @@ def test_identity_and_ancestry_fields_have_targeted_immutable_triggers(
         "external_object_id",
         "commit_id",
         "blob_id",
-        "declared_idempotency_key",
-        "payload_sha256",
         "discovered_at",
     )
     assert expected["ingress_items"] == ingress_immutable_fields

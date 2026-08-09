@@ -88,6 +88,22 @@ upgraded in this milestone. GitHub ingress is sensitivity zero only and can
 never submit or request a sealed envelope because its plaintext has already
 crossed the GitHub disclosure boundary.
 
+The sole compatibility exception is the frozen Genesis first-import contract
+accepted by ADR 0014. That already-approved import retains its v2 plaintext
+candidate representation, sensitivity-four classification, command identity,
+and imported/unreconciled posture; converting it to v3 would change frozen
+idempotency and would require sealed-candidate lifecycle that this ADR
+explicitly does not define. The exception requires the exact dedicated Genesis
+scope and transaction participant, the pinned Genesis resolver and
+`imported_legacy` basis, an internal-service binding, a v2 `observed` candidate
+with private-root visibility and imported-legacy authority, a Genesis v1
+idempotency identity, and trusted import-manifest evidence. Both the selection
+boundary and event store verify their respective facts. It does not authorize
+ordinary sensitivity-four plaintext creation, mutation-v1, GitHub, relay, a
+different import, an active memory, or any later transition. This retained
+legacy plaintext is compatibility debt and requires a later reviewed migration
+to obtain sealed-content confidentiality.
+
 Milestone 6 accepts sealed creation only when policy selects `active`. Sealed
 candidate creation, promotion, expiry, ordinary revision, conflict mutation,
 retirement, and visibility change fail closed until a later event contract

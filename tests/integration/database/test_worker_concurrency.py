@@ -85,6 +85,7 @@ async def test_worker_claims_are_disjoint_fenced_and_retry_bounded(
                     aggregate_type="memory",
                     aggregate_id=memory_id,
                     references={"memory_id": memory_id, "memory_version": ordinal + 1},
+                    available_at=_NOW,
                 )
 
         batches = await asyncio.gather(
@@ -170,6 +171,7 @@ async def test_worker_claims_are_disjoint_fenced_and_retry_bounded(
                 aggregate_id=retry_memory_id,
                 references={"memory_id": retry_memory_id, "memory_version": 1},
                 max_attempts=2,
+                available_at=_NOW,
             )
 
         first_attempt = (

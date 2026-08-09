@@ -95,11 +95,24 @@ class GitHubIngressProcessor(Protocol):
 class GitHubIngressWorker:
     """Process one immutable snapshot batch with bounded fan-out."""
 
-    def __init__(self, processor: GitHubIngressProcessor, *, concurrency: int = 8) -> None:
+    def __init__(
+        self,
+        processor: GitHubIngressProcessor,
+        *,
+        concurrency: int = 8,
+        max_process_attempts: int = 5,
+        retry_delay_seconds: float = 0.01,
+    ) -> None:
         if not 1 <= concurrency <= 50:
             raise ValueError("concurrency must be between one and fifty")
+        if not 1 <= max_process_attempts <= 10:
+            raise ValueError("max_process_attempts must be between one and ten")
+        if retry_delay_seconds < 0 or retry_delay_seconds > 1:
+            raise ValueError("retry_delay_seconds must be between zero and one")
         self._processor = processor
         self._concurrency = concurrency
+        self._max_process_attempts = max_process_attempts
+        self._retry_delay_seconds = retry_delay_seconds
 
     async def process_batch(
         self, items: tuple[GitHubIngressWorkItem, ...]
@@ -120,9 +133,20 @@ class GitHubIngressWorker:
             async with semaphore:
                 results[index] = await self._processor.process(item.discovery, item.raw_bytes)
 
-        async with asyncio.TaskGroup() as tasks:
-            for index, item in enumerate(items):
-                tasks.create_task(process_one(index, item))
+        pending = tuple(range(len(items)))
+        for attempt in range(1, self._max_process_attempts + 1):
+            async with asyncio.TaskGroup() as tasks:
+                for index in pending:
+                    tasks.create_task(process_one(index, items[index]))
+            retry_indexes: list[int] = []
+            for index in pending:
+                result = results[index]
+                if result is not None and result.disposition == "retry":
+                    retry_indexes.append(index)
+            pending = tuple(retry_indexes)
+            if not pending or attempt == self._max_process_attempts:
+                break
+            await asyncio.sleep(self._retry_delay_seconds * (2 ** (attempt - 1)))
         if any(result is None for result in results):  # pragma: no cover - TaskGroup invariant
             raise RuntimeError("ingress batch did not produce a result")
         return tuple(result for result in results if result is not None)

@@ -438,14 +438,12 @@ def _seed_github_ingress_graph(runner: AlembicRunner) -> None:
                 "INSERT INTO ingress_items "
                 "(ingress_id, tenant_id, transport_binding_id, installation_id, actor_id, "
                 "client_id, provider, repository_external_id, branch_name, immutable_path, "
-                "external_object_id, commit_id, blob_id, declared_idempotency_key, "
-                "payload_sha256) VALUES "
+                "external_object_id, commit_id, blob_id) VALUES "
                 "(:ingress, :tenant, :binding, :installation, :actor, :client, 'github', "
-                "'repo-1', 'main', 'ingress/one.json', 'object-1', 'commit-1', 'blob-1', "
-                "'ingress:one', :digest), "
+                "'repo-1', 'main', 'ingress/one.json', 'object-1', 'commit-1', 'blob-1'), "
                 "(:mismatched_ingress, :tenant, :binding, :alternate_installation, :actor, "
                 ":client, 'github', 'repo-1', 'main', 'ingress/two.json', 'object-2', "
-                "'commit-2', 'blob-2', 'ingress:two', :digest)"
+                "'commit-2', 'blob-2')"
             ),
             {
                 "ingress": INGRESS,
@@ -456,18 +454,24 @@ def _seed_github_ingress_graph(runner: AlembicRunner) -> None:
                 "alternate_installation": ALTERNATE_INSTALLATION,
                 "actor": ACTOR_A,
                 "client": GITHUB_CLIENT,
-                "digest": bytes(32),
             },
         )
 
 
 def _validate_ingress(connection: Connection, ingress_id: UUID) -> None:
+    idempotency_key = "ingress:one" if ingress_id == INGRESS else "ingress:two"
     connection.execute(
         text(
-            "UPDATE ingress_items SET state = 'validated', validated_at = CURRENT_TIMESTAMP "
+            "UPDATE ingress_items SET state = 'validated', "
+            "declared_idempotency_key = :idempotency_key, payload_sha256 = :digest, "
+            "validated_at = CURRENT_TIMESTAMP "
             "WHERE ingress_id = :ingress"
         ),
-        {"ingress": ingress_id},
+        {
+            "ingress": ingress_id,
+            "idempotency_key": idempotency_key,
+            "digest": bytes(32),
+        },
     )
 
 

@@ -73,7 +73,11 @@ from kivra_memory.security.sealed_content import (
     SealedContentError,
     seal_with_provider,
 )
-from kivra_memory.storage.event_store import EventStoreError, append_memory_event
+from kivra_memory.storage.event_store import (
+    EventStoreError,
+    LegacyGenesisPlaintextAuthorization,
+    append_memory_event,
+)
 from kivra_memory.storage.live_projection import (
     load_projection_state_for_update,
     stage_live_projection,
@@ -641,7 +645,7 @@ class SelectionEngine:
             sealed_request = getattr(command, "sealed_content", None)
             if sealed_request is not None and not isinstance(sealed_request, SealedContentRequest):
                 raise SelectionExecutionError("invalid_input")
-            if command.proposal.sensitivity == 4 and sealed_request is None:
+            if command.proposal.sensitivity == 4 and sealed_request is None and not genesis_scope:
                 raise SelectionExecutionError("invalid_input")
             if sealed_request is not None and principal.ingress_id is not None:
                 raise SelectionExecutionError("forbidden")
@@ -683,6 +687,20 @@ class SelectionEngine:
                 or command.proposal.selection_basis is not SelectionBasis.IMPORTED_LEGACY
             ):
                 raise SelectionExecutionError("forbidden")
+            legacy_genesis_plaintext = bool(
+                genesis_scope
+                and sealed_request is None
+                and command.proposal.sensitivity == 4
+                and resolved.source_kind == "genesis_import"
+                and command.proposal.selection_basis is SelectionBasis.IMPORTED_LEGACY
+                and transaction_participant is not None
+            )
+            if (
+                command.proposal.sensitivity == 4
+                and sealed_request is None
+                and not (legacy_genesis_plaintext)
+            ):
+                raise SelectionExecutionError("invalid_input")
             request = _selection_request(command.proposal, resolved)
             decision = evaluate_selection(request)
             _validate_sealed_policy_outcome(sealed_request, decision)
@@ -725,6 +743,7 @@ class SelectionEngine:
                     input_digest=input_digest,
                     identifiers=identifiers,
                     transaction_participant=transaction_participant,
+                    legacy_genesis_plaintext=legacy_genesis_plaintext,
                 )
 
             return await run_serializable_transaction(
@@ -862,6 +881,7 @@ class SelectionEngine:
         input_digest: bytes,
         identifiers: _NominationIdentifiers,
         transaction_participant: SelectionTransactionParticipant | None,
+        legacy_genesis_plaintext: bool,
     ) -> SelectionResult:
         # A committed receipt is terminal even if the mutable persona, lineage,
         # branch, subject, or resolver state later changes. Serialize this check
@@ -882,6 +902,15 @@ class SelectionEngine:
             return _replay_from_receipt(receipt, command_digest=command_digest)
 
         genesis_import = principal.scopes == frozenset({"memory.write.genesis_import"})
+        if legacy_genesis_plaintext and (
+            not genesis_import
+            or transaction_participant is None
+            or resolved.source_kind != "genesis_import"
+            or command.proposal.selection_basis is not SelectionBasis.IMPORTED_LEGACY
+            or command.proposal.sensitivity != 4
+            or getattr(command, "sealed_content", None) is not None
+        ):
+            raise SelectionExecutionError("forbidden")
         if genesis_import:
             binding_kind = await session.scalar(
                 select(TransportBinding.transport_kind).where(
@@ -1383,6 +1412,11 @@ class SelectionEngine:
                         expected_revision=None,
                         policy_input_digest=input_digest,
                     ).model_copy(update={"sequence": sequence}),
+                    legacy_genesis_plaintext_authorization=(
+                        LegacyGenesisPlaintextAuthorization.ADR0014_FIRST_IMPORT
+                        if legacy_genesis_plaintext
+                        else None
+                    ),
                 )
                 before = await load_projection_state_for_update(
                     session, event=event, branch=branch_row

@@ -231,6 +231,42 @@ async def test_worker_processes_fifty_distinct_objects_with_bounded_concurrency(
     assert 1 < processor.maximum <= 7
 
 
+class _RetryingProcessor:
+    def __init__(self) -> None:
+        self.attempts: dict[UUID, int] = {}
+
+    async def process(
+        self, discovery: GitHubIngressDiscovery, raw_bytes: bytes, /
+    ) -> GitHubIngressProcessResult:
+        assert raw_bytes == b"{}"
+        attempt = self.attempts.get(discovery.ingress_id, 0) + 1
+        self.attempts[discovery.ingress_id] = attempt
+        return GitHubIngressProcessResult(
+            ingress_id=discovery.ingress_id,
+            state=(IngressState.ACCEPTED if attempt == 3 else IngressState.VALIDATED),
+            disposition="terminal" if attempt == 3 else "retry",
+            code=None if attempt == 3 else "serialization_exhausted",
+        )
+
+
+async def test_worker_retries_only_explicit_retry_dispositions() -> None:
+    processor = _RetryingProcessor()
+    worker = GitHubIngressWorker(
+        processor,
+        concurrency=2,
+        max_process_attempts=3,
+        retry_delay_seconds=0,
+    )
+    items = tuple(
+        GitHubIngressWorkItem(discovery=_discovery(index), raw_bytes=b"{}") for index in (201, 202)
+    )
+
+    results = await worker.process_batch(items)
+
+    assert {result.state for result in results} == {IngressState.ACCEPTED}
+    assert set(processor.attempts.values()) == {3}
+
+
 async def test_worker_rejects_duplicate_provider_objects_before_processing() -> None:
     processor = _ConcurrentProcessor()
     worker = GitHubIngressWorker(processor)

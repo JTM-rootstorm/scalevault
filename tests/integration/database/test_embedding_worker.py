@@ -189,7 +189,7 @@ async def _seeded_engine(
                 )
             )
         factory = async_sessionmaker(database.engine, expire_on_commit=False)
-        yield database, MutationEngine(factory)
+        yield database, MutationEngine(factory, clock=lambda: _NOW)
     finally:
         await database.dispose()
 

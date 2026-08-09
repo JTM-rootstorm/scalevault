@@ -222,7 +222,10 @@ async def test_fifty_proposals_are_atomic_idempotent_and_reject_sensitive_transp
     try:
         results = await worker.process_batch(items)
         assert len(results) == _PROPOSAL_COUNT
-        assert {result.state for result in results} == {IngressState.ACCEPTED}
+        safe_outcomes = Counter(
+            (result.state.value, result.disposition, result.code) for result in results
+        )
+        assert {result.state for result in results} == {IngressState.ACCEPTED}, safe_outcomes
         assert {result.disposition for result in results} == {"terminal"}
 
         async with database.tenant_session(tenant_id) as session:

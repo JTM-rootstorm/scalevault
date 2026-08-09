@@ -274,7 +274,21 @@ async def test_all_non_create_operations_commit_atomic_projection_receipt_and_ou
             await session.execute(
                 update(Memory)
                 .where(Memory.memory_id == memory_ids[4])
-                .values(content_protection="envelope_encrypted", content_key_id=content_key_id)
+                .values(
+                    statement=None,
+                    reason_to_remember=None,
+                    interpretation_limits=[],
+                    normalized_fingerprint=None,
+                    metadata_={},
+                    content_protection="envelope_encrypted",
+                    content_key_id=content_key_id,
+                    sealed_envelope_version=1,
+                    sealed_algorithm="AES-256-GCM",
+                    sealed_nonce=b"\x01" * 12,
+                    sealed_ciphertext=b"\x02" * 17,
+                    sealed_aad_sha256=b"\x03" * 32,
+                    safe_summary="Synthetic sealed projection for hard-forget testing.",
+                )
             )
 
         hard_forgotten = _success(

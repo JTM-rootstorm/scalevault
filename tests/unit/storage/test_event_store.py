@@ -20,15 +20,22 @@ from kivra_memory.domain.enums import (
     TransportKind,
 )
 from kivra_memory.domain.events import (
+    EvidenceState,
     MemoryCreatedPayload,
+    MemoryCreatedPayloadV2,
     MemoryEvent,
     MemoryState,
+    MemoryStateV2,
     MemoryTransitionPayload,
     OperationPayload,
     event_hash_fields,
 )
 from kivra_memory.domain.identifiers import new_uuid7
-from kivra_memory.storage.event_store import EventStoreError, append_memory_event
+from kivra_memory.storage.event_store import (
+    EventStoreError,
+    LegacyGenesisPlaintextAuthorization,
+    append_memory_event,
+)
 from kivra_memory.storage.models.events import IngressItem, MemoryEventCounter
 from kivra_memory.storage.models.events import MemoryEvent as MemoryEventRow
 from kivra_memory.storage.models.identity import TransportBinding
@@ -159,6 +166,70 @@ def make_event(
     )
 
 
+def legacy_genesis_event(sequence: int) -> MemoryEvent:
+    memory = MemoryStateV2.model_validate(
+        {
+            **memory_state(sensitivity=4).model_dump(mode="python"),
+            "status": MemoryStatus.CANDIDATE,
+            "authority_class": AuthorityClass.IMPORTED_LEGACY_MEMORY,
+            "candidate_expires_at": NOW + timedelta(days=30),
+        }
+    )
+    evidence = EvidenceState(
+        evidence_id=uid(50),
+        tenant_id=memory.tenant_id,
+        lineage_id=memory.lineage_id,
+        branch_id=memory.branch_id,
+        memory_id=memory.memory_id,
+        source_type="import_manifest",
+        source_reference={"evidence_key": "import-manifest:" + "1" * 64},
+        trust_classification="trusted",
+        created_at=NOW,
+        metadata={},
+    )
+    payload = MemoryCreatedPayloadV2(memory=memory, evidence=(evidence,))
+    values, canonical, payload_hash, command_hash = event_hash_fields(
+        operation=EventOperation.OBSERVED,
+        payload=payload,
+        payload_version=2,
+        tenant_id=uid(1),
+        lineage_id=uid(2),
+        branch_id=uid(3),
+        actor_id=uid(4),
+        client_id=uid(5),
+        memory_id=memory.memory_id,
+        expected_revision=None,
+        causation_event_id=None,
+    )
+    return MemoryEvent(
+        schema_version=2,
+        payload_version=2,
+        sequence=sequence,
+        event_id=uid(100 + sequence),
+        tenant_id=uid(1),
+        lineage_id=uid(2),
+        branch_id=uid(3),
+        actor_id=uid(4),
+        client_id=uid(5),
+        transport_binding_id=uid(6),
+        session_id=None,
+        ingress_id=None,
+        operation=EventOperation.OBSERVED,
+        memory_id=memory.memory_id,
+        expected_revision=None,
+        causation_event_id=None,
+        correlation_id=uid(30),
+        idempotency_key="genesis-import-v1:" + "2" * 64,
+        policy_version=2,
+        normalization_version=1,
+        payload=values,
+        payload_canonical=canonical,
+        payload_sha256=payload_hash,
+        command_sha256=command_hash,
+        created_at=NOW,
+    )
+
+
 def binding(
     *,
     kind: TransportKind = TransportKind.DIRECT_PRIVATE,
@@ -171,7 +242,9 @@ def binding(
         actor_id=uid(4),
         client_id=uid(5),
         transport_kind=kind.value,
-        disclosure_boundary="private_node",
+        disclosure_boundary=(
+            "internal" if kind is TransportKind.INTERNAL_SERVICE else "private_node"
+        ),
         installation_id=(
             uid(7) if kind in {TransportKind.RELAY, TransportKind.GITHUB_INGRESS} else None
         ),
@@ -568,6 +641,77 @@ async def test_relay_rejects_sensitivity_four_after_image() -> None:
         await append_memory_event(session, lambda sequence: make_event(sequence, sensitivity=4))
 
     assert caught.value.code == "relay_sensitivity_forbidden"
+    assert counter.next_sequence == 1
+    raw.add.assert_not_called()
+
+
+async def test_normal_direct_write_rejects_plaintext_sensitivity_four() -> None:
+    counter = MemoryEventCounter(counter_id=1, next_sequence=1)
+    session, raw = fake_session(counter, binding())
+
+    with pytest.raises(EventStoreError) as caught:
+        await append_memory_event(session, lambda sequence: make_event(sequence, sensitivity=4))
+
+    assert caught.value.code == "sealed_content_required"
+    assert counter.next_sequence == 1
+    raw.add.assert_not_called()
+
+
+async def test_frozen_legacy_genesis_plaintext_requires_explicit_authorization() -> None:
+    counter = MemoryEventCounter(counter_id=1, next_sequence=1)
+    internal = binding(
+        kind=TransportKind.INTERNAL_SERVICE,
+        operations=(EventOperation.OBSERVED,),
+    )
+    session, raw = fake_session(counter, internal)
+
+    with pytest.raises(EventStoreError) as caught:
+        await append_memory_event(session, legacy_genesis_event)
+
+    assert caught.value.code == "sealed_content_required"
+    assert counter.next_sequence == 1
+    raw.add.assert_not_called()
+
+
+async def test_frozen_legacy_genesis_plaintext_accepts_only_exact_v2_candidate_shape() -> None:
+    counter = MemoryEventCounter(counter_id=1, next_sequence=1)
+    internal = binding(
+        kind=TransportKind.INTERNAL_SERVICE,
+        operations=(EventOperation.OBSERVED,),
+    )
+    session, raw = fake_session(counter, internal)
+
+    event = await append_memory_event(
+        session,
+        legacy_genesis_event,
+        legacy_genesis_plaintext_authorization=(
+            LegacyGenesisPlaintextAuthorization.ADR0014_FIRST_IMPORT
+        ),
+    )
+
+    assert event.schema_version == 2
+    payload = event.typed_payload()
+    assert isinstance(payload, MemoryCreatedPayloadV2)
+    assert payload.memory.sensitivity == 4
+    assert counter.next_sequence == 2
+    raw.add.assert_called_once()
+
+
+async def test_legacy_genesis_authorization_does_not_widen_normal_plaintext_write() -> None:
+    counter = MemoryEventCounter(counter_id=1, next_sequence=1)
+    internal = binding(kind=TransportKind.INTERNAL_SERVICE)
+    session, raw = fake_session(counter, internal)
+
+    with pytest.raises(EventStoreError) as caught:
+        await append_memory_event(
+            session,
+            lambda sequence: make_event(sequence, sensitivity=4),
+            legacy_genesis_plaintext_authorization=(
+                LegacyGenesisPlaintextAuthorization.ADR0014_FIRST_IMPORT
+            ),
+        )
+
+    assert caught.value.code == "sealed_content_required"
     assert counter.next_sequence == 1
     raw.add.assert_not_called()
 

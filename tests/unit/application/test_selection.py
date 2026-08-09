@@ -503,6 +503,19 @@ async def test_sealed_write_fails_closed_without_server_digest_binding() -> None
     assert caught.value.__cause__ is None
 
 
+async def test_normal_plaintext_sensitivity_four_nomination_fails_before_database() -> None:
+    command = _nomination_command(proposal=_proposal().model_copy(update={"sensitivity": 4}))
+    engine = SelectionEngine(AsyncMock(), AsyncMock())
+
+    with pytest.raises(SelectionExecutionError, match="invalid_input") as caught:
+        await engine.execute(
+            _principal(scopes=frozenset({"memory.write.nominate"})),
+            command,
+        )
+
+    assert caught.value.__cause__ is None
+
+
 @pytest.mark.parametrize("sealed_field", ["persona", "lineage", "branch"])
 def test_nomination_rejects_retired_or_sealed_identity(sealed_field: str) -> None:
     sealed_at = datetime.now(UTC)
