@@ -72,7 +72,6 @@ from tests.fixtures.database_seed import seed_model_layers, seed_rows
 
 _NOW = datetime(2026, 8, 9, 15, tzinfo=UTC)
 _AUTHENTICATED_AT = _NOW + timedelta(minutes=1)
-_REVOKED_AT = _NOW + timedelta(minutes=2)
 _UUID_TIMESTAMP_MS = 1_786_291_200_000
 _HASH_KEY_ID = "synthetic-m7-pepper-v1"
 _TOKEN_PEPPER = bytes(range(32))
@@ -790,7 +789,9 @@ async def test_caller_supplied_direct_evidence_is_ignored_for_server_attestation
                     select(MemoryEvidence).where(MemoryEvidence.memory_id == result.memory_id)
                 )
             ).all()
-            event = await session.get(MemoryEvent, result.event_id)
+            event = await session.scalar(
+                select(MemoryEvent).where(MemoryEvent.event_id == result.event_id)
+            )
             memory = await session.get(Memory, result.memory_id)
 
         assert receipt is not None
@@ -830,10 +831,14 @@ async def test_wrong_and_revoked_credentials_fail_closed_on_the_next_request(
     async with _seeded_codex_runtime(postgresql_server.database_url) as runtime:
         credential = runtime.credentials[0]
         metadata = credential.metadata
+        async with runtime.database.tenant_session(metadata.tenant_id) as session:
+            database_now = await session.scalar(select(func.current_timestamp()))
+        assert isinstance(database_now, datetime)
+        revoked_at = database_now + timedelta(seconds=1)
         authenticator = BearerAuthenticator(
             CredentialRepository(runtime.session_factory),
             hashers={_HASH_KEY_ID: BearerTokenHasher(_TOKEN_PEPPER)},
-            clock=lambda: _REVOKED_AT,
+            clock=lambda: revoked_at,
         )
         wrong = BearerTokenCodec.issue(
             metadata.tenant_id,
@@ -849,7 +854,7 @@ async def test_wrong_and_revoked_credentials_fail_closed_on_the_next_request(
             runtime.admin_repository,
             token_pepper=_TOKEN_PEPPER,
             secret_hash_key_id=_HASH_KEY_ID,
-            now=lambda: _REVOKED_AT,
+            now=lambda: revoked_at,
         )
         await revoke_service.revoke(
             tenant_id=metadata.tenant_id,
