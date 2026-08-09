@@ -7,12 +7,14 @@ from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
+import kivra_memory.storage.credentials as credential_storage
 import pytest
 from kivra_memory.admin.credentials import CredentialAdminError, SecureTunnelIssuance
 from kivra_memory.auth import ClientCapabilityProfile
 from kivra_memory.domain.enums import MemoryScope, MemoryVisibility, TransportKind
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.credentials import (
+    CredentialAdminStorageRepository,
     CredentialStorageError,
     _AdminCredentialState,
     _credential_lookup_statement,
@@ -36,6 +38,8 @@ from kivra_memory.storage.models import (
     TransportInstallation,
 )
 from sqlalchemy import Table
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tests.fixtures.database_seed import seed_rows
 
@@ -296,6 +300,42 @@ def test_dr_reissue_rejects_any_client_or_binding_credential_without_actor_scope
     assert " OR client_credentials.transport_binding_id =" in sql
     assert "client_credentials.actor_id" not in sql
     assert "client_credentials.revoked_at" not in sql
+
+
+@pytest.mark.asyncio
+async def test_dr_reissue_retries_one_unique_race_before_exact_reread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    class _UniqueViolation(Exception):
+        sqlstate = "23505"
+
+    async def run_transaction(
+        _factory: async_sessionmaker[AsyncSession],
+        _tenant_id: UUID,
+        _operation: object,
+    ) -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise IntegrityError("INSERT", {}, _UniqueViolation())
+        return "exact-retry"
+
+    async def operation(_session: AsyncSession) -> str:
+        return "unused"
+
+    monkeypatch.setattr(
+        credential_storage,
+        "run_serializable_transaction",
+        run_transaction,
+    )
+    repository = CredentialAdminStorageRepository(cast(async_sessionmaker[AsyncSession], object()))
+
+    result = await repository._admin_reissue_transaction(new_uuid7(), operation)
+
+    assert result == "exact-retry"
+    assert attempts == 2
 
 
 def test_direct_bearer_requires_exact_provisioning_marker() -> None:

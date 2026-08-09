@@ -11,7 +11,7 @@ from typing import Protocol, cast
 from uuid import UUID
 
 from sqlalchemy import Row, Select, Table, func, insert, or_, select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kivra_memory.admin.credentials import (
@@ -35,7 +35,7 @@ from kivra_memory.storage.models import (
     TransportBinding,
     TransportInstallation,
 )
-from kivra_memory.storage.transactions import run_serializable_transaction
+from kivra_memory.storage.transactions import database_sqlstate, run_serializable_transaction
 
 _VERIFIER_PATTERN = re.compile(r"hmac-sha256-v1:[A-Za-z0-9_-]{43}\Z")
 _KEY_ID_PATTERN = re.compile(r"[a-z][a-z0-9_.-]{0,63}\Z")
@@ -896,7 +896,32 @@ class CredentialAdminStorageRepository:
                 revoked_at=None,
             )
 
-        return await self._admin_transaction(tenant_id, operation)
+        return await self._admin_reissue_transaction(tenant_id, operation)
+
+    async def _admin_reissue_transaction[T](
+        self,
+        tenant_id: UUID,
+        operation: Callable[[AsyncSession], Awaitable[T]],
+    ) -> T:
+        """Retry one credential UUID collision so an exact concurrent retry can re-read."""
+
+        try:
+            for attempt in range(2):
+                try:
+                    return await run_serializable_transaction(
+                        self._session_factory,
+                        tenant_id,
+                        operation,
+                    )
+                except DBAPIError as error:
+                    if attempt == 0 and database_sqlstate(error) == "23505":
+                        continue
+                    raise
+        except CredentialAdminError:
+            raise
+        except SQLAlchemyError:
+            raise CredentialAdminError("credential_repository_unavailable") from None
+        raise AssertionError("credential reissue retry loop did not return or raise")
 
     async def _admin_transaction[T](
         self,
