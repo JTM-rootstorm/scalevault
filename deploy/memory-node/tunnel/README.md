@@ -154,6 +154,10 @@ Exercise a bounded synthetic read, verify `memory_transport_status` reports the
 pinned secure-tunnel installation, and verify mutation tools are absent. Keep
 the unit disabled if any check fails.
 
+Use the [secure-tunnel rotation runbook](ROTATION.md) for normal credential
+rotation and its required live Authorization-collision and journal-canary
+gates. Rotation always recovers forward; it never restores a revoked bearer.
+
 ## Disaster-recovery reissue
 
 The signed archive restores the secure-tunnel actor, client, installation, and
