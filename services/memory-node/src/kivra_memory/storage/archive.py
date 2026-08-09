@@ -49,6 +49,7 @@ from kivra_memory.storage.models import (
     GenesisImportSource,
     GenesisImportSupersession,
     IngressItem,
+    IngressProviderViolation,
     Lineage,
     LogicalSession,
     Memory,
@@ -144,6 +145,7 @@ _RECOVERY_MODELS: tuple[type[DeclarativeBase], ...] = (
     GenesisImportSource,
     GenesisImportExclusion,
     IngressItem,
+    IngressProviderViolation,
     MemoryEvent,
     Memory,
     MemoryEvidence,
@@ -235,6 +237,42 @@ def archive_event_dto(row: MemoryEvent) -> ArchiveRecord:
     return cast(ArchiveRecord, value)
 
 
+def _require_single_tenant_global_prefix(
+    *,
+    next_global_sequence: object,
+    tenant_event_count: object,
+    tenant_min_sequence: object,
+    tenant_max_sequence: object,
+) -> int:
+    """Prove the visible tenant owns the canonical node's complete event prefix."""
+
+    if (
+        isinstance(next_global_sequence, bool)
+        or not isinstance(next_global_sequence, int)
+        or next_global_sequence < 1
+        or isinstance(tenant_event_count, bool)
+        or not isinstance(tenant_event_count, int)
+        or tenant_event_count < 0
+    ):
+        raise ArchiveStorageError("archive_multitenant_unsupported")
+    high_water = next_global_sequence - 1
+    if high_water == 0:
+        if (
+            tenant_event_count != 0
+            or tenant_min_sequence is not None
+            or tenant_max_sequence is not None
+        ):
+            raise ArchiveStorageError("archive_multitenant_unsupported")
+        return high_water
+    if (
+        tenant_event_count != high_water
+        or tenant_min_sequence != 1
+        or tenant_max_sequence != high_water
+    ):
+        raise ArchiveStorageError("archive_multitenant_unsupported")
+    return high_water
+
+
 async def _load_model_rows(
     session: AsyncSession, model: type[DeclarativeBase], tenant_id: UUID
 ) -> tuple[ArchiveRecord, ...]:
@@ -311,6 +349,36 @@ async def load_archive_batch_source(
             )
         ).scalar_one_or_none()
         previous_last = 0 if previous is None else previous.last_event_sequence
+
+        # Event sequence allocation is global in v1, while archives are bound to
+        # one tenant. Lock the counter so the source cannot advance while the
+        # snapshot is loaded, then prove this tenant owns exactly 1..high-water.
+        # Any missing sequence can represent another tenant and is therefore not
+        # safely restorable by the v1 single-tenant format.
+        next_global_sequence = await session.scalar(
+            select(MemoryEventCounter.next_sequence)
+            .where(MemoryEventCounter.counter_id == 1)
+            .with_for_update()
+        )
+        tenant_prefix_result = await session.execute(
+            select(
+                func.count(MemoryEvent.sequence),
+                func.min(MemoryEvent.sequence),
+                func.max(MemoryEvent.sequence),
+            ).where(MemoryEvent.tenant_id == tenant_id)
+        )
+        tenant_event_count, tenant_min_sequence, tenant_max_sequence = (
+            tenant_prefix_result.one()
+        )
+        global_high_water = _require_single_tenant_global_prefix(
+            next_global_sequence=next_global_sequence,
+            tenant_event_count=tenant_event_count,
+            tenant_min_sequence=tenant_min_sequence,
+            tenant_max_sequence=tenant_max_sequence,
+        )
+        if previous_last > global_high_water:
+            raise ArchiveStorageError("archive_source_changed")
+
         event_result = await session.execute(
             select(MemoryEvent)
             .where(
@@ -323,16 +391,11 @@ async def load_archive_batch_source(
         if not event_rows:
             return None
 
-        source_high_water = event_rows[-1].sequence
+        source_high_water = global_high_water
         sequences = tuple(row.sequence for row in event_rows)
-        if sequences != tuple(range(sequences[0], source_high_water + 1)):
-            raise ArchiveStorageError("archive_event_gap")
+        if sequences != tuple(range(previous_last + 1, source_high_water + 1)):
+            raise ArchiveStorageError("archive_multitenant_unsupported")
         recovery_rows = await load_recovery_rows(session, tenant_id=tenant_id)
-        final_high_water = await session.scalar(
-            select(func.max(MemoryEvent.sequence)).where(MemoryEvent.tenant_id == tenant_id)
-        )
-        if final_high_water != source_high_water:
-            raise ArchiveStorageError("archive_source_changed")
     except ArchiveStorageError:
         raise
     except SQLAlchemyError:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from datetime import UTC, datetime
 from typing import cast
 from unittest.mock import AsyncMock, Mock
@@ -8,6 +10,8 @@ from uuid import UUID
 import pytest
 from kivra_memory.archive.codec import SnapshotTable
 from kivra_memory.archive.restore import RestorePlan as CoreRestorePlan
+from kivra_memory.domain.enums import EventOperation
+from kivra_memory.domain.events import MemoryEvent
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.archive import ArchiveBatchSource, ArchiveStorageError, RestorePlan
 from kivra_memory.storage.models import ArchiveExportCheckpoint
@@ -236,3 +240,54 @@ def test_core_restore_decoder_preserves_verified_snapshot_rows() -> None:
     assert decoded.tenant_id == uid(1)
     assert decoded.rows["tenants"] == ({"tenant_id": str(uid(1))},)
     assert decoded.later_events == ()
+
+
+def test_core_restore_decoder_encodes_nonempty_later_event_json_like_snapshot_rows() -> None:
+    payload = {"z": [3, 2, 1], "a": {"verified": True}}
+    payload_canonical = b'{"a":{"verified":true},"z":[3,2,1]}'
+    event = MemoryEvent.model_construct(
+        sequence=3,
+        event_id=uid(10),
+        tenant_id=uid(1),
+        lineage_id=uid(11),
+        branch_id=uid(12),
+        actor_id=uid(13),
+        client_id=uid(14),
+        transport_binding_id=uid(15),
+        session_id=None,
+        ingress_id=None,
+        operation=EventOperation.BRANCH_CREATED,
+        memory_id=None,
+        expected_revision=None,
+        causation_event_id=None,
+        correlation_id=uid(16),
+        idempotency_key="archive-restore:3",
+        schema_version=1,
+        payload_version=1,
+        policy_version=1,
+        normalization_version=1,
+        payload=payload,
+        payload_canonical=base64.b64encode(payload_canonical).decode("ascii"),
+        payload_sha256=hashlib.sha256(payload_canonical).hexdigest(),
+        command_sha256=(b"c" * 32).hex(),
+        created_at=_WHEN,
+    )
+    core_plan = CoreRestorePlan(
+        manifest_sha256s=("a" * 64,),
+        snapshot_high_water_sequence=2,
+        snapshot_tables=(
+            SnapshotTable(
+                name="tenants",
+                primary_key=("tenant_id",),
+                rows=({"tenant_id": str(uid(1))},),
+            ),
+        ),
+        events_to_replay=(event,),
+        final_high_water_sequence=3,
+    )
+
+    decoded = CoreRestoreDecoder().decode(core_plan)
+
+    assert len(decoded.later_events) == 1
+    assert decoded.later_events[0]["payload"] == payload_canonical
+    assert decoded.later_events[0]["payload_canonical"] == payload_canonical

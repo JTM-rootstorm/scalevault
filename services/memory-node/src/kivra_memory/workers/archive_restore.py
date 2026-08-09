@@ -10,6 +10,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.archive.restore import RestorePlan as CoreRestorePlan
+from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.storage.archive import RestorePlan, restore_archive_rows
 from kivra_memory.storage.projector import rebuild_semantic_projections
 
@@ -77,7 +78,10 @@ class CoreRestoreDecoder:
                     "payload_version": event.payload_version,
                     "policy_version": event.policy_version,
                     "normalization_version": event.normalization_version,
-                    "payload": event.payload,
+                    # Snapshot JSON columns are canonical JSON bytes so the CBOR
+                    # archive remains float-free and restore can reverse the DTO.
+                    # Later events must use that exact storage boundary too.
+                    "payload": canonical_json_bytes(event.payload),
                     "payload_canonical": payload_canonical,
                     "payload_sha256": payload_sha256,
                     "command_sha256": command_sha256,

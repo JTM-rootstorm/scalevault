@@ -10,6 +10,7 @@ from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.archive import (
     ArchiveBatchSource,
     ArchiveStorageError,
+    _require_single_tenant_global_prefix,
     archive_row_dto,
     archive_target_advisory_lock_key,
     commit_archive_checkpoint,
@@ -111,12 +112,49 @@ def test_row_dto_encodes_json_as_canonical_bytes_for_float_free_cbor() -> None:
 def test_recovery_allowlist_excludes_secrets_jobs_and_archive_state() -> None:
     names = set(recovery_table_names())
 
-    assert {"memory_events", "memories", "memory_content_keys", "ingress_items"} <= names
+    assert {
+        "memory_events",
+        "memories",
+        "memory_content_keys",
+        "ingress_items",
+        "ingress_provider_violations",
+    } <= names
     assert "client_credentials" not in names
     assert "memory_embeddings_v1" not in names
     assert "outbox_jobs" not in names
     assert "archive_targets" not in names
     assert "archive_export_checkpoints" not in names
+
+
+def test_single_tenant_archive_requires_the_complete_global_event_prefix() -> None:
+    assert (
+        _require_single_tenant_global_prefix(
+            next_global_sequence=3,
+            tenant_event_count=2,
+            tenant_min_sequence=1,
+            tenant_max_sequence=2,
+        )
+        == 2
+    )
+
+
+@pytest.mark.parametrize(
+    ("event_count", "minimum", "maximum"),
+    [
+        pytest.param(1, 1, 1, id="foreign-tenant-or-missing-sequence"),
+        pytest.param(2, 2, 3, id="non-prefix-sequences"),
+    ],
+)
+def test_single_tenant_archive_rejects_global_sequence_mismatch(
+    event_count: int, minimum: int, maximum: int
+) -> None:
+    with pytest.raises(ArchiveStorageError, match="archive_multitenant_unsupported"):
+        _require_single_tenant_global_prefix(
+            next_global_sequence=3,
+            tenant_event_count=event_count,
+            tenant_min_sequence=minimum,
+            tenant_max_sequence=maximum,
+        )
 
 
 async def test_checkpoint_state_machine_is_idempotent_and_fail_closed() -> None:
