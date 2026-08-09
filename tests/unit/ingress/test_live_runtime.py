@@ -15,11 +15,18 @@ from kivra_memory.application.github_ingress import (
     GitHubIngressOrchestrator,
     GitHubIngressProcessResult,
 )
+from kivra_memory.application.mutations import CommandPrincipal
+from kivra_memory.application.selection import SelectionResult
 from kivra_memory.domain.enums import IngressState, MemoryScope, SubjectKind
 from kivra_memory.ingress.github_client import GitHubProposalObject
 from kivra_memory.ingress.runtime import adapt_live_proposal, transaction_binding_sha256
 from kivra_memory.ingress.validator import IngressValidationError, validate_ingress
-from kivra_memory.storage.github_ingress import GitHubIngressDiscovery, IngressRegistration
+from kivra_memory.storage.github_ingress import (
+    GitHubIngressDiscovery,
+    GitHubIngressRepository,
+    IngressRegistration,
+)
+from kivra_memory.storage.models import IngressItem
 from kivra_memory.workers.github_ingress import (
     GitHubIngressIdentity,
     GitHubIngressWorker,
@@ -27,6 +34,7 @@ from kivra_memory.workers.github_ingress import (
     work_item_from_proposal,
 )
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 _ROOT = Path(__file__).resolve().parents[3]
 _FIXTURE = (
@@ -144,6 +152,116 @@ def test_poller_object_is_bound_to_pinned_local_identity_without_invented_fields
 
     assert item.discovery == discovery
     assert item.raw_bytes is raw
+
+
+async def test_duplicate_link_is_resolved_before_terminal_row_becomes_dirty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    discovery = _discovery()
+    raw = _raw()
+    validated = validate_ingress(raw, discovery.immutable_path, source_git_blob_sha="2" * 40)
+    binding = transaction_binding_sha256(
+        ingress_id=discovery.ingress_id,
+        installation_id=discovery.installation_id,
+        repository_external_id=discovery.repository_external_id,
+        immutable_path=discovery.immutable_path,
+        commit_id=discovery.commit_id,
+        blob_id=discovery.blob_id,
+        payload_sha256=hashlib.sha256(raw).digest(),
+    )
+    command = adapt_live_proposal(
+        validated,
+        expected_installation_id=discovery.installation_id,
+        transaction_binding_sha256=binding,
+    )
+    principal = CommandPrincipal(
+        tenant_id=discovery.tenant_id,
+        actor_id=discovery.actor_id,
+        client_id=discovery.client_id,
+        transport_binding_id=discovery.transport_binding_id,
+        scopes=frozenset({"memory:propose"}),
+        ingress_id=discovery.ingress_id,
+    )
+    row = IngressItem(
+        ingress_id=discovery.ingress_id,
+        tenant_id=discovery.tenant_id,
+        transport_binding_id=discovery.transport_binding_id,
+        installation_id=discovery.installation_id,
+        actor_id=discovery.actor_id,
+        client_id=discovery.client_id,
+        provider="github",
+        repository_external_id=discovery.repository_external_id,
+        branch_name=discovery.branch_name,
+        immutable_path=discovery.immutable_path,
+        external_object_id=discovery.external_object_id,
+        commit_id=discovery.commit_id,
+        blob_id=discovery.blob_id,
+        declared_idempotency_key=command.idempotency_key,
+        payload_sha256=hashlib.sha256(raw).digest(),
+        state=IngressState.VALIDATED.value,
+        result_event_id=None,
+        result_memory_id=None,
+        error_code=None,
+        safe_diagnostic=None,
+        discovered_at=discovery.discovered_at,
+        validated_at=discovery.discovered_at,
+        processed_at=None,
+    )
+    event_id = UUID("019c0000-0000-7000-8000-000000000041")
+    memory_id = UUID("019c0000-0000-7000-8000-000000000042")
+    repository = GitHubIngressRepository()
+    lookup_state: list[tuple[str, datetime | None]] = []
+
+    async def load_locked(
+        _session: AsyncSession, _discovery: GitHubIngressDiscovery
+    ) -> IngressItem:
+        return row
+
+    async def find_duplicate_link(
+        _session: AsyncSession,
+        *,
+        principal: CommandPrincipal,
+        command: object,
+    ) -> tuple[UUID, UUID]:
+        del principal, command
+        lookup_state.append((row.state, row.processed_at))
+        return event_id, memory_id
+
+    class FlushProbe:
+        flushed = False
+
+        async def flush(self) -> None:
+            self.flushed = True
+
+    session = FlushProbe()
+    monkeypatch.setattr(repository, "_load_locked", load_locked)
+    monkeypatch.setattr(repository, "_find_duplicate_link", find_duplicate_link)
+
+    await repository.terminalize(
+        cast(AsyncSession, session),
+        discovery=discovery,
+        principal=principal,
+        command=command,
+        result=SelectionResult(
+            receipt_id=UUID("019c0000-0000-7000-8000-000000000043"),
+            decision_id=UUID("019c0000-0000-7000-8000-000000000044"),
+            outcome="omit",
+            policy_sha256="0" * 64,
+            reason_codes=("already_candidate",),
+            matched_rule_ids=(),
+            event_id=None,
+            memory_id=None,
+            revision=None,
+        ),
+        processed_at=discovery.discovered_at,
+    )
+
+    assert lookup_state == [(IngressState.VALIDATED.value, None)]
+    assert row.state == IngressState.DUPLICATE.value
+    assert row.result_event_id == event_id
+    assert row.result_memory_id == memory_id
+    assert row.processed_at == discovery.discovered_at
+    assert session.flushed is True
 
 
 async def test_terminal_provenance_violation_reports_unchanged_canonical_result(

@@ -375,7 +375,6 @@ class GitHubIngressRepository:
         ):
             raise GitHubIngressStorageError("validated_binding_mismatch")
 
-        row.processed_at = processed_at
         if result.outcome in {"candidate", "active", "promoted"}:
             if result.event_id is None or result.memory_id is None:
                 raise GitHubIngressStorageError("selection_result_invalid")
@@ -400,6 +399,7 @@ class GitHubIngressRepository:
             row.error_code = (
                 "selection_rejected" if result.outcome == "reject" else "selection_omitted"
             )
+        row.processed_at = processed_at
         row.safe_diagnostic = None
         await session.flush()
 
