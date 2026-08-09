@@ -29,6 +29,13 @@ reachable only through the reviewed secure-tunnel deployment path; the Memory
 Node retains a non-public listener. The adapter constructs exactly these ten
 existing read/status tools and no other MCP `Tool` objects:
 
+ScaleVault intentionally does not advertise OAuth protected-resource metadata.
+Exact `GET` requests to `/.well-known/oauth-protected-resource/chatgpt/mcp` and
+`/.well-known/oauth-protected-resource` return HTTP 404 with the non-empty JSON
+body `{}`, so the pinned tunnel-client v0.0.10 classifies OAuth as absent. This
+discovery behavior does not relax authentication: `/chatgpt/mcp` remains
+bearer-authenticated as specified below.
+
 1. `memory_context_pack`
 2. `memory_search`
 3. `memory_get`
