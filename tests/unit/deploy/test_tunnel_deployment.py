@@ -101,18 +101,36 @@ def test_preflight_rejects_client_without_static_header_support(tmp_path: Path) 
     assert "lacks static MCP request headers" in result.stderr
 
 
+def test_preflight_rejects_unsupported_client_version(tmp_path: Path) -> None:
+    result = _run_preflight(tmp_path, version="0.0.7+test")
+
+    assert result.returncode != 0
+    assert "0.0.8 or newer is required" in result.stderr
+
+
+def test_preflight_rejects_noncanonical_tunnel_id(tmp_path: Path) -> None:
+    tunnel_id = "tunnel_0123456789ABCDEF0123456789abcdef"
+    result = _run_preflight(tmp_path, tunnel_id=tunnel_id)
+
+    assert result.returncode != 0
+    assert "32 lowercase hexadecimal" in result.stderr
+    assert tunnel_id not in result.stderr
+
+
 def _run_preflight(
     tmp_path: Path,
     *,
     authorization: str = AUTHORIZATION,
     include_header_flags: bool = True,
+    tunnel_id: str = "tunnel_0123456789abcdef0123456789abcdef",
+    version: str = "0.0.10+test",
 ) -> subprocess.CompletedProcess[str]:
     tunnel_client = tmp_path / "tunnel-client"
     flags = "--mcp.extra-headers --mcp.discovery-extra-headers" if include_header_flags else ""
     tunnel_client.write_text(
         "#!/bin/sh\n"
         'if [ "${1-}" = "--version" ]; then\n'
-        "  echo '0.0.10+test'\n"
+        f"  echo '{version}'\n"
         'elif [ "${1-}" = "run" ] && [ "${2-}" = "--help" ]; then\n'
         f"  echo '{flags}'\n"
         "else\n"
@@ -127,7 +145,7 @@ def _run_preflight(
     chatgpt_authorization.write_text(authorization + "\n", encoding="utf-8")
 
     environment = os.environ.copy()
-    environment["CONTROL_PLANE_TUNNEL_ID"] = "tunnel_0123456789abcdef0123456789abcdef"
+    environment["CONTROL_PLANE_TUNNEL_ID"] = tunnel_id
     return subprocess.run(
         [
             str(PREFLIGHT),
