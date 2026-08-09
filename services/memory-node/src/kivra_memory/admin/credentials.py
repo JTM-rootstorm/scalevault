@@ -230,7 +230,7 @@ class CredentialAdminService:
                 "host_label": host,
                 "provisioning_contract": "scalevault-codex-installation-v1",
             },
-            client_public_id=f"codex-{environment}-{host}-{str(tenant_id)[:8]}",
+            client_public_id=f"codex-{environment}-{host}-{tenant_id}",
             client_display_name=safe_name,
             client_scopes=selected_scopes,
             client_capability_profile=capability_profile,

@@ -188,6 +188,7 @@ async def test_create_provisions_distinguishable_identity_without_persisting_sec
     )
     assert issuance.authorized_operations == ("observed", "remembered")
     assert issuance.public_hint == "codex:production:workstation-one"
+    assert issuance.client_public_id == f"codex-production-workstation-one-{tenant_id}"
 
 
 @pytest.mark.asyncio
