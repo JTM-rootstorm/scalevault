@@ -240,6 +240,10 @@ async def test_secure_tunnel_create_or_load_persists_closed_read_only_identity()
     installation_id = new_uuid7()
     artifact: list[str] = []
 
+    def publish(proposed: str) -> str:
+        artifact.append(proposed)
+        return proposed
+
     metadata = await service.create_or_load_secure_tunnel(
         tenant_id=tenant_id,
         actor_id=actor_id,
@@ -247,7 +251,7 @@ async def test_secure_tunnel_create_or_load_persists_closed_read_only_identity()
         tunnel_label="workspace-one",
         scopes=("memory.read.context", "memory.status.ingress"),
         capability_profile=_capability(),
-        authorization_artifact=lambda proposed: artifact.append(proposed) or proposed,
+        authorization_artifact=publish,
     )
 
     issuance = repository.secure_tunnel
@@ -302,10 +306,14 @@ async def test_secure_tunnel_rotation_publishes_authorization_before_repository(
     )
     artifact: list[str] = []
 
+    def publish(proposed: str) -> str:
+        artifact.append(proposed)
+        return proposed
+
     rotated = await service.rotate_secure_tunnel(
         tenant_id=created.tenant_id,
         credential_id=created.credential_id,
-        authorization_artifact=lambda proposed: artifact.append(proposed) or proposed,
+        authorization_artifact=publish,
     )
 
     assert artifact[0].startswith("Bearer svb1.")
