@@ -210,6 +210,38 @@ async def test_chatgpt_route_rejects_missing_or_wrong_authorization() -> None:
     assert missing.json() == wrong.json() == {"error": "authentication_required"}
 
 
+async def test_oauth_protected_resource_discovery_is_bare_not_advertised() -> None:
+    runtime = InertMemoryRuntime()
+    chatgpt_runtime = ChatGPTReadRuntime(
+        authenticator=FixedQueryAuthenticator(principal()),
+        installation_id=INSTALLATION_ID,
+        queries=cast(Any, RecordingQueries()),
+        status=cast(Any, object()),
+    )
+    app = create_app(
+        chatgpt_settings(),
+        runtime=cast(Any, runtime),
+        chatgpt_runtime=chatgpt_runtime,
+    )
+    transport = ASGITransport(app=app)
+
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=transport, base_url="http://127.0.0.1:8080") as client,
+    ):
+        responses = [
+            await client.get("/.well-known/oauth-protected-resource/chatgpt/mcp"),
+            await client.get("/.well-known/oauth-protected-resource"),
+        ]
+        protected_mcp = await client.get("/chatgpt/mcp")
+
+    assert all(response.status_code == 404 for response in responses)
+    assert all(response.content == b"" for response in responses)
+    assert all("www-authenticate" not in response.headers for response in responses)
+    assert protected_mcp.status_code == 401
+    assert protected_mcp.json() == {"error": "authentication_required"}
+
+
 def test_chatgpt_runtime_configuration_must_match_enabled_setting() -> None:
     with pytest.raises(RuntimeError, match=r"^invalid_chatgpt_runtime_configuration$"):
         create_app(chatgpt_settings(), runtime=cast(Any, InertMemoryRuntime()))

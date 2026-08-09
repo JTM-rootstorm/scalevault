@@ -172,6 +172,13 @@ def create_app(
             return Response(status_code=status.HTTP_404_NOT_FOUND)
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
+    @app.get("/.well-known/oauth-protected-resource/chatgpt/mcp", include_in_schema=False)
+    @app.get("/.well-known/oauth-protected-resource", include_in_schema=False)
+    async def oauth_protected_resource_not_advertised() -> Response:
+        """Keep OAuth discovery explicitly absent ahead of the authenticated MCP mounts."""
+
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+
     if chatgpt_application is not None:
         app.mount("/chatgpt", chatgpt_application)
     app.mount("/", mcp_application)
