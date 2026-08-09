@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -154,6 +155,26 @@ def test_one_time_secret_rejects_symlink_and_unprotected_parent(tmp_path: Path) 
     with pytest.raises(CredentialAdminError, match="secret_output_failed"):
         write_one_time_secret(output, "svb1." + "a" * 120)
     assert not output.exists()
+
+
+def test_one_time_secret_cleans_reservation_and_temporary_on_publish_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    protected.chmod(0o700)
+    output = protected / "token"
+
+    def fail_replace(*_args: object, **_kwargs: object) -> None:
+        raise OSError
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+
+    with pytest.raises(CredentialAdminError, match="secret_output_failed"):
+        write_one_time_secret(output, "svb1." + "a" * 120)
+
+    assert not output.exists()
+    assert not tuple(protected.iterdir())
 
 
 def test_settings_do_not_consume_secret_environment_values(

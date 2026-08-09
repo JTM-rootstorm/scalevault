@@ -96,6 +96,7 @@ def write_one_time_secret(path: Path, token: str) -> None:
     temporary_name: str | None = None
     descriptor = -1
     directory_fd = -1
+    destination_reserved = False
     try:
         destination = Path(path)
         if (
@@ -126,6 +127,18 @@ def write_one_time_secret(path: Path, token: str) -> None:
             byte < 0x21 or byte > 0x7E for byte in payload[:-1]
         ):
             raise ValueError
+        descriptor = os.open(
+            destination.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o000,
+            dir_fd=directory_fd,
+        )
+        os.fchmod(descriptor, 0o000)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        destination_reserved = True
+        os.fsync(directory_fd)
         temporary_name = f".credential-{os.urandom(16).hex()}.tmp"
         descriptor = os.open(
             temporary_name,
@@ -143,15 +156,14 @@ def write_one_time_secret(path: Path, token: str) -> None:
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1
-        os.link(
+        os.replace(
             temporary_name,
             destination.name,
             src_dir_fd=directory_fd,
             dst_dir_fd=directory_fd,
-            follow_symlinks=False,
         )
-        os.unlink(temporary_name, dir_fd=directory_fd)
         temporary_name = None
+        destination_reserved = False
         os.fsync(directory_fd)
     except Exception:
         raise CredentialAdminError("credential_secret_output_failed") from None
@@ -162,6 +174,9 @@ def write_one_time_secret(path: Path, token: str) -> None:
             if temporary_name is not None:
                 with suppress(FileNotFoundError):
                     os.unlink(temporary_name, dir_fd=directory_fd)
+            if destination_reserved:
+                with suppress(FileNotFoundError):
+                    os.unlink(destination.name, dir_fd=directory_fd)
             os.close(directory_fd)
 
 
