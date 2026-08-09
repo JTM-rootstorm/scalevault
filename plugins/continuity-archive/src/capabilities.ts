@@ -34,6 +34,18 @@ export function hasDirectWrite(_profile: CapabilityProfile): false {
     return false;
 }
 
-export function hasGithubProposalFallback(profile: CapabilityProfile): boolean {
-    return profile === "chatgpt_pro_read_github_propose";
+export interface GithubProposalCapability {
+    createFileActionVerified: boolean;
+    explicitActionApproval: boolean;
+}
+
+export function hasGithubProposalFallback(
+    profile: CapabilityProfile,
+    capability: GithubProposalCapability,
+): boolean {
+    return (
+        profile === "chatgpt_pro_read_github_propose" &&
+        capability.createFileActionVerified &&
+        capability.explicitActionApproval
+    );
 }

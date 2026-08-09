@@ -1,5 +1,11 @@
 {
     "$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+    "files": {
+        "includes": [
+            "**",
+            "!skills/persona-continuity/references/chatgpt-memory-proposal-v2.schema.json"
+        ]
+    },
     "formatter": {
         "enabled": true,
         "indentStyle": "space",

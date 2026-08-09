@@ -8,7 +8,7 @@ from typing import Literal
 from psycopg import AsyncConnection
 from pydantic import PostgresDsn
 
-EXPECTED_ALEMBIC_HEAD = "0008_codex_credentials"
+EXPECTED_ALEMBIC_HEAD = "0009_secure_tunnel_binding"
 MINIMUM_EXTENSION_VERSIONS = {
     "citext": "1.6",
     "pg_trgm": "1.6",

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Persona Continuity"
+  short_description: "Retrieve private continuity and proposal status"
+  default_prompt: "Use $persona-continuity to retrieve only the continuity needed for this conversation."
+
+policy:
+  allow_implicit_invocation: true

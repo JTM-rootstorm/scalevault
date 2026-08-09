@@ -12,9 +12,16 @@ set is an exact match and every tool has the required read-only annotations.
 Do not publish, connect, or approve the nomination and mutation tools listed in
 `forbidden_tools` for this profile.
 
-The optional GitHub fallback is a separate connected-app capability. Configure
-the private ingress repository and canonical installation, persona, branch, and
-subject identifiers outside this package. The skill may create one new
+ChatGPT uses a frozen tool snapshot. After the MCP server changes tools or tool
+metadata, refresh the private app and repeat the exact comparison before using
+it again. Leave the profile disabled while its snapshot is stale.
+
+The standard ChatGPT GitHub integration is read-only and does not provide this
+fallback. The optional workflow is disabled by default. Enable it only when a
+current account-side capability probe verifies an exact create-file action and
+the user explicitly approves each proposal action. Configure the private
+ingress repository and canonical installation, persona, branch, and subject
+identifiers outside this package. A verified action may create one new
 proposal-v2 file, but it may never update or delete a proposal or claim that a
 proposal is canonical memory.
 

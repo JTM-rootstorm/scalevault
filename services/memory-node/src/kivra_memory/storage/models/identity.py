@@ -313,8 +313,8 @@ class TransportBinding(Base):
             name="transport_disclosure_pair",
         ),
         CheckConstraint(
-            "transport_kind <> 'relay' OR installation_id IS NOT NULL",
-            name="relay_has_installation",
+            "transport_kind NOT IN ('secure_tunnel', 'relay') OR installation_id IS NOT NULL",
+            name="remote_has_installation",
         ),
         CheckConstraint("valid_until IS NULL OR valid_until > created_at", name="validity_order"),
         json_object_check("authorized_operations", name="authorized_operations_object"),

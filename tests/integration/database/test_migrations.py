@@ -26,7 +26,7 @@ from .conftest import (
     installed_extensions,
 )
 
-EXPECTED_HEAD = "0008_codex_credentials"
+EXPECTED_HEAD = "0009_secure_tunnel_binding"
 revision_module = importlib.import_module("migrations.versions.0001_initial_domain")
 
 
@@ -128,7 +128,7 @@ def test_zero_to_head_and_full_round_trip(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (8, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (9, EXPECTED_HEAD, EXPECTED_HEAD)
 
     runner.downgrade("base")
     with runner.connect() as connection:
@@ -162,7 +162,7 @@ def test_existing_0001_database_upgrades_to_hybrid_retrieval(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (8, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (9, EXPECTED_HEAD, EXPECTED_HEAD)
 
 
 def test_existing_0007_live_like_identity_rows_upgrade_with_no_credentials(
@@ -232,6 +232,64 @@ def test_existing_0007_legacy_bearer_requires_operator_reissue(
         assert "actor_id" not in {
             column["name"] for column in inspect(connection).get_columns("client_credentials")
         }
+
+
+def test_existing_0008_secure_tunnel_binding_without_installation_fails_closed(
+    bootstrapped_alembic_runner: AlembicRunner,
+) -> None:
+    runner = bootstrapped_alembic_runner
+    runner.upgrade("0008_codex_credentials")
+    tenant_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=501)
+    actor_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=502)
+    client_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=503)
+    binding_id = new_uuid7(timestamp_ms=1_767_225_600_000, random_bits=504)
+    with runner.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO tenants (tenant_id, slug, display_name) "
+                "VALUES (:tenant_id, 'm8-invalid-binding', 'M8 invalid binding')"
+            ),
+            {"tenant_id": tenant_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO actors (actor_id, tenant_id, handle, display_name, kind) "
+                "VALUES (:actor_id, :tenant_id, 'm8-service', 'M8 service', 'service')"
+            ),
+            {"actor_id": actor_id, "tenant_id": tenant_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO clients (client_id, tenant_id, public_id, display_name, kind, "
+                "transport_kind, scopes, capability_profile) VALUES ("
+                ":client_id, :tenant_id, 'm8-secure-client', 'M8 secure client', "
+                "'interactive', 'secure_tunnel', ARRAY['memory.read.get'], "
+                '\'{"contract_version":"scalevault-client-capability-v1",'
+                '"read":null}\'::jsonb)'
+            ),
+            {"client_id": client_id, "tenant_id": tenant_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO transport_bindings (transport_binding_id, tenant_id, actor_id, "
+                "client_id, transport_kind, disclosure_boundary, installation_id, "
+                "authorized_operations) VALUES ("
+                ":binding_id, :tenant_id, :actor_id, :client_id, 'secure_tunnel', "
+                "'openai_secure_tunnel', NULL, '{\"operations\":[]}'::jsonb)"
+            ),
+            {
+                "binding_id": binding_id,
+                "tenant_id": tenant_id,
+                "actor_id": actor_id,
+                "client_id": client_id,
+            },
+        )
+
+    with pytest.raises(DBAPIError, match="remote_has_installation"):
+        runner.upgrade()
+
+    with runner.connect() as connection:
+        assert _current_revision(connection) == "0008_codex_credentials"
 
 
 def test_existing_0002_database_upgrades_and_downgrades_policy_lifecycle(

@@ -8,7 +8,7 @@
         "public_inbound_required": false,
         "github_bridge": "optional_third_party_transport"
     },
-    "capability_profile": "chatgpt_pro_read_github_propose",
+    "capability_profile": "chatgpt_pro_private_read",
     "profiles": ["./profiles/chatgpt-pro-private.json"],
     "skills": ["./skills/persona-continuity/SKILL.md"]
 }

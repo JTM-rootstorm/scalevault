@@ -1,6 +1,6 @@
 {
     "schema_version": 1,
-    "profile_id": "chatgpt_pro_read_github_propose",
+    "profile_id": "chatgpt_pro_private_read",
     "surface": "chatgpt_web_private_app",
     "transport": {
         "kind": "secure_mcp_tunnel",
@@ -27,6 +27,8 @@
             "idempotentHint": true,
             "openWorldHint": false
         },
+        "tool_snapshot": "frozen_by_chatgpt",
+        "refresh_after_tool_change": true,
         "forbidden_tools": [
             "memory_nominate",
             "memory_observe",
@@ -41,9 +43,13 @@
         "on_discovery_mismatch": "disable_profile"
     },
     "write_fallback": {
-        "availability": "operator_configured",
-        "provider": "github_connected_app",
+        "availability": "disabled_by_default",
+        "standard_chatgpt_github_integration": "unavailable_read_only",
+        "provider": "github_create_capable_connected_action",
         "repository": "operator_configured_private_repository",
+        "activation_probe": "exact_account_side_create_file_action",
+        "approval": "explicit_per_action",
+        "on_probe_failure": "unavailable",
         "contract": "chatgpt-memory-proposal-v2",
         "operation": "nominate",
         "action": "create_file",

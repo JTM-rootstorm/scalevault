@@ -182,6 +182,18 @@ def test_client_credentials_are_secret_safe_and_immutably_attributed() -> None:
     }
 
 
+def test_secure_tunnel_bindings_require_an_installation() -> None:
+    bindings = metadata.tables["transport_bindings"]
+    checks = {
+        str(constraint.name): str(constraint.sqltext)
+        for constraint in bindings.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    assert checks["ck_transport_bindings_remote_has_installation"] == (
+        "transport_kind NOT IN ('secure_tunnel', 'relay') OR installation_id IS NOT NULL"
+    )
+
+
 def test_tenant_local_foreign_keys_are_tenant_qualified() -> None:
     for table_name in TENANT_TABLE_NAMES:
         table = metadata.tables[table_name]

@@ -289,7 +289,7 @@ def test_role_bootstrap_is_safe_before_migrating_an_existing_0004_database(
 
     with alembic_runner.engine.begin() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0008_codex_credentials"
+            "0009_secure_tunnel_binding"
         )
         assert connection.execute(
             text(
