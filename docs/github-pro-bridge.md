@@ -21,3 +21,20 @@ commit `7dc1cae4b9a99173d2d227be1dd1d10c7f267ce9`; the later authorization commi
 `f4338047f2f0e12d68b83aa6ffe3653bafeb1f2d` is not source input. See
 [GitHub ingress compatibility](ingress-compatibility.md). The existing probe and
 proposal client do not constitute an implementation of those newer formats.
+
+The separately versioned repository was re-audited at exact commit
+`84233835924ade0e3cf26bb995717c880c75ff5c`. It contains no proposal-creator
+code and no proposal-v2 schema; ScaleVault's checked-in v2 schema remains the
+live contract. This commit is the immutable Git-history bootstrap root for any
+later approved worker activation, not authorization to enable the bridge.
+
+ScaleVault's local fallback adapter derives one deterministic path from the
+validated proposal bytes and never supplies an update `sha`. HTTP `409` and
+`422` are ambiguous create outcomes: the adapter reads that exact path and
+accepts only an exact byte match. A provider exception or timeout returns the
+payload-free `github_create_ambiguous` code. A caller may retry only the same
+proposal bytes, preserving the ingress ID, path, and request body; it must not
+mint a replacement proposal identity.
+
+The disabled non-secret deployment contract and remaining activation gates are
+documented in [`deploy/github/`](../deploy/github/README.md).

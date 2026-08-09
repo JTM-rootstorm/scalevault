@@ -1,0 +1,15 @@
+# GitHub proposal fallback is disabled until the account-specific create-file
+# capability and the complete ingress activation gate have been re-verified.
+enabled = false
+
+repository_owner = "JTM-rootstorm"
+repository_name = "scalevault-memory-ingress"
+default_branch = "main"
+installation_id = "REPLACE_WITH_UUIDV7"
+ingress_prefix = "ingress/v2"
+schema_version = 2
+privacy_warning = "github_third_party_non_sensitive_only"
+maximum_proposal_bytes = 32768
+
+external_source_commit = "84233835924ade0e3cf26bb995717c880c75ff5c"
+external_source_tree = "2de813150fe3952e6538abc5db9c2254d835a70e"
