@@ -19,9 +19,11 @@ useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-tunnel
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-worker
+useradd --system --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin --gid kivra-memory memory-lifecycle
 mountpoint --quiet /mnt/memory
 install -d -o root -g root -m 0755 /opt/kivra-memory/app
-install -d -o root -g root -m 0750 /etc/kivra-memory
+install -d -o root -g kivra-memory -m 0750 /etc/kivra-memory
 install -d -o root -g root -m 0755 /mnt/memory/kivra-memory
 install -d -o root -g kivra-memory -m 2750 \
   /mnt/memory/kivra-memory/models
@@ -34,9 +36,9 @@ group membership as an installation error; inspect and reconcile it rather than
 blindly replacing it. The application tree is root-owned and not writable by a
 service account.
 
-Create `memory-api.env`, `memory-worker.env`, `node-agent.env`, and `tunnel.env` locally under
-`/etc/kivra-memory`. Each file must be `root:root` mode `0600`, even when it
-currently contains only nonsecret coordinates. Never copy `.env` from a
+Create `memory-api.env`, `memory-worker.env`, `memory-lifecycle-worker.env`, `node-agent.env`, and `tunnel.env` locally under
+`/etc/kivra-memory`. Each file must be root-owned and mode `0600`, except the
+dedicated lifecycle-worker file described below. Never copy `.env` from a
 development checkout. Database passwords remain local deployment secrets and
 must not appear in this repository, shell history, or command output. Private
 keys and API keys must use systemd credentials rather than environment files.
@@ -59,6 +61,26 @@ allowlist of tenant UUIDs; model paths cannot be supplied by jobs:
 KIVRA_MEMORY_DATABASE_URL=postgresql+psycopg://kivra_memory_worker:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
 KIVRA_MEMORY_WORKER_TENANT_IDS=REPLACE_WITH_UUIDV7
 ```
+
+Candidate expiry is a distinct policy service and must not share the embedding
+worker account, environment, model mount, or job dispatcher. Its root-owned
+environment file is deliberately readable only by its dedicated service account:
+
+```text
+KIVRA_MEMORY_DATABASE_URL=postgresql+psycopg://kivra_memory_policy:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
+KIVRA_MEMORY_LIFECYCLE_TENANT_IDS=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_LIFECYCLE_ACTOR_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_LIFECYCLE_CLIENT_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_LIFECYCLE_TRANSPORT_BINDING_ID=REPLACE_WITH_UUIDV7
+```
+
+Install it `root:memory-lifecycle` mode `0640`. The listed IDs must already
+refer to one unexpired `internal_service` binding in that tenant, with a service
+actor and worker client whose client scope is exactly `memory.lifecycle.expire`.
+The service supports exactly one tenant per identity; use a separate reviewed
+unit configuration before expanding that boundary. It claims only
+`expire_candidate` jobs, verifies that binding on every poll, and records only
+allowlisted outbox failure codes.
 
 The worker verifies digest-addressed model bundles below
 `/mnt/memory/kivra-memory/models`, never downloads model material, and refuses
@@ -91,9 +113,11 @@ by the corresponding embedding-model registry row. Record the actual export
 tool and version; do not substitute illustrative values.
 
 Use `install -o root -g root -m 0600` when placing each completed environment
-file. The node-agent file is optional at this milestone because the service
-remains disabled. The API file is required before starting the API; the tunnel
-file is required only when the separately gated tunnel is started.
+file, except use `install -o root -g memory-lifecycle -m 0640` for
+`memory-lifecycle-worker.env`. The node-agent file is optional at this
+milestone because the service remains disabled. The API file is required before
+starting the API; the tunnel file is required only when the separately gated
+tunnel is started.
 
 Verify the local boundary before enabling anything:
 
@@ -103,6 +127,7 @@ stat -c '%U:%G %a %n' \
   /etc/kivra-memory \
   /etc/kivra-memory/memory-api.env \
   /etc/kivra-memory/memory-worker.env \
+  /etc/kivra-memory/memory-lifecycle-worker.env \
   /mnt/memory/kivra-memory/models \
   /mnt/memory/kivra-memory/node-agent
 ```
@@ -140,6 +165,9 @@ install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-worker.service \
   /etc/systemd/system/kivra-memory-worker.service
 install -D -o root -g root -m 0644 \
+  deploy/memory-node/systemd/kivra-memory-lifecycle-worker.service \
+  /etc/systemd/system/kivra-memory-lifecycle-worker.service
+install -D -o root -g root -m 0644 \
   deploy/memory-node/postgresql/systemd/postgresql@17-main.service.d/10-kivra-memory-mount.conf \
   /etc/systemd/system/postgresql@17-main.service.d/10-kivra-memory-mount.conf
 systemctl daemon-reload
@@ -148,6 +176,7 @@ systemd-analyze verify \
   kivra-memory-api.service \
   kivra-memory-node-agent.service \
   kivra-memory-worker.service \
+  kivra-memory-lifecycle-worker.service \
   kivra-memory-tunnel.service
 ```
 
@@ -174,7 +203,9 @@ unit is installed but should remain disabled until relay enrollment is
 implemented. Ingress, exporter, and timer units will be added with their runnable
 entry points so deployment never advertises an unimplemented service. The worker
 unit remains disabled until its pinned bundle, registry row, tenant
-configuration, and live acceptance gate have been verified.
+configuration, and live acceptance gate have been verified. The lifecycle worker
+remains disabled until its preprovisioned internal-service identity, policy-role
+credential, and candidate-expiry acceptance gate have been verified.
 
 The tunnel unit is installed separately and remains disabled until its Platform
 tunnel ID, restricted runtime credential, and ChatGPT workspace association are

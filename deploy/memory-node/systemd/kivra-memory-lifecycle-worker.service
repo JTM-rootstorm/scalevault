@@ -1,0 +1,38 @@
+[Unit]
+Description=ScaleVault policy-gated candidate expiry worker
+After=network-online.target postgresql@17-main.service
+Wants=network-online.target
+Requires=postgresql@17-main.service
+RequiresMountsFor=/mnt/memory
+ConditionPathIsMountPoint=/mnt/memory
+
+[Service]
+Type=simple
+User=memory-lifecycle
+Group=kivra-memory
+WorkingDirectory=/opt/kivra-memory/app
+Environment=KIVRA_MEMORY_ENVIRONMENT=production
+Environment=HOME=/nonexistent
+EnvironmentFile=/etc/kivra-memory/memory-lifecycle-worker.env
+ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-lifecycle-worker
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
