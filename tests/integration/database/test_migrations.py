@@ -26,7 +26,7 @@ from .conftest import (
     installed_extensions,
 )
 
-EXPECTED_HEAD = "0009_secure_tunnel_binding"
+EXPECTED_HEAD = "0010_ingress_provider_heads"
 revision_module = importlib.import_module("migrations.versions.0001_initial_domain")
 
 
@@ -128,7 +128,7 @@ def test_zero_to_head_and_full_round_trip(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (9, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (10, EXPECTED_HEAD, EXPECTED_HEAD)
 
     runner.downgrade("base")
     with runner.connect() as connection:
@@ -162,7 +162,7 @@ def test_existing_0001_database_upgrades_to_hybrid_retrieval(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (9, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (10, EXPECTED_HEAD, EXPECTED_HEAD)
 
 
 def test_existing_0007_live_like_identity_rows_upgrade_with_no_credentials(
@@ -418,6 +418,26 @@ def test_existing_0006_database_upgrades_and_downgrades_persistence_hardening(
         assert _current_revision(connection) == "0006_sealed_canonical_content"
         assert "ingress_provider_violations" not in inspect(connection).get_table_names()
 
+
+def test_existing_0009_database_adds_and_removes_ingress_provider_heads(
+    bootstrapped_alembic_runner: AlembicRunner,
+) -> None:
+    runner = bootstrapped_alembic_runner
+    runner.upgrade("0009_secure_tunnel_binding")
+    with runner.connect() as connection:
+        assert _current_revision(connection) == "0009_secure_tunnel_binding"
+        assert "ingress_provider_heads" not in inspect(connection).get_table_names()
+
+    runner.upgrade()
+    with runner.connect() as connection:
+        assert _current_revision(connection) == EXPECTED_HEAD
+        assert "ingress_provider_heads" in inspect(connection).get_table_names()
+        assert _schema_differences(connection) == []
+
+    runner.downgrade("0009_secure_tunnel_binding")
+    with runner.connect() as connection:
+        assert _current_revision(connection) == "0009_secure_tunnel_binding"
+        assert "ingress_provider_heads" not in inspect(connection).get_table_names()
 
 def test_genesis_downgrade_fails_closed_after_a_genesis_decision(
     bootstrapped_alembic_runner: AlembicRunner,

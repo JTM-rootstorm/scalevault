@@ -48,8 +48,16 @@ def _repository() -> dict[str, object]:
     }
 
 
-def _head() -> dict[str, object]:
-    return {"sha": COMMIT_ID, "commit": {"tree": {"sha": TREE_ID}}}
+def _head(*, commit_id: str = COMMIT_ID, tree_id: str = TREE_ID) -> dict[str, object]:
+    return {"sha": commit_id, "commit": {"tree": {"sha": tree_id}}}
+
+
+def _commit(commit_id: str, tree_id: str, *parent_ids: str) -> dict[str, object]:
+    return {
+        "sha": commit_id,
+        "tree": {"sha": tree_id},
+        "parents": [{"sha": parent_id} for parent_id in parent_ids],
+    }
 
 
 def _path(index: int) -> str:
@@ -67,8 +75,10 @@ def _tree_entry(path: str, payload: bytes) -> dict[str, object]:
     }
 
 
-def _tree(entries: list[dict[str, object]]) -> dict[str, object]:
-    return {"sha": TREE_ID, "truncated": False, "tree": entries}
+def _tree(
+    entries: list[dict[str, object]], *, tree_id: str = TREE_ID
+) -> dict[str, object]:
+    return {"sha": tree_id, "truncated": False, "tree": entries}
 
 
 def _blob(payload: bytes) -> dict[str, object]:
@@ -103,7 +113,7 @@ def _client(transport: StubTransport) -> GitHubProposalClient:
     )
 
 
-def test_poll_pins_one_head_follows_tree_pages_and_fetches_immutable_blobs() -> None:
+def test_poll_pins_one_head_reads_one_recursive_tree_and_fetches_immutable_blobs() -> None:
     payloads = [b'{"proposal_id":1}\n', b'{"proposal_id":2}\n']
     paths = [_path(2), _path(3)]
     transport = StubTransport(
@@ -120,17 +130,20 @@ def test_poll_pins_one_head_follows_tree_pages_and_fetches_immutable_blobs() -> 
                             "sha": "3" * 40,
                         },
                         _tree_entry(paths[1], payloads[1]),
+                        _tree_entry(paths[0], payloads[0]),
                     ]
-                ),
-                headers={"Link": '<ignored>; rel="next"'},
+                )
             ),
-            _response(_tree([_tree_entry(paths[0], payloads[0])])),
             _response(_blob(payloads[0])),
             _response(_blob(payloads[1])),
         ]
     )
 
-    result = GitHubSnapshotPoller(_client(transport)).poll('"old-etag"')
+    result = GitHubSnapshotPoller(_client(transport)).poll(
+        '"old-etag"',
+        trusted_commit_id=COMMIT_ID,
+        trusted_tree_id=TREE_ID,
+    )
 
     assert result.next_etag == '"new-etag"'
     assert result.unchanged is False
@@ -141,9 +154,9 @@ def test_poll_pins_one_head_follows_tree_pages_and_fetches_immutable_blobs() -> 
     assert result.proposals[0].provenance.raw_sha256 == hashlib.sha256(payloads[0]).hexdigest()
     assert transport.calls[1][1]["If-None-Match"] == '"old-etag"'
     assert f"/git/trees/{TREE_ID}?" in transport.calls[2][0]
-    assert "page=1" in transport.calls[2][0]
-    assert "page=2" in transport.calls[3][0]
-    assert transport.calls[4][0].endswith(f"/git/blobs/{_blob_id(payloads[0])}")
+    assert "recursive=1" in transport.calls[2][0]
+    assert "page=" not in transport.calls[2][0]
+    assert transport.calls[3][0].endswith(f"/git/blobs/{_blob_id(payloads[0])}")
 
 
 def test_304_returns_unchanged_without_tree_or_blob_requests() -> None:
@@ -151,7 +164,11 @@ def test_304_returns_unchanged_without_tree_or_blob_requests() -> None:
         [_response(_repository()), _response(status=304, headers={"ETag": '"same"'})]
     )
 
-    result = GitHubSnapshotPoller(_client(transport)).poll('"same"')
+    result = GitHubSnapshotPoller(_client(transport)).poll(
+        '"same"',
+        trusted_commit_id=COMMIT_ID,
+        trusted_tree_id=TREE_ID,
+    )
 
     assert result.unchanged is True
     assert result.next_etag == '"same"'
@@ -173,6 +190,8 @@ def test_poll_rejects_changed_or_removed_known_path_before_blob_fetch() -> None:
 
     with pytest.raises(GitHubAppendOnlyViolation, match="append-only"):
         GitHubSnapshotPoller(_client(transport)).poll(
+            trusted_commit_id=COMMIT_ID,
+            trusted_tree_id=TREE_ID,
             known_objects={old_path: "f" * 40, _path(3): "e" * 40}
         )
 
@@ -191,7 +210,29 @@ def test_poll_rejects_unknown_blob_path_inside_pinned_root() -> None:
     )
 
     with pytest.raises(GitHubProposalError, match="path"):
-        GitHubSnapshotPoller(_client(transport)).poll()
+        GitHubSnapshotPoller(_client(transport)).poll(
+            trusted_commit_id=COMMIT_ID,
+            trusted_tree_id=TREE_ID,
+        )
+
+
+def test_poll_rejects_truncated_recursive_tree_without_blob_fetch() -> None:
+    truncated_tree = _tree([])
+    truncated_tree["truncated"] = True
+    transport = StubTransport(
+        [
+            _response(_repository()),
+            _response(_head()),
+            _response(truncated_tree),
+        ]
+    )
+
+    with pytest.raises(GitHubProposalError, match="truncated"):
+        GitHubSnapshotPoller(_client(transport)).poll(
+            trusted_commit_id=COMMIT_ID,
+            trusted_tree_id=TREE_ID,
+        )
+    _assert_no_blob_fetch(transport)
 
 
 def test_poll_handles_fifty_new_proposals_without_loss() -> None:
@@ -206,7 +247,10 @@ def test_poll_handles_fifty_new_proposals_without_loss() -> None:
         ]
     )
 
-    result = GitHubSnapshotPoller(_client(transport)).poll()
+    result = GitHubSnapshotPoller(_client(transport)).poll(
+        trusted_commit_id=COMMIT_ID,
+        trusted_tree_id=TREE_ID,
+    )
 
     assert len(result.proposals) == 50
     assert len({proposal.path for proposal in result.proposals}) == 50
@@ -223,7 +267,167 @@ def test_poll_sanitizes_transport_failure() -> None:
     )
 
     with pytest.raises(GitHubProposalError) as caught:
-        GitHubSnapshotPoller(_client(transport)).poll()
+        GitHubSnapshotPoller(_client(transport)).poll(
+            trusted_commit_id=COMMIT_ID,
+            trusted_tree_id=TREE_ID,
+        )
 
     assert TOKEN not in str(caught.value)
     assert private_body not in str(caught.value)
+
+
+def _history_poll(transport: StubTransport) -> None:
+    GitHubSnapshotPoller(_client(transport)).poll(
+        trusted_commit_id="a" * 40,
+        trusted_tree_id="b" * 40,
+    )
+
+
+def _assert_no_blob_fetch(transport: StubTransport) -> None:
+    assert all("/git/blobs/" not in url for url, _headers in transport.calls)
+
+
+def test_poll_accepts_one_first_parent_regular_blob_addition() -> None:
+    path = _path(79)
+    payload = b'{"synthetic":"proposal"}'
+    head_commit, head_tree = "c" * 40, "d" * 40
+    entry = _tree_entry(path, payload)
+    transport = StubTransport(
+        [
+            _response(_repository()),
+            _response(_head(commit_id=head_commit, tree_id=head_tree)),
+            _response(_commit(head_commit, head_tree, "a" * 40)),
+            _response(_tree([], tree_id="b" * 40)),
+            _response(_tree([entry], tree_id=head_tree)),
+            _response(_tree([entry], tree_id=head_tree)),
+            _response(_blob(payload)),
+        ]
+    )
+
+    client = _client(transport)
+    snapshot = GitHubSnapshotPoller(client).poll(
+        trusted_commit_id="a" * 40,
+        trusted_tree_id="b" * 40,
+    )
+
+    assert snapshot.commit_id == head_commit
+    assert snapshot.tree_id == head_tree
+    assert snapshot.proposals[0].raw_bytes == payload
+    assert "/git/blobs/" in transport.calls[-1][0]
+
+
+def test_first_poll_rejects_create_then_update_before_fetching_content() -> None:
+    path = _path(80)
+    first_payload = b"first"
+    changed_payload = b"changed"
+    first_commit, first_tree = "c" * 40, "d" * 40
+    head_commit, head_tree = "e" * 40, "f" * 40
+    transport = StubTransport(
+        [
+            _response(_repository()),
+            _response(_head(commit_id=head_commit, tree_id=head_tree)),
+            _response(_commit(head_commit, head_tree, first_commit)),
+            _response(_commit(first_commit, first_tree, "a" * 40)),
+            _response(_tree([], tree_id="b" * 40)),
+            _response(_tree([_tree_entry(path, first_payload)], tree_id=first_tree)),
+            _response(_tree([_tree_entry(path, changed_payload)], tree_id=head_tree)),
+        ]
+    )
+
+    with pytest.raises(GitHubProposalError, match="changed or removed"):
+        _history_poll(transport)
+    _assert_no_blob_fetch(transport)
+
+
+def test_first_poll_rejects_delete_and_recreate_chain_before_fetching_content() -> None:
+    path = _path(81)
+    add_commit, add_tree = "c" * 40, "d" * 40
+    delete_commit, delete_tree = "e" * 40, "f" * 40
+    head_commit, head_tree = "1" * 40, "2" * 40
+    transport = StubTransport(
+        [
+            _response(_repository()),
+            _response(_head(commit_id=head_commit, tree_id=head_tree)),
+            _response(_commit(head_commit, head_tree, delete_commit)),
+            _response(_commit(delete_commit, delete_tree, add_commit)),
+            _response(_commit(add_commit, add_tree, "a" * 40)),
+            _response(_tree([], tree_id="b" * 40)),
+            _response(_tree([_tree_entry(path, b"first")], tree_id=add_tree)),
+            _response(_tree([], tree_id=delete_tree)),
+        ]
+    )
+
+    with pytest.raises(GitHubProposalError, match="changed or removed"):
+        _history_poll(transport)
+    _assert_no_blob_fetch(transport)
+
+
+def test_poll_rejects_force_pushed_history_that_does_not_reach_durable_head() -> None:
+    head_commit, head_tree = "c" * 40, "d" * 40
+    unrelated_commit = "e" * 40
+    transport = StubTransport(
+        [
+            _response(_repository()),
+            _response(_head(commit_id=head_commit, tree_id=head_tree)),
+            _response(_commit(head_commit, head_tree, unrelated_commit)),
+            _response(_commit(unrelated_commit, "f" * 40)),
+        ]
+    )
+
+    with pytest.raises(GitHubProposalError, match="first-parent linear"):
+        _history_poll(transport)
+    _assert_no_blob_fetch(transport)
+
+
+def test_poll_rejects_merge_commit_before_fetching_content() -> None:
+    head_commit, head_tree = "c" * 40, "d" * 40
+    transport = StubTransport(
+        [
+            _response(_repository()),
+            _response(_head(commit_id=head_commit, tree_id=head_tree)),
+            _response(_commit(head_commit, head_tree, "a" * 40, "e" * 40)),
+        ]
+    )
+
+    with pytest.raises(GitHubProposalError, match="first-parent linear"):
+        _history_poll(transport)
+    _assert_no_blob_fetch(transport)
+
+
+@pytest.mark.parametrize(
+    "added_entry",
+    [
+        {
+            "path": _path(82),
+            "mode": "100755",
+            "type": "blob",
+            "sha": "9" * 40,
+            "size": 1,
+        },
+        {
+            "path": "ingress/v2/019c0000-0000-7000-8000-000000000099/2026/08/"
+            "019c0000-0000-7000-8000-000000000082.json",
+            "mode": "100644",
+            "type": "blob",
+            "sha": "9" * 40,
+            "size": 1,
+        },
+    ],
+)
+def test_poll_rejects_wrong_mode_or_extra_ingress_path_before_content_fetch(
+    added_entry: dict[str, object],
+) -> None:
+    head_commit, head_tree = "c" * 40, "d" * 40
+    transport = StubTransport(
+        [
+            _response(_repository()),
+            _response(_head(commit_id=head_commit, tree_id=head_tree)),
+            _response(_commit(head_commit, head_tree, "a" * 40)),
+            _response(_tree([], tree_id="b" * 40)),
+            _response(_tree([added_entry], tree_id=head_tree)),
+        ]
+    )
+
+    with pytest.raises(GitHubProposalError, match="additive history"):
+        _history_poll(transport)
+    _assert_no_blob_fetch(transport)

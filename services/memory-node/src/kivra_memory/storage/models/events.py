@@ -235,6 +235,79 @@ class IngressProviderViolation(Base):
     )
 
 
+class IngressProviderHead(Base):
+    """Durable verified GitHub history head rooted at the reviewed bootstrap commit."""
+
+    __tablename__ = "ingress_provider_heads"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "installation_id"],
+            ["transport_installations.tenant_id", "transport_installations.installation_id"],
+            name="installation",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "transport_binding_id"],
+            ["transport_bindings.tenant_id", "transport_bindings.transport_binding_id"],
+            name="transport_binding",
+            ondelete="RESTRICT",
+        ),
+        values_check("provider", ("github",), name="provider_values"),
+        CheckConstraint(
+            "repository_external_id ~ '^[1-9][0-9]*$'", name="repository_external_id_format"
+        ),
+        CheckConstraint(
+            "bootstrap_commit_id = '84233835924ade0e3cf26bb995717c880c75ff5c'",
+            name="bootstrap_commit_pin",
+        ),
+        CheckConstraint(
+            "bootstrap_tree_id = '2de813150fe3952e6538abc5db9c2254d835a70e'",
+            name="bootstrap_tree_pin",
+        ),
+        CheckConstraint(
+            "last_verified_commit_id ~ '^[0-9a-f]{40}$'", name="last_commit_format"
+        ),
+        CheckConstraint("last_verified_tree_id ~ '^[0-9a-f]{40}$'", name="last_tree_format"),
+        CheckConstraint("length(branch_name) BETWEEN 1 AND 255", name="branch_name_length"),
+        CheckConstraint("etag IS NULL OR length(etag) BETWEEN 1 AND 1024", name="etag_length"),
+        CheckConstraint("verified_at >= created_at", name="verified_at_order"),
+        {
+            "info": {
+                TENANT_OWNED_INFO_KEY: True,
+                "scalevault_immutable_fields": (
+                    "tenant_id",
+                    "provider",
+                    "repository_external_id",
+                    "branch_name",
+                    "installation_id",
+                    "transport_binding_id",
+                    "bootstrap_commit_id",
+                    "bootstrap_tree_id",
+                    "created_at",
+                ),
+            }
+        },
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
+    repository_external_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    branch_name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    installation_id: Mapped[UUID] = mapped_column(nullable=False)
+    transport_binding_id: Mapped[UUID] = mapped_column(nullable=False)
+    bootstrap_commit_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    bootstrap_tree_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    last_verified_commit_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    last_verified_tree_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    etag: Mapped[str | None] = mapped_column(String(1024))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
 class MemoryEventCounter(Base):
     __tablename__ = "memory_event_counter"
     __table_args__ = (

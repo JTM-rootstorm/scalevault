@@ -18,7 +18,7 @@ from uuid import UUID
 MAX_PROPOSAL_BYTES = 32 * 1024
 _MAX_API_RESPONSE_BYTES = 64 * 1024
 _MAX_TREE_RESPONSE_BYTES = 4 * 1024 * 1024
-_MAX_TREE_PAGES = 100
+_MAX_VERIFIED_COMMITS = 1000
 _MAX_TRANSPORT_RESPONSE_BYTES = _MAX_TREE_RESPONSE_BYTES
 _API_ROOT = "https://api.github.com"
 _API_VERSION = "2022-11-28"
@@ -85,6 +85,25 @@ class GitHubHead:
                 raise ValueError("an unchanged head cannot contain object IDs")
         elif self.commit_id is None or self.tree_id is None:
             raise ValueError("a changed head requires commit and tree object IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubCommit:
+    """One exact Git commit object used only for history verification."""
+
+    commit_id: str
+    tree_id: str
+    parent_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubRepositoryEntry:
+    """One non-directory Git tree entry used for additive-chain verification."""
+
+    path: str
+    mode: str
+    object_type: str
+    object_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,38 +270,139 @@ class GitHubProposalClient:
         )
 
     def enumerate_tree(self, tree_id: str) -> tuple[GitHubTreeEntry, ...]:
-        """Enumerate regular proposal blobs from one exact tree, following safe pagination."""
+        """Enumerate regular proposal blobs from one exact recursive tree response."""
 
         self._require_object_id(tree_id, "tree")
         headers = self._request_headers()
         entries: list[GitHubTreeEntry] = []
         seen_paths: set[str] = set()
-        page = 1
-        while True:
-            query = urlencode({"recursive": "1", "per_page": 100, "page": page})
-            url = f"{self._repository_api_root}/git/trees/{tree_id}?{query}"
-            response = self._request(url, headers)
-            if response.status != 200:
-                raise GitHubProposalError("GitHub repository tree request was not successful")
-            document = self._decode_json_object(
-                response,
-                "repository tree",
-                max_bytes=_MAX_TREE_RESPONSE_BYTES,
-            )
-            if document.get("sha") != tree_id:
-                raise GitHubProposalError("GitHub repository tree identity did not match the pin")
-            if document.get("truncated") is True:
-                raise GitHubProposalError("GitHub repository tree response was truncated")
-            raw_entries = document.get("tree")
-            if not isinstance(raw_entries, list):
-                raise GitHubProposalError("GitHub repository tree response was invalid")
-            self._collect_tree_entries(raw_entries, entries, seen_paths)
+        query = urlencode({"recursive": "1"})
+        url = f"{self._repository_api_root}/git/trees/{tree_id}?{query}"
+        response = self._request(url, headers)
+        if response.status != 200:
+            raise GitHubProposalError("GitHub repository tree request was not successful")
+        document = self._decode_json_object(
+            response,
+            "repository tree",
+            max_bytes=_MAX_TREE_RESPONSE_BYTES,
+        )
+        if document.get("sha") != tree_id:
+            raise GitHubProposalError("GitHub repository tree identity did not match the pin")
+        if document.get("truncated") is True:
+            raise GitHubProposalError("GitHub repository tree response was truncated")
+        raw_entries = document.get("tree")
+        if not isinstance(raw_entries, list):
+            raise GitHubProposalError("GitHub repository tree response was invalid")
+        self._collect_tree_entries(raw_entries, entries, seen_paths)
+        return tuple(sorted(entries, key=lambda entry: entry.path))
 
-            if not self._has_next_page(response.headers):
-                break
-            page += 1
-            if page > _MAX_TREE_PAGES:
-                raise GitHubProposalError("GitHub repository tree pagination exceeded the limit")
+    def verify_additive_history(
+        self,
+        *,
+        trusted_commit_id: str,
+        trusted_tree_id: str,
+        head_commit_id: str,
+        head_tree_id: str,
+    ) -> None:
+        """Verify a linear, additive-only chain before any proposal blob fetch.
+
+        The trusted commit/tree pair comes from the durable provider checkpoint.
+        Every later commit must have exactly one parent and may only add regular,
+        non-executable blobs at valid paths inside this installation's ingress
+        root. Existing paths and all objects outside that root are immutable.
+        """
+
+        for value, name in (
+            (trusted_commit_id, "trusted commit"),
+            (trusted_tree_id, "trusted tree"),
+            (head_commit_id, "head commit"),
+            (head_tree_id, "head tree"),
+        ):
+            self._require_object_id(value, name)
+        if head_commit_id == trusted_commit_id:
+            if head_tree_id != trusted_tree_id:
+                raise GitHubProposalError("GitHub trusted head tree did not match the pin")
+            return
+
+        reverse_chain: list[GitHubCommit] = []
+        current_id = head_commit_id
+        while current_id != trusted_commit_id:
+            if len(reverse_chain) >= _MAX_VERIFIED_COMMITS:
+                raise GitHubProposalError("GitHub additive history exceeded the verification limit")
+            commit = self.get_commit(current_id)
+            if len(commit.parent_ids) != 1:
+                raise GitHubProposalError("GitHub additive history was not first-parent linear")
+            reverse_chain.append(commit)
+            current_id = commit.parent_ids[0]
+        if reverse_chain[0].tree_id != head_tree_id:
+            raise GitHubProposalError("GitHub head tree did not match the commit object")
+
+        previous_tree_id = trusted_tree_id
+        tree_cache: dict[str, tuple[GitHubRepositoryEntry, ...]] = {}
+
+        def tree_entries(tree_id: str) -> tuple[GitHubRepositoryEntry, ...]:
+            cached = tree_cache.get(tree_id)
+            if cached is None:
+                cached = self.enumerate_repository_tree(tree_id)
+                tree_cache[tree_id] = cached
+            return cached
+
+        for commit in reversed(reverse_chain):
+            previous = tree_entries(previous_tree_id)
+            current = tree_entries(commit.tree_id)
+            self._verify_additive_tree_delta(previous, current)
+            previous_tree_id = commit.tree_id
+
+    def get_commit(self, commit_id: str) -> GitHubCommit:
+        """Fetch one immutable Git commit object by object ID."""
+
+        self._require_object_id(commit_id, "commit")
+        document, _ = self._get_json(
+            f"{self._repository_api_root}/git/commits/{commit_id}",
+            self._request_headers(),
+            "repository commit",
+        )
+        if document.get("sha") != commit_id:
+            raise GitHubProposalError("GitHub repository commit identity did not match the pin")
+        tree = document.get("tree")
+        if not isinstance(tree, dict):
+            raise GitHubProposalError("GitHub repository commit response was invalid")
+        tree_id = self._object_id(tree.get("sha"), "commit tree")
+        raw_parents = document.get("parents")
+        if not isinstance(raw_parents, list):
+            raise GitHubProposalError("GitHub repository commit response was invalid")
+        parent_ids: list[str] = []
+        for parent in raw_parents:
+            if not isinstance(parent, dict):
+                raise GitHubProposalError("GitHub repository commit response was invalid")
+            parent_ids.append(self._object_id(parent.get("sha"), "parent commit"))
+        return GitHubCommit(commit_id=commit_id, tree_id=tree_id, parent_ids=tuple(parent_ids))
+
+    def enumerate_repository_tree(self, tree_id: str) -> tuple[GitHubRepositoryEntry, ...]:
+        """Enumerate all non-directory objects in one exact repository tree."""
+
+        self._require_object_id(tree_id, "tree")
+        headers = self._request_headers()
+        entries: list[GitHubRepositoryEntry] = []
+        seen_paths: set[str] = set()
+        query = urlencode({"recursive": "1"})
+        url = f"{self._repository_api_root}/git/trees/{tree_id}?{query}"
+        response = self._request(url, headers)
+        if response.status != 200:
+            raise GitHubProposalError("GitHub repository tree request was not successful")
+        document = self._decode_json_object(
+            response,
+            "repository tree",
+            max_bytes=_MAX_TREE_RESPONSE_BYTES,
+        )
+        if document.get("sha") != tree_id:
+            raise GitHubProposalError("GitHub repository tree identity did not match the pin")
+        if document.get("truncated") is True:
+            raise GitHubProposalError("GitHub repository tree response was truncated")
+        raw_entries = document.get("tree")
+        if not isinstance(raw_entries, list):
+            raise GitHubProposalError("GitHub repository tree response was invalid")
+        self._collect_repository_entries(raw_entries, entries, seen_paths)
         return tuple(sorted(entries, key=lambda entry: entry.path))
 
     def fetch_blob(self, *, commit_id: str, path: str, blob_id: str) -> GitHubProposalObject:
@@ -451,6 +571,66 @@ class GitHubProposalClient:
                 raise GitHubProposalError("GitHub proposal exceeded the size limit")
             entries.append(GitHubTreeEntry(path=path, blob_id=blob_id, size=size))
 
+    def _collect_repository_entries(
+        self,
+        raw_entries: list[object],
+        entries: list[GitHubRepositoryEntry],
+        seen_paths: set[str],
+    ) -> None:
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, dict):
+                raise GitHubProposalError("GitHub repository tree response was invalid")
+            path = raw_entry.get("path")
+            mode = raw_entry.get("mode")
+            object_type = raw_entry.get("type")
+            if (
+                not isinstance(path, str)
+                or not path
+                or path.startswith("/")
+                or path.endswith("/")
+                or "\x00" in path
+                or not isinstance(mode, str)
+                or not isinstance(object_type, str)
+            ):
+                raise GitHubProposalError("GitHub repository tree response was invalid")
+            if object_type == "tree" and mode == "040000":
+                continue
+            if path in seen_paths:
+                raise GitHubProposalError("GitHub repository tree contained a duplicate path")
+            seen_paths.add(path)
+            entries.append(
+                GitHubRepositoryEntry(
+                    path=path,
+                    mode=mode,
+                    object_type=object_type,
+                    object_id=self._object_id(raw_entry.get("sha"), "tree object"),
+                )
+            )
+
+    def _verify_additive_tree_delta(
+        self,
+        previous: tuple[GitHubRepositoryEntry, ...],
+        current: tuple[GitHubRepositoryEntry, ...],
+    ) -> None:
+        previous_by_path = {entry.path: entry for entry in previous}
+        current_by_path = {entry.path: entry for entry in current}
+        if any(current_by_path.get(path) != entry for path, entry in previous_by_path.items()):
+            raise GitHubProposalError("GitHub additive history changed or removed an object")
+        additions = tuple(
+            entry for path, entry in current_by_path.items() if path not in previous_by_path
+        )
+        if not additions:
+            raise GitHubProposalError("GitHub additive history commit added no proposal")
+        for entry in additions:
+            if entry.object_type != "blob" or entry.mode != "100644":
+                raise GitHubProposalError("GitHub additive history added a non-regular object")
+            try:
+                self._validate_proposal_path(entry.path)
+            except GitHubProposalError:
+                raise GitHubProposalError(
+                    "GitHub additive history added an object outside the pinned ingress root"
+                ) from None
+
     @staticmethod
     def _decode_content(
         content: dict[str, object],
@@ -523,18 +703,3 @@ class GitHubProposalClient:
             not etag or len(etag) > 1024 or any(character in etag for character in "\r\n\x00")
         ):
             raise GitHubProposalError("GitHub ETag was invalid")
-
-    @classmethod
-    def _has_next_page(cls, headers: Mapping[str, str]) -> bool:
-        link = cls._response_header(headers, "Link")
-        if link is None:
-            return False
-        relations: set[str] = set()
-        for value in link.split(","):
-            sections = [section.strip() for section in value.split(";")]
-            if not sections or not sections[0].startswith("<") or not sections[0].endswith(">"):
-                raise GitHubProposalError("GitHub pagination response was invalid")
-            for section in sections[1:]:
-                if section.startswith('rel="') and section.endswith('"'):
-                    relations.add(section[5:-1])
-        return "next" in relations

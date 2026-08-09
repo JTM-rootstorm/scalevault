@@ -35,6 +35,10 @@ from kivra_memory.domain.canonical_json import (
 )
 from kivra_memory.domain.identifiers import require_uuid7
 from kivra_memory.domain.values import format_utc_datetime
+from kivra_memory.storage.github_heads import (
+    GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+    GITHUB_INGRESS_BOOTSTRAP_TREE,
+)
 from kivra_memory.storage.models import (
     Actor,
     ArchiveExportCheckpoint,
@@ -49,6 +53,7 @@ from kivra_memory.storage.models import (
     GenesisImportSource,
     GenesisImportSupersession,
     IngressItem,
+    IngressProviderHead,
     IngressProviderViolation,
     Lineage,
     LogicalSession,
@@ -144,6 +149,7 @@ _RECOVERY_MODELS: tuple[type[DeclarativeBase], ...] = (
     GenesisImportRun,
     GenesisImportSource,
     GenesisImportExclusion,
+    IngressProviderHead,
     IngressItem,
     IngressProviderViolation,
     MemoryEvent,
@@ -652,7 +658,37 @@ async def restore_archive_rows(session: AsyncSession, plan: RestorePlan) -> None
                 tenant_id=plan.tenant_id,
             )
             if table_rows:
-                await session.execute(insert(model), table_rows)
+                if model is IngressProviderHead:
+                    bootstrap_rows = tuple(
+                        {
+                            **row,
+                            "last_verified_commit_id": GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+                            "last_verified_tree_id": GITHUB_INGRESS_BOOTSTRAP_TREE,
+                            "etag": None,
+                            "verified_at": row["created_at"],
+                        }
+                        for row in table_rows
+                    )
+                    await session.execute(insert(IngressProviderHead), bootstrap_rows)
+                    for row in table_rows:
+                        await session.execute(
+                            update(IngressProviderHead)
+                            .where(
+                                IngressProviderHead.tenant_id == row["tenant_id"],
+                                IngressProviderHead.provider == row["provider"],
+                                IngressProviderHead.repository_external_id
+                                == row["repository_external_id"],
+                                IngressProviderHead.branch_name == row["branch_name"],
+                            )
+                            .values(
+                                last_verified_commit_id=row["last_verified_commit_id"],
+                                last_verified_tree_id=row["last_verified_tree_id"],
+                                etag=row["etag"],
+                                verified_at=row["verified_at"],
+                            )
+                        )
+                else:
+                    await session.execute(insert(model), table_rows)
         later_events = _restore_rows_for_model(
             MemoryEvent, tuple(plan.later_events), tenant_id=plan.tenant_id
         )

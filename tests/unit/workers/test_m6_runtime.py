@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import cast
 from uuid import UUID
@@ -11,12 +12,16 @@ import pytest
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import NominationCommandLike
 from kivra_memory.domain.canonical_json import canonical_json_bytes
-from kivra_memory.domain.enums import AuthorityClass
+from kivra_memory.domain.enums import AuthorityClass, MemoryCategory
 from kivra_memory.policy import (
     EvidenceKind,
     EvidenceTrust,
     NominationEvidenceReference,
     SelectionBasis,
+)
+from kivra_memory.storage.github_heads import (
+    GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+    GITHUB_INGRESS_BOOTSTRAP_TREE,
 )
 from kivra_memory.workers.github_ingress import GitHubIngressIdentity
 from kivra_memory.workers.github_ingress_main import (
@@ -47,10 +52,12 @@ def _settings() -> GitHubIngressSettings:
         repository_name="memory-ingress",
         ingress_prefix="ingress/v2",
         token="not-a-real-token",
-        allowed_selection_basis=SelectionBasis.VERIFIED_PROJECT_DECISION,
-        authority_class=AuthorityClass.VERIFIED_PROJECT_SOURCE,
-        evidence_kind=EvidenceKind.PROJECT_SOURCE,
+        allowed_selection_basis=SelectionBasis.ASSISTANT_OBSERVATION,
+        authority_class=AuthorityClass.ASSISTANT_OBSERVATION,
+        evidence_kind=EvidenceKind.ASSISTANT_OBSERVATION,
         evidence_trust=EvidenceTrust.TRUSTED,
+        bootstrap_commit_id=GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+        bootstrap_tree_id=GITHUB_INGRESS_BOOTSTRAP_TREE,
         promotion_actor_id=_uuid(6),
         promotion_client_id=_uuid(7),
         promotion_transport_binding_id=_uuid(8),
@@ -84,12 +91,14 @@ def _server_evidence_key(settings: GitHubIngressSettings) -> str:
 def _command(
     basis: SelectionBasis,
     *,
+    category: MemoryCategory = MemoryCategory.EMERGENT_TENDENCY,
     with_evidence: bool = True,
     evidence_key: str = "reviewed-project-source",
     opaque_reference: str = "project-source:reviewed",
 ) -> NominationCommandLike:
     proposal = SimpleNamespace(
         selection_basis=basis,
+        category=category,
         evidence_references=(
             (
                 NominationEvidenceReference(
@@ -108,12 +117,12 @@ async def test_trusted_resolver_uses_operator_profile_not_payload_claims() -> No
     settings = _settings()
     resolved = await PinnedGitHubNominationResolver(settings).resolve(
         _principal(settings),
-        _command(SelectionBasis.VERIFIED_PROJECT_DECISION),
+        _command(SelectionBasis.ASSISTANT_OBSERVATION),
     )
 
     assert resolved.source_kind == "github_proposal"
-    assert resolved.effective_authority_class is AuthorityClass.VERIFIED_PROJECT_SOURCE
-    assert resolved.evidence[0].kind is EvidenceKind.PROJECT_SOURCE
+    assert resolved.effective_authority_class is AuthorityClass.ASSISTANT_OBSERVATION
+    assert resolved.evidence[0].kind is EvidenceKind.ASSISTANT_OBSERVATION
     assert resolved.evidence[0].trust is EvidenceTrust.TRUSTED
     assert resolved.evidence[0].evidence_key == _server_evidence_key(settings)
     assert resolved.evidence[0].evidence_key != "reviewed-project-source"
@@ -121,7 +130,7 @@ async def test_trusted_resolver_uses_operator_profile_not_payload_claims() -> No
     with pytest.raises(RuntimeError, match="trust_profile_mismatch"):
         await PinnedGitHubNominationResolver(settings).resolve(
             _principal(settings),
-            _command(SelectionBasis.EXPLICIT_USER_REQUEST),
+            _command(SelectionBasis.VERIFIED_PROJECT_DECISION),
         )
 
 
@@ -143,7 +152,7 @@ async def test_trusted_resolver_allows_schema_valid_proposal_without_evidence() 
     settings = _settings()
     resolved = await PinnedGitHubNominationResolver(settings).resolve(
         _principal(settings),
-        _command(SelectionBasis.VERIFIED_PROJECT_DECISION, with_evidence=False),
+        _command(SelectionBasis.ASSISTANT_OBSERVATION, with_evidence=False),
     )
 
     assert resolved.source_kind == "github_proposal"
@@ -156,10 +165,10 @@ async def test_trusted_resolver_key_is_stable_across_hostile_payload_references(
     resolver = PinnedGitHubNominationResolver(settings)
     first = await resolver.resolve(
         _principal(settings),
-        _command(SelectionBasis.VERIFIED_PROJECT_DECISION),
+        _command(SelectionBasis.ASSISTANT_OBSERVATION),
     )
     second_command = _command(
-        SelectionBasis.VERIFIED_PROJECT_DECISION,
+        SelectionBasis.ASSISTANT_OBSERVATION,
         evidence_key="hostile-independent-source",
         opaque_reference="hostile:must-not-persist",
     )
@@ -167,6 +176,30 @@ async def test_trusted_resolver_key_is_stable_across_hostile_payload_references(
 
     assert first.evidence == second.evidence
     assert second.evidence[0].evidence_key == _server_evidence_key(settings)
+
+
+async def test_resolver_rejects_non_candidate_category() -> None:
+    settings = _settings()
+    with pytest.raises(RuntimeError, match="trust_profile_mismatch"):
+        await PinnedGitHubNominationResolver(settings).resolve(
+            _principal(settings),
+            _command(
+                SelectionBasis.ASSISTANT_OBSERVATION,
+                category=MemoryCategory.PROJECT_DECISION,
+            ),
+        )
+
+
+def test_settings_reject_verified_project_trust_profile() -> None:
+    settings = _settings()
+
+    with pytest.raises(ValueError, match="candidate-only"):
+        replace(
+            settings,
+            allowed_selection_basis=SelectionBasis.VERIFIED_PROJECT_DECISION,
+            authority_class=AuthorityClass.VERIFIED_PROJECT_SOURCE,
+            evidence_kind=EvidenceKind.PROJECT_SOURCE,
+        )
 
 
 def test_ingress_settings_fail_closed_without_systemd_credential_directory(

@@ -51,3 +51,18 @@ as a Continuant runtime's firsthand experience.
 The historical `b69f06d...` snapshot records a compatibility boundary only.
 The first-import implementation reads and validates only Git objects reachable
 from `7dc1cae...`; it must not fetch a mutable default branch as its data source.
+
+## Live proposal bootstrap
+
+Milestone 8 reviewed the separate private repository at exact commit
+`84233835924ade0e3cf26bb995717c880c75ff5c` (tree
+`2de813150fe3952e6538abc5db9c2254d835a70e`). That tree contains historical
+v1 proposals and Genesis checkpoint material, but no proposal creator and no v2
+proposal schema. It is therefore a transport/history bootstrap trust root, not
+an executable creator dependency or authority for the checked-in ScaleVault v2
+contract.
+
+Live polling starts from that exact durable root and follows only verified
+first-parent additive commits. The `ingress/v2/<installation-id>/` prefix is
+isolated from frozen Genesis paths. No live activation is authorized merely by
+recording this compatibility pin.

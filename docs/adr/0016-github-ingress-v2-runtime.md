@@ -56,6 +56,18 @@ resolves one branch head commit. The worker enumerates the exact tree at that
 commit and fetches blobs by immutable object identity; it never combines a
 listing from one head with content from another.
 
+The reviewed bootstrap trust root is commit
+`84233835924ade0e3cf26bb995717c880c75ff5c` with tree
+`2de813150fe3952e6538abc5db9c2254d835a70e`. A tenant-scoped database row pins
+that root and the last verified commit/tree. Before the first or any later blob
+fetch, the worker proves that the new head reaches the durable head through a
+merge-free first-parent chain and compares every successive recursive tree.
+GitHub's recursive tree response is not paginated; `truncated=true` is a hard
+failure. Existing repository objects may not change or disappear, and each
+commit may add only `100644` proposal blobs under the exact installation root.
+The checkpoint advances with commit, tree, and opaque ETag only after the full
+batch has no retry and every item is terminal or an unchanged terminal replay.
+
 Provider object identity is `(github, numeric repository ID, normalized
 create-only path)`. The row also records the observed head commit and blob SHA.
 The same object may be rediscovered only with identical immutable provenance
@@ -85,6 +97,14 @@ remains in the ingress ledger and event transaction. The worker invokes
 `SelectionEngine` with the existing `memory:propose` scope and ingress ID. It
 does not invoke legacy mutation-v1 or insert events, projections, decisions, or
 receipts directly.
+
+The live GitHub trust profile is fixed rather than operator-selectable:
+`assistant_observation` basis and authority, `emergent_tendency` category, and
+one trusted `assistant_observation` source attestation. Here `trusted` means the
+server authenticated the pinned GitHub source; it does not mean the proposal's
+claim is true. This tuple is candidate-only. A verified-project or other
+active-producing authority configuration is rejected at startup, and repeated
+proposals from the one GitHub source cannot self-promote a candidate.
 
 Ingress registration, validation, policy decision, command receipt, canonical
 event when any, and terminal linkage retain their existing transaction and role

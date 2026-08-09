@@ -22,6 +22,7 @@ EXPECTED_TABLES = {
     "genesis_import_sources",
     "genesis_import_supersessions",
     "ingress_items",
+    "ingress_provider_heads",
     "ingress_provider_violations",
     "lineages",
     "memories",
@@ -89,6 +90,45 @@ def test_embedding_projection_has_fixed_v1_contract() -> None:
         indexes["ix_memory_embeddings_v1_hnsw_cosine"].dialect_options["postgresql"]["using"]
         == "hnsw"
     )
+
+
+def test_ingress_provider_head_pins_bootstrap_and_immutable_identity() -> None:
+    head = metadata.tables["ingress_provider_heads"]
+    assert set(head.c.keys()) == {
+        "tenant_id",
+        "provider",
+        "repository_external_id",
+        "branch_name",
+        "installation_id",
+        "transport_binding_id",
+        "bootstrap_commit_id",
+        "bootstrap_tree_id",
+        "last_verified_commit_id",
+        "last_verified_tree_id",
+        "etag",
+        "created_at",
+        "verified_at",
+    }
+    checks = {
+        str(constraint.name): str(constraint.sqltext)
+        for constraint in head.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    assert "84233835924ade0e3cf26bb995717c880c75ff5c" in checks[
+        "ck_ingress_provider_heads_bootstrap_commit_pin"
+    ]
+    assert "2de813150fe3952e6538abc5db9c2254d835a70e" in checks[
+        "ck_ingress_provider_heads_bootstrap_tree_pin"
+    ]
+    assert set(head.info["scalevault_immutable_fields"]) >= {
+        "tenant_id",
+        "repository_external_id",
+        "branch_name",
+        "installation_id",
+        "transport_binding_id",
+        "bootstrap_commit_id",
+        "bootstrap_tree_id",
+    }
 
 
 def test_hybrid_retrieval_indexes_and_model_lifecycle_are_explicit() -> None:

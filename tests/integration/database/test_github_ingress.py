@@ -10,12 +10,19 @@ import pytest
 from kivra_memory.domain.enums import IngressState
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.database import Database
+from kivra_memory.storage.github_heads import (
+    GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+    GITHUB_INGRESS_BOOTSTRAP_TREE,
+    GitHubHeadStorageError,
+    GitHubProviderHeadRepository,
+    GitHubProviderIdentity,
+)
 from kivra_memory.storage.github_ingress import (
     GitHubIngressDiscovery,
     GitHubIngressRepository,
     IngressRegistration,
 )
-from kivra_memory.storage.models import IngressItem, IngressProviderViolation
+from kivra_memory.storage.models import IngressItem, IngressProviderHead, IngressProviderViolation
 from kivra_memory.storage.transactions import run_serializable_transaction
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
@@ -56,6 +63,115 @@ async def _seed(database: Database) -> None:
         for layer in seed_model_layers():
             session.add_all(layer)
             await session.flush()
+
+
+def _provider_identity() -> GitHubProviderIdentity:
+    return GitHubProviderIdentity(
+        tenant_id=_id("tenants", "tenant_id"),
+        installation_id=_id("transport_installations", "installation_id"),
+        transport_binding_id=_id("transport_bindings", "transport_binding_id", 2),
+        repository_id=12_345_678,
+        branch_name="main",
+    )
+
+
+async def test_provider_head_starts_at_exact_bootstrap_and_advances_once(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+) -> None:
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    repository = GitHubProviderHeadRepository()
+    identity = _provider_identity()
+    await _seed(database)
+    try:
+        async with database.tenant_session(identity.tenant_id) as session:
+            checkpoint = await repository.load_or_create(session, identity)
+        assert checkpoint.bootstrap_commit_id == GITHUB_INGRESS_BOOTSTRAP_COMMIT
+        assert checkpoint.bootstrap_tree_id == GITHUB_INGRESS_BOOTSTRAP_TREE
+        assert checkpoint.last_verified_commit_id == GITHUB_INGRESS_BOOTSTRAP_COMMIT
+        assert checkpoint.last_verified_tree_id == GITHUB_INGRESS_BOOTSTRAP_TREE
+        assert checkpoint.etag is None
+
+        async with database.tenant_session(identity.tenant_id) as session:
+            advanced = await repository.advance(
+                session,
+                identity,
+                expected_commit_id=GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+                expected_tree_id=GITHUB_INGRESS_BOOTSTRAP_TREE,
+                commit_id="a" * 40,
+                tree_id="b" * 40,
+                etag='"verified-head"',
+            )
+        assert advanced.last_verified_commit_id == "a" * 40
+        assert advanced.last_verified_tree_id == "b" * 40
+        assert advanced.etag == '"verified-head"'
+
+        with pytest.raises(GitHubHeadStorageError, match="verified_head_race"):
+            async with database.tenant_session(identity.tenant_id) as session:
+                await repository.advance(
+                    session,
+                    identity,
+                    expected_commit_id=GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+                    expected_tree_id=GITHUB_INGRESS_BOOTSTRAP_TREE,
+                    commit_id="c" * 40,
+                    tree_id="d" * 40,
+                    etag=None,
+                )
+
+        async with database.tenant_session(identity.tenant_id) as session:
+            rows = (await session.scalars(select(IngressProviderHead))).all()
+            assert len(rows) == 1
+            assert rows[0].last_verified_commit_id == "a" * 40
+    finally:
+        await database.dispose()
+
+
+async def test_provider_head_bootstrap_identity_is_database_immutable(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+) -> None:
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    repository = GitHubProviderHeadRepository()
+    identity = _provider_identity()
+    await _seed(database)
+    try:
+        async with database.tenant_session(identity.tenant_id) as session:
+            await repository.load_or_create(session, identity)
+        with pytest.raises(DBAPIError) as caught:
+            async with database.tenant_session(identity.tenant_id) as session:
+                await session.execute(
+                    text(
+                        "UPDATE ingress_provider_heads SET bootstrap_commit_id = :commit "
+                        "WHERE tenant_id = :tenant_id"
+                    ),
+                    {"commit": "f" * 40, "tenant_id": identity.tenant_id},
+                )
+        assert getattr(caught.value.orig, "sqlstate", None) == "55000"
+    finally:
+        await database.dispose()
+
+
+async def test_provider_head_rejects_installation_from_an_unrelated_binding(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+) -> None:
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    repository = GitHubProviderHeadRepository()
+    identity = replace(
+        _provider_identity(),
+        transport_binding_id=_id("transport_bindings", "transport_binding_id", 0),
+    )
+    await _seed(database)
+    try:
+        with pytest.raises(DBAPIError) as caught:
+            async with database.tenant_session(identity.tenant_id) as session:
+                await repository.load_or_create(session, identity)
+        assert getattr(caught.value.orig, "sqlstate", None) == "23503"
+    finally:
+        await database.dispose()
 
 
 async def test_concurrent_registration_creates_one_honest_discovered_row(

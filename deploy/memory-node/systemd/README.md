@@ -276,23 +276,27 @@ KIVRA_MEMORY_GITHUB_INSTALLATION_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_GITHUB_ACTOR_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_GITHUB_CLIENT_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_GITHUB_REPOSITORY_ID=REPLACE_WITH_NUMERIC_ID
-KIVRA_MEMORY_GITHUB_REPOSITORY_OWNER=REPLACE_WITH_OWNER
-KIVRA_MEMORY_GITHUB_REPOSITORY_NAME=REPLACE_WITH_REPOSITORY
+KIVRA_MEMORY_GITHUB_REPOSITORY_OWNER=JTM-rootstorm
+KIVRA_MEMORY_GITHUB_REPOSITORY_NAME=scalevault-memory-ingress
 KIVRA_MEMORY_GITHUB_BRANCH=main
 KIVRA_MEMORY_GITHUB_INGRESS_PREFIX=ingress/v2
-KIVRA_MEMORY_GITHUB_ALLOWED_SELECTION_BASIS=verified_project_decision
-KIVRA_MEMORY_GITHUB_AUTHORITY_CLASS=verified_project_source
-KIVRA_MEMORY_GITHUB_EVIDENCE_KIND=project_source
+KIVRA_MEMORY_GITHUB_BOOTSTRAP_COMMIT=84233835924ade0e3cf26bb995717c880c75ff5c
+KIVRA_MEMORY_GITHUB_BOOTSTRAP_TREE=2de813150fe3952e6538abc5db9c2254d835a70e
+KIVRA_MEMORY_GITHUB_ALLOWED_SELECTION_BASIS=assistant_observation
+KIVRA_MEMORY_GITHUB_AUTHORITY_CLASS=assistant_observation
+KIVRA_MEMORY_GITHUB_EVIDENCE_KIND=assistant_observation
 KIVRA_MEMORY_GITHUB_EVIDENCE_TRUST=trusted
 KIVRA_MEMORY_GITHUB_PROMOTION_ACTOR_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_GITHUB_PROMOTION_CLIENT_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_GITHUB_PROMOTION_TRANSPORT_BINDING_ID=REPLACE_WITH_UUIDV7
 ```
 
-The trust-profile fields are operator-owned policy inputs, not claims accepted
-from proposal content. The configured basis, authority, evidence kind, and trust
-must be reviewed as one policy tuple. Install the fine-grained, repository-only,
-read-only token as root-owned mode `0600` at
+The bootstrap commit/tree and trust-profile fields are fixed contract pins, not
+tunable policy inputs or claims accepted from proposal content. Any other
+bootstrap, verified-project authority, evidence kind, trust, or selection basis
+fails startup. `trusted` authenticates one stable GitHub source and does not
+assert proposal truth; GitHub proposals remain candidate-only. Install the
+fine-grained, repository-only, read-only token as root-owned mode `0600` at
 `/etc/kivra-memory/github-ingress-token`. Webhooks remain disabled; any future
 listener must be separately hosted and may only wake this same immutable poller.
 

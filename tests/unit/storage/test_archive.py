@@ -117,6 +117,7 @@ def test_recovery_allowlist_excludes_secrets_jobs_and_archive_state() -> None:
         "memories",
         "memory_content_keys",
         "ingress_items",
+        "ingress_provider_heads",
         "ingress_provider_violations",
     } <= names
     assert "client_credentials" not in names

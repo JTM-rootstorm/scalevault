@@ -25,12 +25,19 @@ from kivra_memory.application.selection import (
     SelectionEngine,
 )
 from kivra_memory.domain.canonical_json import canonical_json_bytes
-from kivra_memory.domain.enums import AuthorityClass
+from kivra_memory.domain.enums import AuthorityClass, IngressState, MemoryCategory
 from kivra_memory.domain.identifiers import require_uuid7
 from kivra_memory.ingress.github_client import GitHubProposalClient
 from kivra_memory.ingress.poller import GitHubSnapshotPoller
 from kivra_memory.policy import EvidenceKind, EvidenceSummary, EvidenceTrust, SelectionBasis
 from kivra_memory.storage.database import Database
+from kivra_memory.storage.github_heads import (
+    GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+    GITHUB_INGRESS_BOOTSTRAP_TREE,
+    GitHubProviderHeadRepository,
+    GitHubProviderHeadState,
+    GitHubProviderIdentity,
+)
 from kivra_memory.storage.models import IngressItem
 from kivra_memory.workers.github_ingress import (
     GitHubIngressIdentity,
@@ -118,11 +125,33 @@ class GitHubIngressSettings:
     authority_class: AuthorityClass
     evidence_kind: EvidenceKind
     evidence_trust: EvidenceTrust
+    bootstrap_commit_id: str
+    bootstrap_tree_id: str
     promotion_actor_id: UUID
     promotion_client_id: UUID
     promotion_transport_binding_id: UUID
     poll_interval_seconds: int = 30
     concurrency: int = 8
+
+    def __post_init__(self) -> None:
+        candidate_only = (
+            SelectionBasis.ASSISTANT_OBSERVATION,
+            AuthorityClass.ASSISTANT_OBSERVATION,
+            EvidenceKind.ASSISTANT_OBSERVATION,
+            EvidenceTrust.TRUSTED,
+        )
+        if (
+            self.allowed_selection_basis,
+            self.authority_class,
+            self.evidence_kind,
+            self.evidence_trust,
+        ) != candidate_only:
+            raise ValueError("GitHub ingress trust profile must be candidate-only")
+        if (
+            self.bootstrap_commit_id != GITHUB_INGRESS_BOOTSTRAP_COMMIT
+            or self.bootstrap_tree_id != GITHUB_INGRESS_BOOTSTRAP_TREE
+        ):
+            raise ValueError("GitHub ingress bootstrap pin is invalid")
 
     @classmethod
     def from_environment(cls) -> GitHubIngressSettings:
@@ -135,6 +164,23 @@ class GitHubIngressSettings:
             authority = AuthorityClass(_required("KIVRA_MEMORY_GITHUB_AUTHORITY_CLASS"))
             evidence_kind = EvidenceKind(_required("KIVRA_MEMORY_GITHUB_EVIDENCE_KIND"))
             evidence_trust = EvidenceTrust(_required("KIVRA_MEMORY_GITHUB_EVIDENCE_TRUST"))
+            bootstrap_commit_id = _required("KIVRA_MEMORY_GITHUB_BOOTSTRAP_COMMIT")
+            bootstrap_tree_id = _required("KIVRA_MEMORY_GITHUB_BOOTSTRAP_TREE")
+            if (
+                basis,
+                authority,
+                evidence_kind,
+                evidence_trust,
+            ) != (
+                SelectionBasis.ASSISTANT_OBSERVATION,
+                AuthorityClass.ASSISTANT_OBSERVATION,
+                EvidenceKind.ASSISTANT_OBSERVATION,
+                EvidenceTrust.TRUSTED,
+            ) or (
+                bootstrap_commit_id != GITHUB_INGRESS_BOOTSTRAP_COMMIT
+                or bootstrap_tree_id != GITHUB_INGRESS_BOOTSTRAP_TREE
+            ):
+                raise ValueError
         except ValueError:
             raise RuntimeError("invalid_github_ingress_configuration") from None
         identity = GitHubIngressIdentity(
@@ -158,6 +204,8 @@ class GitHubIngressSettings:
             authority_class=authority,
             evidence_kind=evidence_kind,
             evidence_trust=evidence_trust,
+            bootstrap_commit_id=bootstrap_commit_id,
+            bootstrap_tree_id=bootstrap_tree_id,
             promotion_actor_id=_uuid7("KIVRA_MEMORY_GITHUB_PROMOTION_ACTOR_ID"),
             promotion_client_id=_uuid7("KIVRA_MEMORY_GITHUB_PROMOTION_CLIENT_ID"),
             promotion_transport_binding_id=_uuid7(
@@ -195,6 +243,7 @@ class PinnedGitHubNominationResolver:
             or principal.client_id != identity.client_id
             or principal.ingress_id is None
             or command.proposal.selection_basis is not self._settings.allowed_selection_basis
+            or command.proposal.category is not MemoryCategory.EMERGENT_TENDENCY
         ):
             raise RuntimeError("github_ingress_trust_profile_mismatch")
         return ResolvedNominationContext(
@@ -274,7 +323,20 @@ class GitHubIngressPollLoop:
             selection,
         )
         self._worker = GitHubIngressWorker(orchestrator, concurrency=settings.concurrency)
-        self._etag: str | None = None
+        self._head_repository = GitHubProviderHeadRepository()
+        self._provider_identity = GitHubProviderIdentity(
+            tenant_id=settings.identity.tenant_id,
+            installation_id=settings.identity.installation_id,
+            transport_binding_id=settings.identity.transport_binding_id,
+            repository_id=settings.identity.repository_id,
+            branch_name=settings.identity.branch_name,
+        )
+
+    async def _provider_head(self) -> GitHubProviderHeadState:
+        async with self._ingress_database.tenant_session(
+            self._settings.identity.tenant_id
+        ) as session:
+            return await self._head_repository.load_or_create(session, self._provider_identity)
 
     async def _known_objects(self) -> dict[str, str]:
         identity = self._settings.identity
@@ -294,10 +356,13 @@ class GitHubIngressPollLoop:
         return known
 
     async def poll_once(self) -> int:
+        checkpoint = await self._provider_head()
         known = await self._known_objects()
         snapshot = await asyncio.to_thread(
             self._poller.poll,
-            self._etag,
+            checkpoint.etag,
+            trusted_commit_id=checkpoint.last_verified_commit_id,
+            trusted_tree_id=checkpoint.last_verified_tree_id,
             known_objects=known,
         )
         if snapshot.unchanged:
@@ -312,8 +377,31 @@ class GitHubIngressPollLoop:
             for proposal in snapshot.proposals
         )
         results = await self._worker.process_batch(items)
-        if not any(result.disposition == "retry" for result in results):
-            self._etag = snapshot.next_etag
+        terminal_states = {
+            IngressState.ACCEPTED,
+            IngressState.DUPLICATE,
+            IngressState.CONFLICT,
+            IngressState.REJECTED,
+            IngressState.QUARANTINED,
+        }
+        if all(
+            result.disposition in {"terminal", "unchanged"} and result.state in terminal_states
+            for result in results
+        ):
+            if snapshot.commit_id is None or snapshot.tree_id is None:
+                raise RuntimeError("github_ingress_snapshot_invalid")
+            async with self._ingress_database.tenant_session(
+                self._settings.identity.tenant_id
+            ) as session:
+                await self._head_repository.advance(
+                    session,
+                    self._provider_identity,
+                    expected_commit_id=checkpoint.last_verified_commit_id,
+                    expected_tree_id=checkpoint.last_verified_tree_id,
+                    commit_id=snapshot.commit_id,
+                    tree_id=snapshot.tree_id,
+                    etag=snapshot.next_etag,
+                )
         return len(results)
 
     async def close(self) -> None:
