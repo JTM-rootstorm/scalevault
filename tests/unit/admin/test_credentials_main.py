@@ -189,6 +189,26 @@ def test_secure_tunnel_requires_file_output_and_exposes_only_read_status_scopes(
     assert missing_rotation_output.value.code == 2
     assert rotation_stdout_rejected.value.code == 2
 
+    reissue = [
+        "reissue-secure-tunnel",
+        "--tenant-id",
+        str(new_uuid7()),
+        "--actor-id",
+        str(new_uuid7()),
+        "--client-id",
+        str(new_uuid7()),
+        "--transport-binding-id",
+        str(new_uuid7()),
+        "--installation-id",
+        str(new_uuid7()),
+    ]
+    with pytest.raises(SystemExit) as missing_reissue_output:
+        parser.parse_args(reissue)
+    with pytest.raises(SystemExit) as reissue_stdout_rejected:
+        parser.parse_args([*reissue, "--secret-stdout"])
+    assert missing_reissue_output.value.code == 2
+    assert reissue_stdout_rejected.value.code == 2
+
 
 def test_secret_stdout_contains_only_token(capsys: pytest.CaptureFixture[str]) -> None:
     token = "svb1." + "a" * 120

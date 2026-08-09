@@ -136,6 +136,15 @@ def _parser() -> argparse.ArgumentParser:
     secure_rotate.add_argument("--credential-id", type=UUID, required=True)
     secure_rotate.add_argument("--expires-at", type=_parse_timestamp)
     secure_rotate.add_argument("--secret-output", type=Path, required=True)
+
+    secure_reissue = commands.add_parser("reissue-secure-tunnel")
+    secure_reissue.add_argument("--tenant-id", type=UUID, required=True)
+    secure_reissue.add_argument("--actor-id", type=UUID, required=True)
+    secure_reissue.add_argument("--client-id", type=UUID, required=True)
+    secure_reissue.add_argument("--transport-binding-id", type=UUID, required=True)
+    secure_reissue.add_argument("--installation-id", type=UUID, required=True)
+    secure_reissue.add_argument("--expires-at", type=_parse_timestamp)
+    secure_reissue.add_argument("--secret-output", type=Path, required=True)
     return parser
 
 
@@ -235,6 +244,21 @@ async def _run(arguments: argparse.Namespace, settings: CredentialAdminSettings)
                 expires_at=arguments.expires_at,
             )
             _emit_metadata((rotated,))
+            return
+        if arguments.command == "reissue-secure-tunnel":
+            reissued = await service.reissue_secure_tunnel(
+                tenant_id=arguments.tenant_id,
+                actor_id=arguments.actor_id,
+                client_id=arguments.client_id,
+                transport_binding_id=arguments.transport_binding_id,
+                installation_id=arguments.installation_id,
+                authorization_artifact=lambda proposed: load_or_create_authorization(
+                    cast(Path, arguments.secret_output),
+                    proposed,
+                ),
+                expires_at=arguments.expires_at,
+            )
+            _emit_metadata((reissued,))
             return
         raise CredentialAdminError("credential_request_invalid")
     finally:

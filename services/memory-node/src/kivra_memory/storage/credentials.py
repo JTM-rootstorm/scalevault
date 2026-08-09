@@ -709,6 +709,195 @@ class CredentialAdminStorageRepository:
 
         return await self._admin_transaction(tenant_id, operation)
 
+    async def reissue_secure_tunnel_credential(
+        self,
+        *,
+        tenant_id: UUID,
+        actor_id: UUID,
+        client_id: UUID,
+        transport_binding_id: UUID,
+        installation_id: UUID,
+        replacement: BearerCredentialReplacement,
+    ) -> CredentialMetadata:
+        for name, value in (
+            ("tenant_id", tenant_id),
+            ("actor_id", actor_id),
+            ("client_id", client_id),
+            ("transport_binding_id", transport_binding_id),
+            ("installation_id", installation_id),
+        ):
+            _require_identifier(value, name)
+        _validate_replacement(replacement, tenant_id=tenant_id)
+
+        async def operation(session: AsyncSession) -> CredentialMetadata:
+            await session.execute(
+                select(
+                    func.pg_advisory_xact_lock(func.hashtextextended(str(transport_binding_id), 0))
+                )
+            )
+            credential_count = cast(
+                int,
+                await session.scalar(
+                    select(func.count(ClientCredential.credential_id)).where(
+                        ClientCredential.tenant_id == tenant_id,
+                        ClientCredential.client_id == client_id,
+                        ClientCredential.transport_binding_id == transport_binding_id,
+                    )
+                ),
+            )
+            existing = await _load_secure_tunnel_admin_state(
+                session,
+                tenant_id=tenant_id,
+                credential_id=replacement.credential_id,
+            )
+            if existing is not None:
+                _require_secure_tunnel_rotation_state(
+                    existing,
+                    replacement=replacement,
+                    require_active=True,
+                )
+                if (
+                    credential_count != 1
+                    or existing.credential.actor_id != actor_id
+                    or existing.credential.client_id != client_id
+                    or existing.credential.transport_binding_id != transport_binding_id
+                    or existing.installation_id != installation_id
+                ):
+                    raise CredentialAdminError("credential_artifact_mismatch")
+                return _metadata_from_state(existing.credential)
+            if credential_count != 0:
+                raise CredentialAdminError("credential_reissue_not_empty")
+
+            row = (
+                await session.execute(
+                    select(
+                        Tenant.state,
+                        Actor.handle,
+                        Actor.display_name,
+                        Actor.kind,
+                        Actor.metadata_,
+                        Actor.revoked_at,
+                        Client.public_id,
+                        Client.display_name,
+                        Client.kind,
+                        Client.transport_kind,
+                        Client.scopes,
+                        Client.capability_profile,
+                        Client.revoked_at,
+                        TransportBinding.transport_kind,
+                        TransportBinding.disclosure_boundary,
+                        TransportBinding.authorized_operations,
+                        TransportBinding.valid_until,
+                        TransportInstallation.route_key,
+                        TransportInstallation.capability_profile,
+                        TransportInstallation.revoked_at,
+                    )
+                    .select_from(TransportBinding)
+                    .join(Tenant, Tenant.tenant_id == TransportBinding.tenant_id)
+                    .join(
+                        Actor,
+                        (Actor.tenant_id == TransportBinding.tenant_id)
+                        & (Actor.actor_id == TransportBinding.actor_id),
+                    )
+                    .join(
+                        Client,
+                        (Client.tenant_id == TransportBinding.tenant_id)
+                        & (Client.client_id == TransportBinding.client_id),
+                    )
+                    .join(
+                        TransportInstallation,
+                        (TransportInstallation.tenant_id == TransportBinding.tenant_id)
+                        & (
+                            TransportInstallation.installation_id
+                            == TransportBinding.installation_id
+                        ),
+                    )
+                    .where(
+                        TransportBinding.tenant_id == tenant_id,
+                        TransportBinding.actor_id == actor_id,
+                        TransportBinding.client_id == client_id,
+                        TransportBinding.transport_binding_id == transport_binding_id,
+                        TransportBinding.installation_id == installation_id,
+                    )
+                )
+            ).one_or_none()
+            if row is None:
+                raise CredentialAdminError("credential_identity_unavailable")
+            values = row._tuple()
+            public_id = cast(str, values[6])
+            prefix = "chatgpt-secure-tunnel-"
+            suffix = f"-{tenant_id}"
+            if not public_id.startswith(prefix) or not public_id.endswith(suffix):
+                raise CredentialAdminError("credential_artifact_mismatch")
+            label = public_id[len(prefix) : -len(suffix)]
+            scopes = tuple(cast(list[str], values[10]))
+            try:
+                profile = _capability_profile_from_jsonb(cast(dict[str, object], values[11]))
+            except (TypeError, ValueError):
+                raise CredentialAdminError("credential_artifact_mismatch") from None
+            if (
+                _LABEL_PATTERN.fullmatch(label) is None
+                or values[0] != "active"
+                or values[1] != f"chatgpt-{label}"
+                or values[2] != f"ChatGPT secure tunnel ({label})"
+                or values[3] != "agent"
+                or values[4] != {"provisioning_contract": "scalevault-chatgpt-secure-tunnel-v1"}
+                or values[5] is not None
+                or values[7] != f"ChatGPT secure tunnel ({label})"
+                or values[8] != "interactive"
+                or values[9] != TransportKind.SECURE_TUNNEL.value
+                or not scopes
+                or len(scopes) != len(set(scopes))
+                or not set(scopes) <= _SECURE_TUNNEL_SCOPES
+                or values[12] is not None
+                or values[13] != TransportKind.SECURE_TUNNEL.value
+                or values[14] != "openai_secure_tunnel"
+                or values[15] != {"operations": []}
+                or values[16] is not None
+                or values[17] != f"chatgpt-{label}-{tenant_id}"
+                or values[18]
+                != {
+                    "association_mode": "single_chatgpt_workspace",
+                    "contract_version": "scalevault-secure-tunnel-installation-v1",
+                }
+                or values[19] is not None
+            ):
+                raise CredentialAdminError("credential_artifact_mismatch")
+            public_hint = f"chatgpt:secure-tunnel:{label}"
+            await session.execute(
+                insert(cast(Table, ClientCredential.__table__)).values(
+                    credential_id=replacement.credential_id,
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    client_id=client_id,
+                    transport_binding_id=transport_binding_id,
+                    kind="bearer_token",
+                    public_hint=public_hint,
+                    secret_hash=replacement.secret_hash,
+                    secret_hash_key_id=replacement.secret_hash_key_id,
+                    created_at=replacement.created_at,
+                    expires_at=replacement.expires_at,
+                )
+            )
+            return CredentialMetadata(
+                credential_id=replacement.credential_id,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                client_id=client_id,
+                transport_binding_id=transport_binding_id,
+                host_label="chatgpt",
+                environment_label=label,
+                public_hint=public_hint,
+                scopes=scopes,
+                capability_profile=profile,
+                created_at=replacement.created_at,
+                expires_at=replacement.expires_at,
+                last_used_at=None,
+                revoked_at=None,
+            )
+
+        return await self._admin_transaction(tenant_id, operation)
+
     async def _admin_transaction[T](
         self,
         tenant_id: UUID,

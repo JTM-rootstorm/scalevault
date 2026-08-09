@@ -15,6 +15,7 @@ from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.archive import recovery_table_names
 from kivra_memory.storage.credentials import CredentialAdminStorageRepository
 from kivra_memory.storage.database import Database
+from kivra_memory.storage.models import Actor, Client, TransportBinding, TransportInstallation
 from psycopg import Connection
 from psycopg import sql as psycopg_sql
 from sqlalchemy import create_engine, text
@@ -1015,10 +1016,64 @@ async def test_credential_admin_role_executes_create_list_rotate_and_revoke(
 ) -> None:
     rows = seed_rows()
     tenant_id = cast(UUID, rows["tenants"][0]["tenant_id"])
+    restored_actor_id = new_uuid7()
+    restored_client_id = new_uuid7()
+    restored_binding_id = new_uuid7()
+    restored_installation_id = new_uuid7()
+    restored_at = datetime(2026, 8, 9, 19, tzinfo=UTC)
     with Session(role_secured_database.engine) as session:
         for layer in seed_model_layers():
             session.add_all(layer)
             session.flush()
+        session.add_all(
+            (
+                Actor(
+                    actor_id=restored_actor_id,
+                    tenant_id=tenant_id,
+                    handle="chatgpt-restored",
+                    display_name="ChatGPT secure tunnel (restored)",
+                    kind="agent",
+                    metadata_={"provisioning_contract": "scalevault-chatgpt-secure-tunnel-v1"},
+                    created_at=restored_at,
+                ),
+                Client(
+                    client_id=restored_client_id,
+                    tenant_id=tenant_id,
+                    public_id=f"chatgpt-secure-tunnel-restored-{tenant_id}",
+                    display_name="ChatGPT secure tunnel (restored)",
+                    kind="interactive",
+                    transport_kind="secure_tunnel",
+                    scopes=["memory.status.transport"],
+                    capability_profile={
+                        "contract_version": "scalevault-client-capability-v1",
+                        "read": None,
+                    },
+                    created_at=restored_at,
+                ),
+                TransportInstallation(
+                    installation_id=restored_installation_id,
+                    tenant_id=tenant_id,
+                    route_key=f"chatgpt-restored-{tenant_id}",
+                    capability_profile={
+                        "association_mode": "single_chatgpt_workspace",
+                        "contract_version": "scalevault-secure-tunnel-installation-v1",
+                    },
+                    enrolled_at=restored_at,
+                    health_state="unknown",
+                ),
+                TransportBinding(
+                    transport_binding_id=restored_binding_id,
+                    tenant_id=tenant_id,
+                    actor_id=restored_actor_id,
+                    client_id=restored_client_id,
+                    transport_kind="secure_tunnel",
+                    disclosure_boundary="openai_secure_tunnel",
+                    installation_id=restored_installation_id,
+                    authorized_operations={"operations": []},
+                    created_at=restored_at,
+                ),
+            )
+        )
         session.commit()
 
     password = secrets.token_urlsafe(32)
@@ -1041,6 +1096,42 @@ async def test_credential_admin_role_executes_create_list_rotate_and_revoke(
             secret_hash_key_id="role-test-v1",
             now=lambda: now,
         )
+        reissue_authorization: str | None = None
+
+        def load_or_create_reissue(proposed: str) -> str:
+            nonlocal reissue_authorization
+            reissue_authorization = reissue_authorization or proposed
+            return reissue_authorization
+
+        reissued = await service.reissue_secure_tunnel(
+            tenant_id=tenant_id,
+            actor_id=restored_actor_id,
+            client_id=restored_client_id,
+            transport_binding_id=restored_binding_id,
+            installation_id=restored_installation_id,
+            authorization_artifact=load_or_create_reissue,
+        )
+        reissue_retry = await service.reissue_secure_tunnel(
+            tenant_id=tenant_id,
+            actor_id=restored_actor_id,
+            client_id=restored_client_id,
+            transport_binding_id=restored_binding_id,
+            installation_id=restored_installation_id,
+            authorization_artifact=load_or_create_reissue,
+        )
+        assert reissue_retry.credential_id == reissued.credential_id
+        with pytest.raises(
+            RuntimeError,
+            match="credential_repository_rejected_after_secret_output",
+        ):
+            await service.reissue_secure_tunnel(
+                tenant_id=tenant_id,
+                actor_id=restored_actor_id,
+                client_id=restored_client_id,
+                transport_binding_id=restored_binding_id,
+                installation_id=restored_installation_id,
+                authorization_artifact=lambda proposed: proposed,
+            )
         issued = await service.create(
             tenant_id=tenant_id,
             host_label="role-host",

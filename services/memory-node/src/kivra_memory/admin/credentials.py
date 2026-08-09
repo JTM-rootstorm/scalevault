@@ -213,6 +213,19 @@ class CredentialAdminRepository(Protocol):
         """Rotate a secure-tunnel credential or load its exact safe retry state."""
         ...
 
+    async def reissue_secure_tunnel_credential(
+        self,
+        *,
+        tenant_id: UUID,
+        actor_id: UUID,
+        client_id: UUID,
+        transport_binding_id: UUID,
+        installation_id: UUID,
+        replacement: BearerCredentialReplacement,
+    ) -> CredentialMetadata:
+        """Fill only an archive-restored secure-tunnel credential hole."""
+        ...
+
 
 class CredentialAdminService:
     """Generate secrets in memory and pass only deterministic verifiers to persistence."""
@@ -433,6 +446,68 @@ class CredentialAdminService:
                 "credential_repository_rejected_after_secret_output"
             ) from None
         if metadata.tenant_id != tenant_id or metadata.credential_id != parsed.credential_id:
+            raise CredentialAdminError("credential_repository_invalid")
+        return metadata
+
+    async def reissue_secure_tunnel(
+        self,
+        *,
+        tenant_id: UUID,
+        actor_id: UUID,
+        client_id: UUID,
+        transport_binding_id: UUID,
+        installation_id: UUID,
+        authorization_artifact: Callable[[str], str],
+        expires_at: datetime | None = None,
+    ) -> CredentialMetadata:
+        """Reissue one bearer into an exact archive-restored identity hole."""
+
+        for name, value in (
+            ("tenant_id", tenant_id),
+            ("actor_id", actor_id),
+            ("client_id", client_id),
+            ("transport_binding_id", transport_binding_id),
+            ("installation_id", installation_id),
+        ):
+            require_uuid7(value, field_name=name)
+        created_at = _require_utc(self._now())
+        expiry = _require_expiry(expires_at, after=created_at)
+        proposed = BearerTokenCodec.issue(tenant_id, new_uuid7(), self._hasher)
+        try:
+            authorization = authorization_artifact(f"Bearer {proposed.token}")
+            parsed = BearerTokenCodec.parse_authorization(authorization)
+        except Exception:
+            raise CredentialAdminError("credential_secret_output_failed") from None
+        if parsed.tenant_id != tenant_id:
+            raise CredentialAdminError("credential_secret_output_failed")
+        replacement = BearerCredentialReplacement(
+            credential_id=parsed.credential_id,
+            tenant_id=tenant_id,
+            secret_hash=self._hasher.hash(parsed),
+            secret_hash_key_id=self._secret_hash_key_id,
+            created_at=created_at,
+            expires_at=expiry,
+        )
+        try:
+            metadata = await self._repository.reissue_secure_tunnel_credential(
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                client_id=client_id,
+                transport_binding_id=transport_binding_id,
+                installation_id=installation_id,
+                replacement=replacement,
+            )
+        except CredentialAdminError:
+            raise CredentialAdminError(
+                "credential_repository_rejected_after_secret_output"
+            ) from None
+        if (
+            metadata.tenant_id != tenant_id
+            or metadata.actor_id != actor_id
+            or metadata.client_id != client_id
+            or metadata.transport_binding_id != transport_binding_id
+            or metadata.credential_id != parsed.credential_id
+        ):
             raise CredentialAdminError("credential_repository_invalid")
         return metadata
 

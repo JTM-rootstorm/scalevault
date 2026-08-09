@@ -118,6 +118,17 @@ binding, and credential column privileges needed for this lifecycle. It cannot
 read bearer verifiers, delete identity rows, or read memory, event, evidence,
 or sealed-content payloads.
 
+ADR 0015 intentionally archives the actor, client, installation, and binding
+but excludes credential material. Disaster-recovery reissue is therefore a
+separate root-only operation, never an implicit create-or-load relaxation. It
+requires explicit tenant, actor, client, binding, and installation UUIDv7
+selectors; proves the exact active ADR 0019 identity, profile, scope, and empty-
+operations contract; and requires zero credential rows for that client and
+binding. It then inserts one new bearer credential only. A retry may return
+that one replacement only when the protected artifact UUID and safe state
+match. Any prior credential row, partial identity, drift, or selector mismatch
+fails closed. The operation cannot alter or delete restored identity rows.
+
 ## Consequences
 
 - ChatGPT receives a useful read/status surface without a command principal.

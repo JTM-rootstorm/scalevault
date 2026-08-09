@@ -154,6 +154,25 @@ Exercise a bounded synthetic read, verify `memory_transport_status` reports the
 pinned secure-tunnel installation, and verify mutation tools are absent. Keep
 the unit disabled if any check fails.
 
+## Disaster-recovery reissue
+
+The signed archive restores the secure-tunnel actor, client, installation, and
+binding, but intentionally excludes bearer credential rows and verifiers. Keep
+the tunnel and ChatGPT route disabled after a restore. A root operator may fill
+that exact credential hole with the `reissue-secure-tunnel` subcommand of
+`kivra-memory-credential-admin`, supplying the restored tenant, actor, client,
+transport binding, and installation UUIDv7 values plus a new `--secret-output`
+path.
+
+The command accepts only an exact active ADR 0019 identity with the closed
+single-workspace installation profile, read/status-only scopes, and empty
+binding operations. It requires zero credential rows for the selected client
+and binding, inserts one new bearer only, and never repairs, deletes, or
+recreates identity rows. Existing credentials or any drift are hard failures.
+The protected output follows the same exclusive-create and retry rules as
+initial issuance. Run the authenticated MCP probe with the new artifact before
+reenabling the route or tunnel.
+
 This tunnel is for private developer-mode access and is not a public plugin
 endpoint. See the official [Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 and the official [tunnel-client configuration reference](https://github.com/openai/tunnel-client/blob/master/docs/configuration.md).

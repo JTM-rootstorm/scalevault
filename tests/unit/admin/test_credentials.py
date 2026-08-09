@@ -177,6 +177,35 @@ class _Repository:
             rotated_at=rotated_at,
         )
 
+    async def reissue_secure_tunnel_credential(
+        self,
+        *,
+        tenant_id: UUID,
+        actor_id: UUID,
+        client_id: UUID,
+        transport_binding_id: UUID,
+        installation_id: UUID,
+        replacement: BearerCredentialReplacement,
+    ) -> CredentialMetadata:
+        del installation_id
+        self.replacement = replacement
+        return CredentialMetadata(
+            credential_id=replacement.credential_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            client_id=client_id,
+            transport_binding_id=transport_binding_id,
+            host_label="chatgpt",
+            environment_label="workspace-one",
+            public_hint="chatgpt:secure-tunnel:workspace-one",
+            scopes=("memory.status.transport",),
+            capability_profile=_capability(readable=False),
+            created_at=replacement.created_at,
+            expires_at=replacement.expires_at,
+            last_used_at=None,
+            revoked_at=None,
+        )
+
 
 def _service(repository: _Repository) -> CredentialAdminService:
     return CredentialAdminService(
@@ -321,6 +350,38 @@ async def test_secure_tunnel_rotation_publishes_authorization_before_repository(
     assert rotated.credential_id == BearerTokenCodec.parse_authorization(artifact[0]).credential_id
     assert repository.replacement.credential_id == rotated.credential_id
     assert artifact[0] not in repr(repository.replacement)
+
+
+@pytest.mark.asyncio
+async def test_secure_tunnel_reissue_publishes_artifact_for_exact_restored_selectors() -> None:
+    repository = _Repository()
+    service = _service(repository)
+    artifact: list[str] = []
+
+    def publish(proposed: str) -> str:
+        artifact.append(proposed)
+        return proposed
+
+    tenant_id = new_uuid7()
+    actor_id = new_uuid7()
+    client_id = new_uuid7()
+    binding_id = new_uuid7()
+    record = await service.reissue_secure_tunnel(
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        client_id=client_id,
+        transport_binding_id=binding_id,
+        installation_id=new_uuid7(),
+        authorization_artifact=publish,
+    )
+
+    assert artifact[0].startswith("Bearer svb1.")
+    assert record.tenant_id == tenant_id
+    assert record.actor_id == actor_id
+    assert record.client_id == client_id
+    assert record.transport_binding_id == binding_id
+    assert repository.replacement is not None
+    assert repository.replacement.credential_id == record.credential_id
 
 
 @pytest.mark.asyncio
