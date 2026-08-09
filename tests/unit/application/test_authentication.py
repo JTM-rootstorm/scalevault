@@ -123,7 +123,9 @@ async def test_authentication_maps_storage_authority_to_all_typed_identities() -
 
     lookup.assert_awaited_once_with(TENANT_ID, CREDENTIAL_ID)
     successful_use.assert_awaited_once()
-    assert successful_use.await_args.kwargs == {
+    successful_use_call = successful_use.await_args
+    assert successful_use_call is not None
+    assert successful_use_call.kwargs == {
         "transport_kind": TransportKind.DIRECT_PRIVATE,
         "installation_id": None,
         "used_at": NOW,

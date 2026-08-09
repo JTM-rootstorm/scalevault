@@ -79,7 +79,7 @@ async def test_context_is_isolated_between_concurrent_tasks() -> None:
 
     results = await asyncio.gather(observe(first), observe(second))
 
-    assert results == [first, second]
+    assert tuple(results) == (first, second)
     assert current_authenticated_request() is None
 
 
