@@ -1,0 +1,61 @@
+{
+    "schema_version": 1,
+    "profile_id": "chatgpt_pro_read_github_propose",
+    "surface": "chatgpt_web_private_app",
+    "transport": {
+        "kind": "secure_mcp_tunnel",
+        "endpoint": "operator_configured",
+        "public_inbound_required": false
+    },
+    "mcp": {
+        "discovery_policy": "exact_allowlist",
+        "allowed_tools": [
+            "memory_context_pack",
+            "memory_search",
+            "memory_get",
+            "memory_timeline",
+            "memory_conflicts",
+            "memory_lineage",
+            "memory_selection_history",
+            "memory_ingress_status",
+            "memory_transport_status",
+            "memory_selection_decisions"
+        ],
+        "required_annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        },
+        "forbidden_tools": [
+            "memory_nominate",
+            "memory_observe",
+            "memory_remember",
+            "memory_revise",
+            "memory_link",
+            "memory_open_conflict",
+            "memory_resolve_conflict",
+            "memory_retire",
+            "memory_forget"
+        ],
+        "on_discovery_mismatch": "disable_profile"
+    },
+    "write_fallback": {
+        "availability": "operator_configured",
+        "provider": "github_connected_app",
+        "repository": "operator_configured_private_repository",
+        "contract": "chatgpt-memory-proposal-v2",
+        "operation": "nominate",
+        "action": "create_file",
+        "path_template": "ingress/v2/{installation_id}/{yyyy}/{mm}/{proposal_id}.json",
+        "create_only": true,
+        "status_tool": "memory_ingress_status",
+        "canonical_commit_claim": "prohibited"
+    },
+    "privacy": {
+        "maximum_proposal_sensitivity": 0,
+        "github_is_third_party_transport": true,
+        "private_network_coordinates_in_artifact": false,
+        "credentials_in_artifact": false
+    }
+}

@@ -1,0 +1,24 @@
+{
+    "name": "continuity-archive",
+    "version": "0.2.0",
+    "description": "Retrieve bounded persona continuity from a private ScaleVault node and prepare immutable GitHub proposals when direct writes are unavailable.",
+    "author": {
+        "name": "ScaleVault maintainers"
+    },
+    "license": "AGPL-3.0-only",
+    "keywords": ["continuity", "memory", "mcp", "privacy"],
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Continuity Archive",
+        "shortDescription": "Private continuity retrieval with proposal fallback",
+        "longDescription": "Retrieve bounded, provenance-aware continuity through a private read-only MCP profile. When explicitly configured, durable write intent is routed to an immutable GitHub proposal for canonical review and ingestion.",
+        "developerName": "ScaleVault maintainers",
+        "category": "Productivity",
+        "capabilities": ["Interactive", "Read"],
+        "defaultPrompt": [
+            "Retrieve a bounded continuity context pack for this conversation",
+            "Find prior project decisions relevant to this task",
+            "Check the status of a queued continuity proposal"
+        ]
+    }
+}

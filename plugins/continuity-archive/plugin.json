@@ -1,12 +1,14 @@
 {
     "schema_version": 1,
     "name": "Continuity Archive",
-    "description": "Connects supported clients to a user-controlled continuity node.",
+    "description": "Private, read-only continuity retrieval with an optional immutable GitHub proposal fallback.",
     "privacy": {
         "memory_node": "user_hosted",
-        "relay_persists_payloads": false,
+        "private_transport": "secure_mcp_tunnel",
+        "public_inbound_required": false,
         "github_bridge": "optional_third_party_transport"
     },
-    "capability_profile": "chatgpt_public_plugin_detected",
-    "mcp_endpoint_template": "https://{installation_id}.memory-relay.example/mcp"
+    "capability_profile": "chatgpt_pro_read_github_propose",
+    "profiles": ["./profiles/chatgpt-pro-private.json"],
+    "skills": ["./skills/persona-continuity/SKILL.md"]
 }
