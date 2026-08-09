@@ -263,7 +263,22 @@ BEGIN
             valid_until
         ) ON TABLE public.transport_bindings TO kivra_memory_credential_admin;
     END IF;
-    IF pg_catalog.to_regclass('public.client_credentials') IS NOT NULL THEN
+    -- These attribution and audit columns arrive in migration 0008. The
+    -- bootstrap must remain safe at older revisions so it can establish the
+    -- migration owner before Alembic advances the schema.
+    IF pg_catalog.to_regclass('public.client_credentials') IS NOT NULL
+       AND (
+            SELECT count(*) = 4
+            FROM pg_catalog.pg_attribute
+            WHERE attrelid = pg_catalog.to_regclass('public.client_credentials')
+              AND attname = ANY (ARRAY[
+                  'actor_id',
+                  'transport_binding_id',
+                  'secret_hash_key_id',
+                  'last_used_at'
+              ])
+              AND NOT attisdropped
+       ) THEN
         GRANT SELECT (
             credential_id,
             tenant_id,
@@ -338,7 +353,14 @@ BEGIN
             destruction_requested_at
         ) ON TABLE public.memory_content_keys TO kivra_memory_api;
     END IF;
-    IF pg_catalog.to_regclass('public.client_credentials') IS NOT NULL THEN
+    IF pg_catalog.to_regclass('public.client_credentials') IS NOT NULL
+       AND EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_attribute
+            WHERE attrelid = pg_catalog.to_regclass('public.client_credentials')
+              AND attname = 'last_used_at'
+              AND NOT attisdropped
+       ) THEN
         GRANT UPDATE (
             last_used_at
         ) ON TABLE public.client_credentials TO kivra_memory_api;

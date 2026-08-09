@@ -247,6 +247,63 @@ def test_role_bootstrap_upgrades_m1_ownership_and_is_idempotent(
     ]
 
 
+def test_role_bootstrap_is_safe_before_migrating_an_existing_0004_database(
+    postgresql_server: PostgreSQLTestServer,
+    alembic_runner: AlembicRunner,
+) -> None:
+    bootstrap_required_extensions(postgresql_server.database_url)
+    alembic_runner.upgrade("0004_genesis_import_provenance")
+
+    with alembic_runner.engine.begin() as connection:
+        credential_columns = {
+            str(column)
+            for column in connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' "
+                    "AND table_name = 'client_credentials'"
+                )
+            ).scalars()
+        }
+
+    assert {
+        "actor_id",
+        "transport_binding_id",
+        "secret_hash_key_id",
+        "last_used_at",
+    }.isdisjoint(credential_columns)
+
+    run_operator_sql_file(postgresql_server, ROLE_BOOTSTRAP)
+
+    with alembic_runner.engine.begin() as connection:
+        assert not connection.execute(
+            text(
+                "SELECT has_table_privilege('kivra_memory_credential_admin', "
+                "'public.client_credentials', 'SELECT,INSERT,UPDATE')"
+            )
+        ).scalar_one()
+
+    alembic_runner.upgrade_as_scalevault_migrator()
+    run_operator_sql_file(postgresql_server, ROLE_BOOTSTRAP)
+
+    with alembic_runner.engine.begin() as connection:
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
+            "0008_codex_credentials"
+        )
+        assert connection.execute(
+            text(
+                "SELECT has_column_privilege('kivra_memory_credential_admin', "
+                "'public.client_credentials', 'actor_id', 'SELECT')"
+            )
+        ).scalar_one()
+        assert connection.execute(
+            text(
+                "SELECT has_column_privilege('kivra_memory_api', "
+                "'public.client_credentials', 'last_used_at', 'UPDATE')"
+            )
+        ).scalar_one()
+
+
 def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
     role_secured_database: AlembicRunner,
 ) -> None:
