@@ -20,6 +20,9 @@ documentation and do not change these decisions implicitly.
 | [0012](0012-versioned-local-embedding-model.md) | Accepted | Use a pinned local 384-dimensional MiniLM model with versioned derived storage and explicit activation. |
 | [0013](0013-versioned-selection-policy-and-lifecycle.md) | Accepted | Use a hashed declarative selection profile, immutable decisions, replayable candidate lifecycle, and operator-local private seeds. |
 | [0014](0014-genesis-first-import-contract.md) | Accepted | Import the exact Genesis snapshot through immutable provenance, a narrow compatibility correction, and SelectionEngine-only policy gates. |
+| [0015](0015-deterministic-signed-archive-and-restore.md) | Accepted | Export and restore a deterministic, signed, single-writer recovery archive with external trust anchors. |
+| [0016](0016-github-ingress-v2-runtime.md) | Accepted | Poll immutable GitHub proposal-v2 objects through the policy engine with quarantine and a non-sensitive transport boundary. |
+| [0017](0017-sealed-canonical-memory-content.md) | Accepted | Store protected content only in versioned authenticated envelopes backed by external per-memory keys. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries
