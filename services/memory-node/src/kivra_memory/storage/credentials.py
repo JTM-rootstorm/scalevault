@@ -20,6 +20,7 @@ from kivra_memory.admin.credentials import (
     CodexInstallationIssuance,
     CredentialAdminError,
     CredentialMetadata,
+    SecureTunnelIssuance,
 )
 from kivra_memory.application.authentication import CredentialIdentity, CredentialLookup
 from kivra_memory.auth import ClientCapabilityProfile
@@ -32,12 +33,19 @@ from kivra_memory.storage.models import (
     ClientCredential,
     Tenant,
     TransportBinding,
+    TransportInstallation,
 )
 from kivra_memory.storage.transactions import run_serializable_transaction
 
 _VERIFIER_PATTERN = re.compile(r"hmac-sha256-v1:[A-Za-z0-9_-]{43}\Z")
 _KEY_ID_PATTERN = re.compile(r"[a-z][a-z0-9_.-]{0,63}\Z")
 _LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\Z")
+_SECURE_TUNNEL_SCOPES = frozenset(
+    scope
+    for scope in ALLOWED_CLIENT_SCOPES
+    if scope.startswith("memory.read.")
+    or scope in {"memory.status.ingress", "memory.status.transport"}
+)
 
 
 class CredentialStorageError(RuntimeError):
@@ -75,6 +83,7 @@ class _CredentialState:
     actor: Actor
     client: Client
     binding: TransportBinding
+    installation: TransportInstallation | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +101,30 @@ class _AdminCredentialState:
     client_scopes: tuple[str, ...]
     capability_profile: dict[str, object]
     actor_metadata: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _SecureTunnelAdminState:
+    credential: _AdminCredentialState
+    secret_hash_key_id: str | None
+    tenant_state: str
+    actor_handle: str
+    actor_display_name: str
+    actor_kind: str
+    actor_revoked_at: datetime | None
+    client_public_id: str
+    client_display_name: str
+    client_kind: str
+    client_transport_kind: str
+    client_revoked_at: datetime | None
+    binding_transport_kind: str
+    disclosure_boundary: str
+    installation_id: UUID | None
+    authorized_operations: dict[str, object]
+    binding_valid_until: datetime | None
+    installation_route_key: str
+    installation_capability_profile: dict[str, object]
+    installation_revoked_at: datetime | None
 
 
 type _AdminCredentialRow = tuple[
@@ -314,6 +347,156 @@ class CredentialAdminStorageRepository:
 
         return await self._admin_transaction(issuance.tenant_id, operation)
 
+    async def create_or_load_secure_tunnel(
+        self,
+        issuance: SecureTunnelIssuance,
+    ) -> CredentialMetadata:
+        _validate_secure_tunnel_issuance(issuance)
+
+        async def operation(session: AsyncSession) -> CredentialMetadata:
+            await session.execute(
+                select(
+                    func.pg_advisory_xact_lock(func.hashtextextended(issuance.client_public_id, 0))
+                )
+            )
+            existing = await _load_secure_tunnel_admin_state(
+                session,
+                tenant_id=issuance.tenant_id,
+                credential_id=issuance.credential_id,
+            )
+            if existing is not None:
+                _require_matching_secure_tunnel_state(existing, issuance)
+                return _secure_tunnel_metadata(existing.credential, issuance.tunnel_label)
+
+            tenant_id = await session.scalar(
+                select(Tenant.tenant_id).where(
+                    Tenant.tenant_id == issuance.tenant_id,
+                    Tenant.state == "active",
+                )
+            )
+            if tenant_id is None:
+                raise CredentialAdminError("credential_identity_unavailable")
+
+            actor = (
+                await session.execute(
+                    select(
+                        Actor.handle,
+                        Actor.display_name,
+                        Actor.kind,
+                        Actor.metadata_,
+                        Actor.revoked_at,
+                    ).where(
+                        Actor.tenant_id == issuance.tenant_id,
+                        Actor.actor_id == issuance.actor_id,
+                    )
+                )
+            ).one_or_none()
+            if actor is None:
+                await session.execute(
+                    insert(cast(Table, Actor.__table__)).values(
+                        actor_id=issuance.actor_id,
+                        tenant_id=issuance.tenant_id,
+                        handle=issuance.actor_handle,
+                        display_name=issuance.actor_display_name,
+                        kind="agent",
+                        metadata=issuance.actor_metadata,
+                        created_at=issuance.created_at,
+                    )
+                )
+            elif actor._tuple() != (
+                issuance.actor_handle,
+                issuance.actor_display_name,
+                "agent",
+                issuance.actor_metadata,
+                None,
+            ):
+                raise CredentialAdminError("credential_identity_unavailable")
+
+            installation = (
+                await session.execute(
+                    select(
+                        TransportInstallation.route_key,
+                        TransportInstallation.capability_profile,
+                        TransportInstallation.revoked_at,
+                    ).where(
+                        TransportInstallation.tenant_id == issuance.tenant_id,
+                        TransportInstallation.installation_id == issuance.installation_id,
+                    )
+                )
+            ).one_or_none()
+            if installation is None:
+                await session.execute(
+                    insert(cast(Table, TransportInstallation.__table__)).values(
+                        installation_id=issuance.installation_id,
+                        tenant_id=issuance.tenant_id,
+                        route_key=issuance.installation_route_key,
+                        capability_profile=issuance.installation_capability_profile,
+                        enrolled_at=issuance.created_at,
+                        health_state="unknown",
+                    )
+                )
+            elif installation._tuple() != (
+                issuance.installation_route_key,
+                issuance.installation_capability_profile,
+                None,
+            ):
+                raise CredentialAdminError("credential_identity_unavailable")
+
+            existing_client = await session.scalar(
+                select(Client.client_id).where(
+                    Client.public_id == issuance.client_public_id,
+                    Client.tenant_id == issuance.tenant_id,
+                )
+            )
+            if existing_client is not None:
+                raise CredentialAdminError("credential_artifact_mismatch")
+
+            await session.execute(
+                insert(cast(Table, Client.__table__)).values(
+                    client_id=issuance.client_id,
+                    tenant_id=issuance.tenant_id,
+                    public_id=issuance.client_public_id,
+                    display_name=issuance.client_display_name,
+                    kind="interactive",
+                    transport_kind=TransportKind.SECURE_TUNNEL.value,
+                    scopes=list(issuance.client_scopes),
+                    capability_profile=issuance.client_capability_profile.model_dump(mode="json"),
+                    created_at=issuance.created_at,
+                )
+            )
+            await session.execute(
+                insert(cast(Table, TransportBinding.__table__)).values(
+                    transport_binding_id=issuance.transport_binding_id,
+                    tenant_id=issuance.tenant_id,
+                    actor_id=issuance.actor_id,
+                    client_id=issuance.client_id,
+                    transport_kind=TransportKind.SECURE_TUNNEL.value,
+                    disclosure_boundary="openai_secure_tunnel",
+                    installation_id=issuance.installation_id,
+                    authorized_operations={"operations": []},
+                    created_at=issuance.created_at,
+                    valid_until=None,
+                )
+            )
+            await session.execute(
+                insert(cast(Table, ClientCredential.__table__)).values(
+                    credential_id=issuance.credential_id,
+                    tenant_id=issuance.tenant_id,
+                    actor_id=issuance.actor_id,
+                    client_id=issuance.client_id,
+                    transport_binding_id=issuance.transport_binding_id,
+                    kind="bearer_token",
+                    public_hint=issuance.public_hint,
+                    secret_hash=issuance.secret_hash,
+                    secret_hash_key_id=issuance.secret_hash_key_id,
+                    created_at=issuance.created_at,
+                    expires_at=issuance.expires_at,
+                )
+            )
+            return _secure_tunnel_metadata_from_issuance(issuance)
+
+        return await self._admin_transaction(issuance.tenant_id, operation)
+
     async def list_bearer_credentials(
         self,
         *,
@@ -434,6 +617,98 @@ class CredentialAdminStorageRepository:
 
         return await self._admin_transaction(tenant_id, operation)
 
+    async def rotate_or_load_secure_tunnel_credential(
+        self,
+        *,
+        tenant_id: UUID,
+        credential_id: UUID,
+        replacement: BearerCredentialReplacement,
+        rotated_at: datetime,
+    ) -> CredentialMetadata:
+        _require_identifier(tenant_id, "tenant_id")
+        _require_identifier(credential_id, "credential_id")
+        _validate_replacement(replacement, tenant_id=tenant_id)
+        timestamp = _require_admin_timestamp(rotated_at)
+        if timestamp != replacement.created_at or replacement.credential_id == credential_id:
+            raise CredentialAdminError("credential_request_invalid")
+
+        async def operation(session: AsyncSession) -> CredentialMetadata:
+            replacement_state = await _load_secure_tunnel_admin_state(
+                session,
+                tenant_id=tenant_id,
+                credential_id=replacement.credential_id,
+            )
+            if replacement_state is not None:
+                _require_secure_tunnel_rotation_state(
+                    replacement_state,
+                    replacement=replacement,
+                    require_active=True,
+                )
+                old = await _load_admin_credential(
+                    session,
+                    tenant_id=tenant_id,
+                    credential_id=credential_id,
+                )
+                if (
+                    old is None
+                    or old.revoked_at is None
+                    or old.actor_id != replacement_state.credential.actor_id
+                    or old.client_id != replacement_state.credential.client_id
+                    or old.transport_binding_id != replacement_state.credential.transport_binding_id
+                    or old.public_hint != replacement_state.credential.public_hint
+                ):
+                    raise CredentialAdminError("credential_artifact_mismatch")
+                return _metadata_from_state(replacement_state.credential)
+
+            old_state = await _load_secure_tunnel_admin_state(
+                session,
+                tenant_id=tenant_id,
+                credential_id=credential_id,
+            )
+            if old_state is None:
+                raise CredentialAdminError("credential_not_found")
+            _require_secure_tunnel_rotation_state(
+                old_state,
+                replacement=None,
+                require_active=True,
+            )
+            await session.execute(
+                update(ClientCredential)
+                .where(
+                    ClientCredential.tenant_id == tenant_id,
+                    ClientCredential.credential_id == credential_id,
+                )
+                .values(revoked_at=timestamp)
+            )
+            old = old_state.credential
+            await session.execute(
+                insert(cast(Table, ClientCredential.__table__)).values(
+                    credential_id=replacement.credential_id,
+                    tenant_id=old.tenant_id,
+                    actor_id=old.actor_id,
+                    client_id=old.client_id,
+                    transport_binding_id=old.transport_binding_id,
+                    kind="bearer_token",
+                    public_hint=old.public_hint,
+                    secret_hash=replacement.secret_hash,
+                    secret_hash_key_id=replacement.secret_hash_key_id,
+                    created_at=replacement.created_at,
+                    expires_at=replacement.expires_at,
+                )
+            )
+            return _metadata_from_state(
+                replace(
+                    old,
+                    credential_id=replacement.credential_id,
+                    created_at=replacement.created_at,
+                    expires_at=replacement.expires_at,
+                    last_used_at=None,
+                    revoked_at=None,
+                )
+            )
+
+        return await self._admin_transaction(tenant_id, operation)
+
     async def _admin_transaction[T](
         self,
         tenant_id: UUID,
@@ -459,7 +734,14 @@ async def _load_state(
     for_update: bool,
 ) -> _CredentialState | None:
     statement = (
-        select(ClientCredential, Tenant, Actor, Client, TransportBinding)
+        select(
+            ClientCredential,
+            Tenant,
+            Actor,
+            Client,
+            TransportBinding,
+            TransportInstallation,
+        )
         .join(Tenant, Tenant.tenant_id == ClientCredential.tenant_id)
         .join(
             Actor,
@@ -478,6 +760,11 @@ async def _load_state(
             & (TransportBinding.actor_id == ClientCredential.actor_id)
             & (TransportBinding.client_id == ClientCredential.client_id),
         )
+        .outerjoin(
+            TransportInstallation,
+            (TransportInstallation.tenant_id == TransportBinding.tenant_id)
+            & (TransportInstallation.installation_id == TransportBinding.installation_id),
+        )
         .where(
             ClientCredential.tenant_id == tenant_id,
             ClientCredential.credential_id == credential_id,
@@ -488,13 +775,14 @@ async def _load_state(
     row = (await session.execute(statement)).one_or_none()
     if row is None:
         return None
-    credential, tenant, actor, client, binding = row
+    credential, tenant, actor, client, binding, installation = row
     return _CredentialState(
         credential=credential,
         tenant=tenant,
         actor=actor,
         client=client,
         binding=binding,
+        installation=installation,
     )
 
 
@@ -508,7 +796,7 @@ def _state_is_active(
     credential = state.credential
     binding = state.binding
     client = state.client
-    return bool(
+    common_active = bool(
         credential.kind == "bearer_token"
         and credential.secret_hash is not None
         and credential.secret_hash_key_id is not None
@@ -516,18 +804,48 @@ def _state_is_active(
         and (credential.expires_at is None or credential.expires_at > used_at)
         and credential.created_at <= used_at
         and state.tenant.state == "active"
-        and state.actor.kind == "agent"
-        and state.actor.metadata_.get("provisioning_contract") == "scalevault-codex-installation-v1"
         and state.actor.revoked_at is None
-        and client.kind == "interactive"
         and client.revoked_at is None
-        and transport_kind is TransportKind.DIRECT_PRIVATE
-        and installation_id is None
         and client.transport_kind == transport_kind.value
         and binding.transport_kind == transport_kind.value
-        and binding.disclosure_boundary == "private_node"
-        and binding.installation_id is None
         and (binding.valid_until is None or binding.valid_until > used_at)
+    )
+    if not common_active or client.kind != "interactive":
+        return False
+    if transport_kind is TransportKind.DIRECT_PRIVATE:
+        return bool(
+            state.actor.kind == "agent"
+            and state.actor.metadata_.get("provisioning_contract")
+            == "scalevault-codex-installation-v1"
+            and installation_id is None
+            and binding.disclosure_boundary == "private_node"
+            and binding.installation_id is None
+            and state.installation is None
+        )
+    if transport_kind is not TransportKind.SECURE_TUNNEL or installation_id is None:
+        return False
+    installation = state.installation
+    scopes = tuple(client.scopes)
+    operations = binding.authorized_operations
+    return bool(
+        state.actor.kind == "agent"
+        and state.actor.metadata_.get("provisioning_contract")
+        == "scalevault-chatgpt-secure-tunnel-v1"
+        and binding.disclosure_boundary == "openai_secure_tunnel"
+        and binding.installation_id == installation_id
+        and installation is not None
+        and installation.installation_id == installation_id
+        and installation.revoked_at is None
+        and installation.enrolled_at <= used_at
+        and installation.capability_profile
+        == {
+            "association_mode": "single_chatgpt_workspace",
+            "contract_version": "scalevault-secure-tunnel-installation-v1",
+        }
+        and scopes
+        and len(scopes) == len(set(scopes))
+        and set(scopes) <= _SECURE_TUNNEL_SCOPES
+        and operations == {"operations": []}
     )
 
 
@@ -620,6 +938,95 @@ async def _load_admin_credential(
     return _admin_state(row)
 
 
+async def _load_secure_tunnel_admin_state(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    credential_id: UUID,
+) -> _SecureTunnelAdminState | None:
+    row = (
+        await session.execute(
+            select(
+                *_admin_credential_statement().selected_columns,
+                ClientCredential.secret_hash_key_id,
+                Tenant.state,
+                Actor.handle,
+                Actor.display_name,
+                Actor.kind,
+                Actor.revoked_at,
+                Client.public_id,
+                Client.display_name,
+                Client.kind,
+                Client.transport_kind,
+                Client.revoked_at,
+                TransportBinding.transport_kind,
+                TransportBinding.disclosure_boundary,
+                TransportBinding.installation_id,
+                TransportBinding.authorized_operations,
+                TransportBinding.valid_until,
+                TransportInstallation.route_key,
+                TransportInstallation.capability_profile,
+                TransportInstallation.revoked_at,
+            )
+            .select_from(ClientCredential)
+            .join(Tenant, Tenant.tenant_id == ClientCredential.tenant_id)
+            .join(
+                Actor,
+                (Actor.tenant_id == ClientCredential.tenant_id)
+                & (Actor.actor_id == ClientCredential.actor_id),
+            )
+            .join(
+                Client,
+                (Client.tenant_id == ClientCredential.tenant_id)
+                & (Client.client_id == ClientCredential.client_id),
+            )
+            .join(
+                TransportBinding,
+                (TransportBinding.tenant_id == ClientCredential.tenant_id)
+                & (TransportBinding.transport_binding_id == ClientCredential.transport_binding_id)
+                & (TransportBinding.actor_id == ClientCredential.actor_id)
+                & (TransportBinding.client_id == ClientCredential.client_id),
+            )
+            .join(
+                TransportInstallation,
+                (TransportInstallation.tenant_id == TransportBinding.tenant_id)
+                & (TransportInstallation.installation_id == TransportBinding.installation_id),
+            )
+            .where(
+                ClientCredential.tenant_id == tenant_id,
+                ClientCredential.credential_id == credential_id,
+                ClientCredential.kind == "bearer_token",
+            )
+            .with_for_update(of=ClientCredential)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    values = row._tuple()
+    return _SecureTunnelAdminState(
+        credential=_admin_state_values(values[:13]),
+        secret_hash_key_id=values[13],
+        tenant_state=values[14],
+        actor_handle=values[15],
+        actor_display_name=values[16],
+        actor_kind=values[17],
+        actor_revoked_at=values[18],
+        client_public_id=values[19],
+        client_display_name=values[20],
+        client_kind=values[21],
+        client_transport_kind=values[22],
+        client_revoked_at=values[23],
+        binding_transport_kind=values[24],
+        disclosure_boundary=values[25],
+        installation_id=values[26],
+        authorized_operations=values[27],
+        binding_valid_until=values[28],
+        installation_route_key=values[29],
+        installation_capability_profile=values[30],
+        installation_revoked_at=values[31],
+    )
+
+
 def _admin_credential_statement() -> Select[_AdminCredentialRow]:
     return (
         select(
@@ -651,21 +1058,24 @@ def _admin_credential_statement() -> Select[_AdminCredentialRow]:
 
 
 def _admin_state(row: Row[_AdminCredentialRow]) -> _AdminCredentialState:
-    values = row._tuple()
+    return _admin_state_values(row._tuple())
+
+
+def _admin_state_values(values: tuple[object, ...]) -> _AdminCredentialState:
     return _AdminCredentialState(
-        credential_id=values[0],
-        tenant_id=values[1],
-        actor_id=values[2],
-        client_id=values[3],
-        transport_binding_id=values[4],
-        public_hint=values[5],
-        created_at=values[6],
-        expires_at=values[7],
-        last_used_at=values[8],
-        revoked_at=values[9],
-        client_scopes=tuple(values[10]),
-        capability_profile=values[11],
-        actor_metadata=values[12],
+        credential_id=cast(UUID, values[0]),
+        tenant_id=cast(UUID, values[1]),
+        actor_id=cast(UUID, values[2]),
+        client_id=cast(UUID, values[3]),
+        transport_binding_id=cast(UUID, values[4]),
+        public_hint=cast(str | None, values[5]),
+        created_at=cast(datetime, values[6]),
+        expires_at=cast(datetime | None, values[7]),
+        last_used_at=cast(datetime | None, values[8]),
+        revoked_at=cast(datetime | None, values[9]),
+        client_scopes=tuple(cast(list[str], values[10])),
+        capability_profile=cast(dict[str, object], values[11]),
+        actor_metadata=cast(dict[str, object], values[12]),
     )
 
 
@@ -688,8 +1098,156 @@ def _metadata_from_issuance(issuance: CodexInstallationIssuance) -> CredentialMe
     )
 
 
+def _secure_tunnel_metadata_from_issuance(
+    issuance: SecureTunnelIssuance,
+) -> CredentialMetadata:
+    return CredentialMetadata(
+        credential_id=issuance.credential_id,
+        tenant_id=issuance.tenant_id,
+        actor_id=issuance.actor_id,
+        client_id=issuance.client_id,
+        transport_binding_id=issuance.transport_binding_id,
+        host_label="chatgpt",
+        environment_label=issuance.tunnel_label,
+        public_hint=issuance.public_hint,
+        scopes=issuance.client_scopes,
+        capability_profile=issuance.client_capability_profile,
+        created_at=issuance.created_at,
+        expires_at=issuance.expires_at,
+        last_used_at=None,
+        revoked_at=None,
+    )
+
+
+def _secure_tunnel_metadata(
+    state: _AdminCredentialState,
+    tunnel_label: str,
+) -> CredentialMetadata:
+    try:
+        profile = _capability_profile_from_jsonb(state.capability_profile)
+    except (TypeError, ValueError):
+        raise CredentialAdminError("credential_metadata_invalid") from None
+    return CredentialMetadata(
+        credential_id=state.credential_id,
+        tenant_id=state.tenant_id,
+        actor_id=state.actor_id,
+        client_id=state.client_id,
+        transport_binding_id=state.transport_binding_id,
+        host_label="chatgpt",
+        environment_label=tunnel_label,
+        public_hint=state.public_hint or "",
+        scopes=state.client_scopes,
+        capability_profile=profile,
+        created_at=state.created_at,
+        expires_at=state.expires_at,
+        last_used_at=state.last_used_at,
+        revoked_at=state.revoked_at,
+    )
+
+
+def _require_matching_secure_tunnel_state(
+    state: _SecureTunnelAdminState,
+    issuance: SecureTunnelIssuance,
+) -> None:
+    # The credential-admin role deliberately cannot SELECT the verifier. Retry
+    # identity is the protected artifact's credential UUID plus this complete
+    # safe immutable projection and the expected verifier key identifier. A
+    # real authenticated read smoke verifies the stored HMAC before activation.
+    credential = state.credential
+    try:
+        profile = _capability_profile_from_jsonb(credential.capability_profile)
+    except (TypeError, ValueError):
+        raise CredentialAdminError("credential_artifact_mismatch") from None
+    if (
+        credential.tenant_id != issuance.tenant_id
+        or credential.actor_id != issuance.actor_id
+        or state.tenant_state != "active"
+        or state.actor_handle != issuance.actor_handle
+        or state.actor_display_name != issuance.actor_display_name
+        or state.actor_kind != "agent"
+        or credential.actor_metadata != issuance.actor_metadata
+        or state.actor_revoked_at is not None
+        or state.client_kind != "interactive"
+        or state.client_transport_kind != TransportKind.SECURE_TUNNEL.value
+        or state.client_public_id != issuance.client_public_id
+        or state.client_display_name != issuance.client_display_name
+        or credential.client_scopes != issuance.client_scopes
+        or profile != issuance.client_capability_profile
+        or state.client_revoked_at is not None
+        or state.binding_transport_kind != TransportKind.SECURE_TUNNEL.value
+        or state.disclosure_boundary != "openai_secure_tunnel"
+        or state.installation_id != issuance.installation_id
+        or state.authorized_operations != {"operations": []}
+        or state.binding_valid_until is not None
+        or state.installation_route_key != issuance.installation_route_key
+        or state.installation_capability_profile != issuance.installation_capability_profile
+        or state.installation_revoked_at is not None
+        or credential.public_hint != issuance.public_hint
+        or state.secret_hash_key_id != issuance.secret_hash_key_id
+        or credential.expires_at != issuance.expires_at
+        or credential.revoked_at is not None
+    ):
+        raise CredentialAdminError("credential_artifact_mismatch")
+
+
+def _require_secure_tunnel_rotation_state(
+    state: _SecureTunnelAdminState,
+    *,
+    replacement: BearerCredentialReplacement | None,
+    require_active: bool,
+) -> None:
+    credential = state.credential
+    try:
+        _capability_profile_from_jsonb(credential.capability_profile)
+    except (TypeError, ValueError):
+        raise CredentialAdminError("credential_artifact_mismatch") from None
+    scopes = credential.client_scopes
+    if (
+        state.tenant_state != "active"
+        or state.actor_kind != "agent"
+        or credential.actor_metadata
+        != {"provisioning_contract": "scalevault-chatgpt-secure-tunnel-v1"}
+        or state.actor_revoked_at is not None
+        or state.client_kind != "interactive"
+        or state.client_transport_kind != TransportKind.SECURE_TUNNEL.value
+        or state.client_revoked_at is not None
+        or not scopes
+        or len(scopes) != len(set(scopes))
+        or not set(scopes) <= _SECURE_TUNNEL_SCOPES
+        or state.binding_transport_kind != TransportKind.SECURE_TUNNEL.value
+        or state.disclosure_boundary != "openai_secure_tunnel"
+        or state.installation_id is None
+        or state.authorized_operations != {"operations": []}
+        or state.binding_valid_until is not None
+        or state.installation_capability_profile
+        != {
+            "association_mode": "single_chatgpt_workspace",
+            "contract_version": "scalevault-secure-tunnel-installation-v1",
+        }
+        or state.installation_revoked_at is not None
+        or (require_active and credential.revoked_at is not None)
+        or (
+            replacement is not None
+            and (
+                credential.credential_id != replacement.credential_id
+                or credential.expires_at != replacement.expires_at
+                or state.secret_hash_key_id != replacement.secret_hash_key_id
+            )
+        )
+    ):
+        raise CredentialAdminError("credential_artifact_mismatch")
+
+
 def _metadata_from_state(state: _AdminCredentialState) -> CredentialMetadata:
-    host, environment = _actor_labels(state.actor_metadata)
+    if state.actor_metadata == {"provisioning_contract": "scalevault-chatgpt-secure-tunnel-v1"}:
+        prefix = "chatgpt:secure-tunnel:"
+        hint = state.public_hint or ""
+        environment = hint.removeprefix(prefix)
+        if hint == environment or _LABEL_PATTERN.fullmatch(environment) is None:
+            raise CredentialAdminError("credential_metadata_invalid")
+        host = "chatgpt"
+    else:
+        host, environment = _actor_labels(state.actor_metadata)
     try:
         profile = _capability_profile_from_jsonb(state.capability_profile)
     except (TypeError, ValueError):
@@ -772,6 +1330,43 @@ def _validate_issuance(issuance: CodexInstallationIssuance) -> None:
         or issuance.client_scopes != tuple(sorted(issuance.client_scopes))
         or _LABEL_PATTERN.fullmatch(issuance.host_label) is None
         or _LABEL_PATTERN.fullmatch(issuance.environment_label) is None
+    ):
+        raise CredentialAdminError("credential_request_invalid")
+
+
+def _validate_secure_tunnel_issuance(issuance: SecureTunnelIssuance) -> None:
+    for name in (
+        "tenant_id",
+        "actor_id",
+        "installation_id",
+        "client_id",
+        "transport_binding_id",
+        "credential_id",
+    ):
+        _require_identifier(cast(UUID, getattr(issuance, name)), name)
+    if (
+        _VERIFIER_PATTERN.fullmatch(issuance.secret_hash) is None
+        or _KEY_ID_PATTERN.fullmatch(issuance.secret_hash_key_id) is None
+        or _LABEL_PATTERN.fullmatch(issuance.tunnel_label) is None
+        or not issuance.client_scopes
+        or len(issuance.client_scopes) != len(set(issuance.client_scopes))
+        or not set(issuance.client_scopes) <= _SECURE_TUNNEL_SCOPES
+        or issuance.client_scopes != tuple(sorted(issuance.client_scopes))
+        or issuance.actor_handle != f"chatgpt-{issuance.tunnel_label}"
+        or issuance.actor_display_name != f"ChatGPT secure tunnel ({issuance.tunnel_label})"
+        or issuance.actor_metadata
+        != {"provisioning_contract": "scalevault-chatgpt-secure-tunnel-v1"}
+        or issuance.installation_route_key
+        != f"chatgpt-{issuance.tunnel_label}-{issuance.tenant_id}"
+        or issuance.installation_capability_profile
+        != {
+            "association_mode": "single_chatgpt_workspace",
+            "contract_version": "scalevault-secure-tunnel-installation-v1",
+        }
+        or issuance.client_public_id
+        != f"chatgpt-secure-tunnel-{issuance.tunnel_label}-{issuance.tenant_id}"
+        or issuance.client_display_name != f"ChatGPT secure tunnel ({issuance.tunnel_label})"
+        or issuance.public_hint != f"chatgpt:secure-tunnel:{issuance.tunnel_label}"
     ):
         raise CredentialAdminError("credential_request_invalid")
     created = _require_admin_timestamp(issuance.created_at)

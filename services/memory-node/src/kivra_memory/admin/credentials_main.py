@@ -14,10 +14,12 @@ from uuid import UUID
 from kivra_memory.admin.credential_io import (
     DEFAULT_ADMIN_CONFIG_PATH,
     CredentialAdminSettings,
+    load_or_create_authorization,
     write_one_time_secret,
 )
 from kivra_memory.admin.credentials import (
     ALLOWED_CLIENT_SCOPES,
+    SECURE_TUNNEL_CLIENT_SCOPES,
     CredentialAdminError,
     CredentialAdminService,
     CredentialMetadata,
@@ -46,6 +48,7 @@ _DEFAULT_MEMORY_SCOPES = (
     MemoryScope.PROJECT,
     MemoryScope.EPISODIC,
 )
+_DEFAULT_SECURE_TUNNEL_SCOPES = tuple(sorted(SECURE_TUNNEL_CLIENT_SCOPES))
 _DEFAULT_VISIBILITIES = (
     MemoryVisibility.PRIVATE_ROOT,
     MemoryVisibility.RESTRICTED,
@@ -89,6 +92,31 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--expires-at", type=_parse_timestamp)
     _secret_output_arguments(create)
 
+    secure_tunnel = commands.add_parser("create-secure-tunnel")
+    secure_tunnel.add_argument("--tenant-id", type=UUID, required=True)
+    secure_tunnel.add_argument("--actor-id", type=UUID, required=True)
+    secure_tunnel.add_argument("--installation-id", type=UUID, required=True)
+    secure_tunnel.add_argument("--tunnel-label", required=True)
+    secure_tunnel.add_argument(
+        "--scope",
+        action="append",
+        choices=sorted(SECURE_TUNNEL_CLIENT_SCOPES),
+    )
+    secure_tunnel.add_argument(
+        "--read-memory-scope",
+        action="append",
+        choices=[value.value for value in MemoryScope],
+    )
+    secure_tunnel.add_argument(
+        "--read-visibility",
+        action="append",
+        choices=[value.value for value in MemoryVisibility],
+    )
+    secure_tunnel.add_argument("--max-sensitivity", type=int, choices=range(5), default=3)
+    secure_tunnel.add_argument("--allow-candidates", action="store_true")
+    secure_tunnel.add_argument("--expires-at", type=_parse_timestamp)
+    secure_tunnel.add_argument("--secret-output", type=Path, required=True)
+
     listing = commands.add_parser("list-metadata")
     listing.add_argument("--tenant-id", type=UUID, required=True)
     listing.add_argument("--client-id", type=UUID)
@@ -102,6 +130,12 @@ def _parser() -> argparse.ArgumentParser:
     rotate.add_argument("--credential-id", type=UUID, required=True)
     rotate.add_argument("--expires-at", type=_parse_timestamp)
     _secret_output_arguments(rotate)
+
+    secure_rotate = commands.add_parser("rotate-secure-tunnel")
+    secure_rotate.add_argument("--tenant-id", type=UUID, required=True)
+    secure_rotate.add_argument("--credential-id", type=UUID, required=True)
+    secure_rotate.add_argument("--expires-at", type=_parse_timestamp)
+    secure_rotate.add_argument("--secret-output", type=Path, required=True)
     return parser
 
 
@@ -143,6 +177,31 @@ async def _run(arguments: argparse.Namespace, settings: CredentialAdminSettings)
             )
             _emit_secret(arguments, issued.token)
             return
+        if arguments.command == "create-secure-tunnel":
+            secure_scopes = (
+                tuple(arguments.scope)
+                if arguments.scope is not None
+                else _DEFAULT_SECURE_TUNNEL_SCOPES
+            )
+            secure_capability = _capability_from_arguments(
+                arguments,
+                scopes=secure_scopes,
+            )
+            record = await service.create_or_load_secure_tunnel(
+                tenant_id=arguments.tenant_id,
+                actor_id=arguments.actor_id,
+                installation_id=arguments.installation_id,
+                tunnel_label=arguments.tunnel_label,
+                scopes=secure_scopes,
+                capability_profile=secure_capability,
+                authorization_artifact=lambda proposed: load_or_create_authorization(
+                    cast(Path, arguments.secret_output),
+                    proposed,
+                ),
+                expires_at=arguments.expires_at,
+            )
+            _emit_metadata((record,))
+            return
         if arguments.command == "list-metadata":
             records = await service.list_metadata(
                 tenant_id=arguments.tenant_id,
@@ -164,6 +223,18 @@ async def _run(arguments: argparse.Namespace, settings: CredentialAdminSettings)
                 expires_at=arguments.expires_at,
             )
             _emit_secret(arguments, issued.token)
+            return
+        if arguments.command == "rotate-secure-tunnel":
+            rotated = await service.rotate_secure_tunnel(
+                tenant_id=arguments.tenant_id,
+                credential_id=arguments.credential_id,
+                authorization_artifact=lambda proposed: load_or_create_authorization(
+                    cast(Path, arguments.secret_output),
+                    proposed,
+                ),
+                expires_at=arguments.expires_at,
+            )
+            _emit_metadata((rotated,))
             return
         raise CredentialAdminError("credential_request_invalid")
     finally:
@@ -272,6 +343,14 @@ def main() -> None:
         asyncio.run(_run(arguments, settings))
     except SystemExit:
         raise
+    except CredentialAdminError as error:
+        print("ScaleVault credential administration failed", file=sys.stderr)
+        if error.code == "credential_repository_rejected_after_secret_output":
+            print(
+                "Protected authorization artifact may require operator recovery",
+                file=sys.stderr,
+            )
+        raise SystemExit(2) from None
     except Exception:
         print("ScaleVault credential administration failed", file=sys.stderr)
         raise SystemExit(2) from None

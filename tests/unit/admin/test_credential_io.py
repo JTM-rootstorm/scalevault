@@ -7,9 +7,12 @@ from pathlib import Path
 import pytest
 from kivra_memory.admin.credential_io import (
     CredentialAdminSettings,
+    load_or_create_authorization,
     write_one_time_secret,
 )
 from kivra_memory.admin.credentials import CredentialAdminError
+from kivra_memory.auth import BearerTokenCodec, BearerTokenHasher
+from kivra_memory.domain.identifiers import new_uuid7
 
 
 def _protected_file(path: Path, value: bytes) -> Path:
@@ -134,6 +137,50 @@ def test_one_time_secret_is_atomic_mode_0600_and_never_overwrites(tmp_path: Path
         write_one_time_secret(output, "svb1." + "b" * 120)
     assert output.read_text() == token + "\n"
     assert not tuple(protected.glob(".credential-*.tmp"))
+
+
+def test_authorization_artifact_is_retry_safe_and_never_replaced(tmp_path: Path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    protected.chmod(0o700)
+    output = protected / "chatgpt-authorization"
+    issued = BearerTokenCodec.issue(
+        new_uuid7(),
+        new_uuid7(),
+        BearerTokenHasher(bytes(range(32))),
+    )
+    authorization = f"Bearer {issued.token}"
+    other = BearerTokenCodec.issue(
+        new_uuid7(),
+        new_uuid7(),
+        BearerTokenHasher(bytes(range(32))),
+    )
+
+    assert load_or_create_authorization(output, authorization) == authorization
+    assert load_or_create_authorization(output, f"Bearer {other.token}") == authorization
+    assert output.read_text() == authorization + "\n"
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert output.stat().st_nlink == 1
+
+
+@pytest.mark.parametrize("contents", [b"svb1.not-an-authorization\n", b"Bearer bad\r\n"])
+def test_authorization_artifact_rejects_invalid_existing_content(
+    tmp_path: Path,
+    contents: bytes,
+) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    protected.chmod(0o700)
+    output = _protected_file(protected / "chatgpt-authorization", contents)
+    issued = BearerTokenCodec.issue(
+        new_uuid7(),
+        new_uuid7(),
+        BearerTokenHasher(bytes(range(32))),
+    )
+
+    with pytest.raises(CredentialAdminError, match="secret_output_failed"):
+        load_or_create_authorization(output, f"Bearer {issued.token}")
+    assert output.read_bytes() == contents
 
 
 def test_one_time_secret_rejects_symlink_and_unprotected_parent(tmp_path: Path) -> None:

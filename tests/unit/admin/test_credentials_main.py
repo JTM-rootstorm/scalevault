@@ -141,6 +141,53 @@ def test_create_and_rotate_require_explicit_secret_output_policy() -> None:
     assert rotate.value.code == 2
 
 
+def test_secure_tunnel_requires_file_output_and_exposes_only_read_status_scopes() -> None:
+    parser = credentials_main._parser()
+    base = [
+        "create-secure-tunnel",
+        "--tenant-id",
+        str(new_uuid7()),
+        "--actor-id",
+        str(new_uuid7()),
+        "--installation-id",
+        str(new_uuid7()),
+        "--tunnel-label",
+        "workspace-one",
+    ]
+    with pytest.raises(SystemExit) as missing_output:
+        parser.parse_args(base)
+    with pytest.raises(SystemExit) as stdout_rejected:
+        parser.parse_args([*base, "--secret-stdout"])
+
+    parsed = parser.parse_args([*base, "--secret-output", "/root/authorization"])
+    assert parsed.secret_output == Path("/root/authorization")
+    assert missing_output.value.code == 2
+    assert stdout_rejected.value.code == 2
+    assert all(
+        scope.startswith("memory.read.") or scope.startswith("memory.status.")
+        for scope in credentials_main._DEFAULT_SECURE_TUNNEL_SCOPES
+    )
+    assert not any(
+        scope.startswith("memory.write.")
+        for scope in credentials_main._DEFAULT_SECURE_TUNNEL_SCOPES
+    )
+    assert "memory.status.ingress" in credentials_main._DEFAULT_SECURE_TUNNEL_SCOPES
+
+    secure_rotate = [
+        "rotate-secure-tunnel",
+        "--tenant-id",
+        str(new_uuid7()),
+        "--credential-id",
+        str(new_uuid7()),
+    ]
+    with pytest.raises(SystemExit) as missing_rotation_output:
+        parser.parse_args(secure_rotate)
+    with pytest.raises(SystemExit) as rotation_stdout_rejected:
+        parser.parse_args([*secure_rotate, "--secret-stdout"])
+    assert missing_rotation_output.value.code == 2
+    assert rotation_stdout_rejected.value.code == 2
+
+
 def test_secret_stdout_contains_only_token(capsys: pytest.CaptureFixture[str]) -> None:
     token = "svb1." + "a" * 120
     arguments = SimpleNamespace(secret_output=None, secret_stdout=True)

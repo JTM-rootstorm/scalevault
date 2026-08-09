@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
 import pytest
-from kivra_memory.admin.credentials import CredentialAdminError
+from kivra_memory.admin.credentials import CredentialAdminError, SecureTunnelIssuance
+from kivra_memory.auth import ClientCapabilityProfile
 from kivra_memory.domain.enums import MemoryScope, MemoryVisibility, TransportKind
+from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.credentials import (
     CredentialStorageError,
     _AdminCredentialState,
@@ -17,7 +20,10 @@ from kivra_memory.storage.credentials import (
     _identity_from_state,
     _metadata_from_state,
     _monotonic_audit_timestamp,
+    _require_matching_secure_tunnel_state,
+    _SecureTunnelAdminState,
     _state_is_active,
+    _validate_secure_tunnel_issuance,
 )
 from kivra_memory.storage.models import (
     Actor,
@@ -25,6 +31,7 @@ from kivra_memory.storage.models import (
     ClientCredential,
     Tenant,
     TransportBinding,
+    TransportInstallation,
 )
 from sqlalchemy import Table
 
@@ -89,6 +96,7 @@ def _state(
             authorized_operations={"operations": ["observed", "remembered"]},
             created_at=_NOW,
         ),
+        installation=None,
         credential=ClientCredential(
             credential_id=credential_id,
             tenant_id=tenant_id,
@@ -123,6 +131,110 @@ def _admin_state(state: _CredentialState) -> _AdminCredentialState:
             "environment_label": "integration",
         },
     )
+
+
+def _secure_tunnel_state() -> _CredentialState:
+    state = _state(
+        actor_kind="agent",
+        provisioning_contract="scalevault-chatgpt-secure-tunnel-v1",
+    )
+    installation_id = _id("transport_installations", "installation_id")
+    state.client.transport_kind = TransportKind.SECURE_TUNNEL.value
+    state.client.scopes = ["memory.read.context", "memory.status.transport"]
+    state.binding.transport_kind = TransportKind.SECURE_TUNNEL.value
+    state.binding.disclosure_boundary = "openai_secure_tunnel"
+    state.binding.installation_id = installation_id
+    state.binding.authorized_operations = {"operations": []}
+    return replace(
+        state,
+        installation=TransportInstallation(
+            installation_id=installation_id,
+            tenant_id=state.tenant.tenant_id,
+            route_key="secure-tunnel-test",
+            capability_profile={
+                "association_mode": "single_chatgpt_workspace",
+                "contract_version": "scalevault-secure-tunnel-installation-v1",
+            },
+            enrolled_at=_NOW,
+            health_state="healthy",
+        ),
+    )
+
+
+def _secure_tunnel_admin_fixture() -> tuple[SecureTunnelIssuance, _SecureTunnelAdminState]:
+    tenant_id = new_uuid7()
+    actor_id = new_uuid7()
+    client_id = new_uuid7()
+    binding_id = new_uuid7()
+    installation_id = new_uuid7()
+    credential_id = new_uuid7()
+    profile = ClientCapabilityProfile(
+        contract_version="scalevault-client-capability-v1",
+        read=None,
+    )
+    issuance = SecureTunnelIssuance(
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        installation_id=installation_id,
+        client_id=client_id,
+        transport_binding_id=binding_id,
+        credential_id=credential_id,
+        tunnel_label="workspace-one",
+        actor_handle="chatgpt-workspace-one",
+        actor_display_name="ChatGPT secure tunnel (workspace-one)",
+        actor_metadata={"provisioning_contract": "scalevault-chatgpt-secure-tunnel-v1"},
+        installation_route_key=f"chatgpt-workspace-one-{tenant_id}",
+        installation_capability_profile={
+            "association_mode": "single_chatgpt_workspace",
+            "contract_version": "scalevault-secure-tunnel-installation-v1",
+        },
+        client_public_id=f"chatgpt-secure-tunnel-workspace-one-{tenant_id}",
+        client_display_name="ChatGPT secure tunnel (workspace-one)",
+        client_scopes=("memory.status.ingress", "memory.status.transport"),
+        client_capability_profile=profile,
+        public_hint="chatgpt:secure-tunnel:workspace-one",
+        secret_hash=f"hmac-sha256-v1:{'A' * 43}",
+        secret_hash_key_id="test-v1",
+        created_at=_NOW,
+        expires_at=None,
+    )
+    state = _SecureTunnelAdminState(
+        credential=_AdminCredentialState(
+            credential_id=credential_id,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            client_id=client_id,
+            transport_binding_id=binding_id,
+            public_hint=issuance.public_hint,
+            created_at=_NOW,
+            expires_at=None,
+            last_used_at=None,
+            revoked_at=None,
+            client_scopes=issuance.client_scopes,
+            capability_profile=profile.model_dump(mode="json"),
+            actor_metadata=issuance.actor_metadata,
+        ),
+        secret_hash_key_id="test-v1",
+        tenant_state="active",
+        actor_handle=issuance.actor_handle,
+        actor_display_name=issuance.actor_display_name,
+        actor_kind="agent",
+        actor_revoked_at=None,
+        client_public_id=issuance.client_public_id,
+        client_display_name=issuance.client_display_name,
+        client_kind="interactive",
+        client_transport_kind=TransportKind.SECURE_TUNNEL.value,
+        client_revoked_at=None,
+        binding_transport_kind=TransportKind.SECURE_TUNNEL.value,
+        disclosure_boundary="openai_secure_tunnel",
+        installation_id=installation_id,
+        authorized_operations={"operations": []},
+        binding_valid_until=None,
+        installation_route_key=issuance.installation_route_key,
+        installation_capability_profile=issuance.installation_capability_profile,
+        installation_revoked_at=None,
+    )
+    return issuance, state
 
 
 def test_direct_bearer_requires_agent_actor_and_interactive_client() -> None:
@@ -178,6 +290,195 @@ def test_direct_bearer_requires_exact_provisioning_marker() -> None:
             installation_id=None,
             used_at=_NOW,
         )
+
+
+def test_secure_tunnel_bearer_requires_pinned_active_installation_and_read_only_authority() -> None:
+    state = _secure_tunnel_state()
+    installation_id = state.binding.installation_id
+    assert installation_id is not None
+
+    assert _state_is_active(
+        state,
+        transport_kind=TransportKind.SECURE_TUNNEL,
+        installation_id=installation_id,
+        used_at=_NOW,
+    )
+    assert not _state_is_active(
+        state,
+        transport_kind=TransportKind.SECURE_TUNNEL,
+        installation_id=_id("tenants", "tenant_id"),
+        used_at=_NOW,
+    )
+
+    state.client.scopes.append("memory.write.nominate")
+    assert not _state_is_active(
+        state,
+        transport_kind=TransportKind.SECURE_TUNNEL,
+        installation_id=installation_id,
+        used_at=_NOW,
+    )
+    state.client.scopes.pop()
+    state.binding.authorized_operations = {"operations": ["observed"]}
+    assert not _state_is_active(
+        state,
+        transport_kind=TransportKind.SECURE_TUNNEL,
+        installation_id=installation_id,
+        used_at=_NOW,
+    )
+
+
+@pytest.mark.parametrize(
+    ("actor_kind", "provisioning_contract"),
+    [
+        ("persona", "scalevault-chatgpt-secure-tunnel-v1"),
+        ("agent", None),
+        ("agent", "scalevault-codex-installation-v1"),
+        ("agent", {"not": "a string"}),
+    ],
+)
+def test_secure_tunnel_bearer_rejects_forged_actor_identity(
+    actor_kind: str,
+    provisioning_contract: object,
+) -> None:
+    state = _secure_tunnel_state()
+    state.actor.kind = actor_kind
+    state.actor.metadata_ = {"provisioning_contract": provisioning_contract}
+
+    assert not _state_is_active(
+        state,
+        transport_kind=TransportKind.SECURE_TUNNEL,
+        installation_id=state.binding.installation_id,
+        used_at=_NOW,
+    )
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [
+        {},
+        {
+            "association_mode": "multiple_chatgpt_workspaces",
+            "contract_version": "scalevault-secure-tunnel-installation-v1",
+        },
+        {
+            "association_mode": ["workspace-one", "workspace-two"],
+            "contract_version": "scalevault-secure-tunnel-installation-v1",
+        },
+        {
+            "association_mode": "single_chatgpt_workspace",
+            "contract_version": "scalevault-secure-tunnel-installation-v0",
+        },
+        {
+            "association_mode": "single_chatgpt_workspace",
+            "contract_version": "scalevault-secure-tunnel-installation-v1",
+            "workspace_id": "caller-controlled",
+        },
+    ],
+)
+def test_secure_tunnel_bearer_rejects_hostile_installation_profile(
+    profile: dict[str, object],
+) -> None:
+    state = _secure_tunnel_state()
+    assert state.installation is not None
+    state.installation.capability_profile = profile
+
+    assert not _state_is_active(
+        state,
+        transport_kind=TransportKind.SECURE_TUNNEL,
+        installation_id=state.binding.installation_id,
+        used_at=_NOW,
+    )
+
+
+@pytest.mark.parametrize("target", ["actor", "client", "installation"])
+def test_secure_tunnel_bearer_rejects_revoked_identity_components(target: str) -> None:
+    state = _secure_tunnel_state()
+    if target == "actor":
+        state.actor.revoked_at = _NOW
+    elif target == "client":
+        state.client.revoked_at = _NOW
+    else:
+        assert state.installation is not None
+        state.installation.revoked_at = _NOW
+
+    assert not _state_is_active(
+        state,
+        transport_kind=TransportKind.SECURE_TUNNEL,
+        installation_id=state.binding.installation_id,
+        used_at=_NOW,
+    )
+
+
+def test_secure_tunnel_bearer_rejects_wrong_client_and_binding_contract() -> None:
+    state = _secure_tunnel_state()
+    state.client.kind = "service"
+    assert not _state_is_active(
+        state,
+        transport_kind=TransportKind.SECURE_TUNNEL,
+        installation_id=state.binding.installation_id,
+        used_at=_NOW,
+    )
+
+    state = _secure_tunnel_state()
+    state.binding.disclosure_boundary = "private_node"
+    assert not _state_is_active(
+        state,
+        transport_kind=TransportKind.SECURE_TUNNEL,
+        installation_id=state.binding.installation_id,
+        used_at=_NOW,
+    )
+
+
+def test_secure_tunnel_issuance_requires_exact_derived_closed_contract() -> None:
+    issuance, _state = _secure_tunnel_admin_fixture()
+    _validate_secure_tunnel_issuance(issuance)
+
+    invalid = (
+        replace(issuance, actor_handle="chatgpt-other"),
+        replace(issuance, actor_display_name="ChatGPT secure tunnel (other)"),
+        replace(issuance, actor_metadata={"provisioning_contract": "forged"}),
+        replace(issuance, installation_route_key="chatgpt-other"),
+        replace(
+            issuance,
+            installation_capability_profile={
+                "association_mode": "multiple_chatgpt_workspaces",
+                "contract_version": "scalevault-secure-tunnel-installation-v1",
+            },
+        ),
+        replace(issuance, client_public_id="chatgpt-secure-tunnel-other"),
+        replace(issuance, client_display_name="ChatGPT secure tunnel (other)"),
+        replace(issuance, client_scopes=("memory.write.nominate",)),
+    )
+    for proposal in invalid:
+        with pytest.raises(CredentialAdminError, match="credential_request_invalid"):
+            _validate_secure_tunnel_issuance(proposal)
+
+
+def test_secure_tunnel_retry_matcher_rejects_any_distinguishing_state_drift() -> None:
+    issuance, state = _secure_tunnel_admin_fixture()
+    _require_matching_secure_tunnel_state(state, issuance)
+
+    hostile = (
+        replace(state, actor_handle="chatgpt-other"),
+        replace(state, actor_display_name="ChatGPT secure tunnel (other)"),
+        replace(state, installation_route_key="chatgpt-other"),
+        replace(state, client_display_name="ChatGPT secure tunnel (other)"),
+        replace(state, client_public_id="chatgpt-secure-tunnel-other"),
+        replace(
+            state,
+            installation_capability_profile={
+                "association_mode": "multiple_chatgpt_workspaces",
+                "contract_version": "scalevault-secure-tunnel-installation-v1",
+            },
+        ),
+        replace(state, actor_revoked_at=_NOW),
+        replace(state, client_revoked_at=_NOW),
+        replace(state, installation_revoked_at=_NOW),
+        replace(state, secret_hash_key_id="other-v1"),
+    )
+    for existing in hostile:
+        with pytest.raises(CredentialAdminError, match="credential_artifact_mismatch"):
+            _require_matching_secure_tunnel_state(existing, issuance)
 
 
 def test_active_boundaries_use_database_snapshot_time_exclusively() -> None:

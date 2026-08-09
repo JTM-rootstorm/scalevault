@@ -20,6 +20,7 @@ from kivra_memory.admin.credentials import (
     TOKEN_PEPPER_MINIMUM_BYTES,
     CredentialAdminError,
 )
+from kivra_memory.auth import BearerTokenCodec
 from kivra_memory.domain.canonical_json import parse_json_strict
 
 DEFAULT_ADMIN_CONFIG_PATH: Final = Path("/etc/kivra-memory/credential-admin.json")
@@ -93,6 +94,12 @@ class CredentialAdminSettings:
 def write_one_time_secret(path: Path, token: str) -> None:
     """Publish one mode-0600 token file atomically without replacing any path."""
 
+    _write_one_time_secret(path, token, authorization=False)
+
+
+def _write_one_time_secret(path: Path, value: str, *, authorization: bool) -> None:
+    """Publish one validated secret artifact without replacing any path."""
+
     temporary_name: str | None = None
     descriptor = -1
     directory_fd = -1
@@ -118,10 +125,12 @@ def write_one_time_secret(path: Path, token: str) -> None:
             or stat.S_IMODE(directory_stat.st_mode) & 0o077
         ):
             raise ValueError
-        payload = token.encode("ascii") + b"\n"
+        payload = value.encode("ascii") + b"\n"
         if not 64 <= len(payload) <= 256 or any(
-            byte < 0x21 or byte > 0x7E for byte in payload[:-1]
+            byte < (0x20 if authorization else 0x21) or byte > 0x7E for byte in payload[:-1]
         ):
+            raise ValueError
+        if authorization and (not value.startswith("Bearer ") or " " in value[7:]):
             raise ValueError
         descriptor = os.open(
             destination.name,
@@ -174,6 +183,33 @@ def write_one_time_secret(path: Path, token: str) -> None:
                 with suppress(FileNotFoundError):
                     os.unlink(destination.name, dir_fd=directory_fd)
             os.close(directory_fd)
+
+
+def load_or_create_authorization(path: Path, proposed: str) -> str:
+    """Load an exact protected Authorization artifact or create it once."""
+
+    try:
+        BearerTokenCodec.parse_authorization(proposed)
+        try:
+            raw = _read_protected_file(path, minimum_bytes=71, maximum_bytes=263)
+        except FileNotFoundError:
+            try:
+                _write_one_time_secret(path, proposed, authorization=True)
+            except CredentialAdminError:
+                # A concurrent duplicate-safe invocation may have won O_EXCL.
+                raw = _read_protected_file(path, minimum_bytes=71, maximum_bytes=263)
+            else:
+                raw = _read_protected_file(path, minimum_bytes=71, maximum_bytes=263)
+        authorization = raw.decode("ascii")
+        if not authorization.endswith("\n"):
+            raise ValueError
+        authorization = authorization[:-1]
+        if "\n" in authorization or "\r" in authorization:
+            raise ValueError
+        BearerTokenCodec.parse_authorization(authorization)
+        return authorization
+    except Exception:
+        raise CredentialAdminError("credential_secret_output_failed") from None
 
 
 def _read_protected_file(path: Path, *, minimum_bytes: int, maximum_bytes: int) -> bytes:

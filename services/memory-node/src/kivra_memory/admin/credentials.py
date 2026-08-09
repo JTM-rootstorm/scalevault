@@ -46,6 +46,12 @@ _WRITE_SCOPE_OPERATIONS: Final = {
     "memory.write.link": ("linked",),
     "memory.write.retire": ("retired",),
 }
+SECURE_TUNNEL_CLIENT_SCOPES: Final = frozenset(
+    scope
+    for scope in ALLOWED_CLIENT_SCOPES
+    if scope.startswith("memory.read.")
+    or scope in {"memory.status.ingress", "memory.status.transport"}
+)
 
 
 class CredentialAdminError(RuntimeError):
@@ -75,6 +81,33 @@ class CodexInstallationIssuance:
     client_scopes: tuple[str, ...]
     client_capability_profile: ClientCapabilityProfile
     authorized_operations: tuple[str, ...]
+    public_hint: str
+    secret_hash: str = field(repr=False)
+    secret_hash_key_id: str
+    created_at: datetime
+    expires_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class SecureTunnelIssuance:
+    """One retry-safe ChatGPT secure-tunnel identity and verifier."""
+
+    tenant_id: UUID
+    actor_id: UUID
+    installation_id: UUID
+    client_id: UUID
+    transport_binding_id: UUID
+    credential_id: UUID
+    tunnel_label: str
+    actor_handle: str
+    actor_display_name: str
+    actor_metadata: dict[str, object]
+    installation_route_key: str
+    installation_capability_profile: dict[str, object]
+    client_public_id: str
+    client_display_name: str
+    client_scopes: tuple[str, ...]
+    client_capability_profile: ClientCapabilityProfile
     public_hint: str
     secret_hash: str = field(repr=False)
     secret_hash_key_id: str
@@ -162,6 +195,24 @@ class CredentialAdminRepository(Protocol):
         """Atomically revoke the old credential and persist its replacement."""
         ...
 
+    async def create_or_load_secure_tunnel(
+        self,
+        issuance: SecureTunnelIssuance,
+    ) -> CredentialMetadata:
+        """Create an exact secure-tunnel identity or load its matching retry."""
+        ...
+
+    async def rotate_or_load_secure_tunnel_credential(
+        self,
+        *,
+        tenant_id: UUID,
+        credential_id: UUID,
+        replacement: BearerCredentialReplacement,
+        rotated_at: datetime,
+    ) -> CredentialMetadata:
+        """Rotate a secure-tunnel credential or load its exact safe retry state."""
+        ...
+
 
 class CredentialAdminService:
     """Generate secrets in memory and pass only deterministic verifiers to persistence."""
@@ -243,6 +294,82 @@ class CredentialAdminService:
         _require_matching_installation(metadata, issuance)
         return IssuedBearerCredential(metadata=metadata, token=issued.token)
 
+    async def create_or_load_secure_tunnel(
+        self,
+        *,
+        tenant_id: UUID,
+        actor_id: UUID,
+        installation_id: UUID,
+        tunnel_label: str,
+        scopes: Sequence[str],
+        capability_profile: ClientCapabilityProfile,
+        authorization_artifact: Callable[[str], str],
+        expires_at: datetime | None = None,
+    ) -> CredentialMetadata:
+        """Publish/load a protected Authorization value before committing its verifier."""
+
+        require_uuid7(tenant_id, field_name="tenant_id")
+        require_uuid7(actor_id, field_name="actor_id")
+        require_uuid7(installation_id, field_name="installation_id")
+        label = _require_label(tunnel_label)
+        selected_scopes = _require_scopes(scopes, capability_profile)
+        if not set(selected_scopes) <= SECURE_TUNNEL_CLIENT_SCOPES:
+            raise CredentialAdminError("credential_request_invalid")
+        created_at = _require_utc(self._now())
+        expiry = _require_expiry(expires_at, after=created_at)
+        proposed_credential_id = new_uuid7()
+        proposed = BearerTokenCodec.issue(tenant_id, proposed_credential_id, self._hasher)
+        try:
+            authorization = authorization_artifact(f"Bearer {proposed.token}")
+            credential = BearerTokenCodec.parse_authorization(authorization)
+        except Exception:
+            raise CredentialAdminError("credential_secret_output_failed") from None
+        if credential.tenant_id != tenant_id:
+            raise CredentialAdminError("credential_secret_output_failed")
+        safe_name = f"ChatGPT secure tunnel ({label})"
+        issuance = SecureTunnelIssuance(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            installation_id=installation_id,
+            client_id=new_uuid7(),
+            transport_binding_id=new_uuid7(),
+            credential_id=credential.credential_id,
+            tunnel_label=label,
+            actor_handle=f"chatgpt-{label}",
+            actor_display_name=safe_name,
+            actor_metadata={"provisioning_contract": "scalevault-chatgpt-secure-tunnel-v1"},
+            installation_route_key=f"chatgpt-{label}-{tenant_id}",
+            installation_capability_profile={
+                "association_mode": "single_chatgpt_workspace",
+                "contract_version": "scalevault-secure-tunnel-installation-v1",
+            },
+            client_public_id=f"chatgpt-secure-tunnel-{label}-{tenant_id}",
+            client_display_name=safe_name,
+            client_scopes=selected_scopes,
+            client_capability_profile=capability_profile,
+            public_hint=f"chatgpt:secure-tunnel:{label}",
+            secret_hash=self._hasher.hash(credential),
+            secret_hash_key_id=self._secret_hash_key_id,
+            created_at=created_at,
+            expires_at=expiry,
+        )
+        try:
+            metadata = await self._repository.create_or_load_secure_tunnel(issuance)
+        except CredentialAdminError:
+            raise CredentialAdminError(
+                "credential_repository_rejected_after_secret_output"
+            ) from None
+        if (
+            metadata.tenant_id != tenant_id
+            or metadata.actor_id != actor_id
+            or metadata.credential_id != credential.credential_id
+            or metadata.public_hint != issuance.public_hint
+            or metadata.scopes != selected_scopes
+            or metadata.capability_profile != capability_profile
+        ):
+            raise CredentialAdminError("credential_repository_invalid")
+        return metadata
+
     async def list_metadata(
         self,
         *,
@@ -263,6 +390,51 @@ class CredentialAdminService:
         if any(record.tenant_id != tenant_id for record in records):
             raise CredentialAdminError("credential_repository_invalid")
         return records
+
+    async def rotate_secure_tunnel(
+        self,
+        *,
+        tenant_id: UUID,
+        credential_id: UUID,
+        authorization_artifact: Callable[[str], str],
+        expires_at: datetime | None = None,
+    ) -> CredentialMetadata:
+        """Publish/load a new protected Authorization value before atomic rotation."""
+
+        require_uuid7(tenant_id, field_name="tenant_id")
+        require_uuid7(credential_id, field_name="credential_id")
+        rotated_at = _require_utc(self._now())
+        expiry = _require_expiry(expires_at, after=rotated_at)
+        proposed = BearerTokenCodec.issue(tenant_id, new_uuid7(), self._hasher)
+        try:
+            authorization = authorization_artifact(f"Bearer {proposed.token}")
+            parsed = BearerTokenCodec.parse_authorization(authorization)
+        except Exception:
+            raise CredentialAdminError("credential_secret_output_failed") from None
+        if parsed.tenant_id != tenant_id:
+            raise CredentialAdminError("credential_secret_output_failed")
+        replacement = BearerCredentialReplacement(
+            credential_id=parsed.credential_id,
+            tenant_id=tenant_id,
+            secret_hash=self._hasher.hash(parsed),
+            secret_hash_key_id=self._secret_hash_key_id,
+            created_at=rotated_at,
+            expires_at=expiry,
+        )
+        try:
+            metadata = await self._repository.rotate_or_load_secure_tunnel_credential(
+                tenant_id=tenant_id,
+                credential_id=credential_id,
+                replacement=replacement,
+                rotated_at=rotated_at,
+            )
+        except CredentialAdminError:
+            raise CredentialAdminError(
+                "credential_repository_rejected_after_secret_output"
+            ) from None
+        if metadata.tenant_id != tenant_id or metadata.credential_id != parsed.credential_id:
+            raise CredentialAdminError("credential_repository_invalid")
+        return metadata
 
     async def revoke(
         self,
@@ -379,6 +551,7 @@ def _require_utc(value: datetime) -> datetime:
 
 __all__ = [
     "ALLOWED_CLIENT_SCOPES",
+    "SECURE_TUNNEL_CLIENT_SCOPES",
     "TOKEN_PEPPER_MAXIMUM_BYTES",
     "TOKEN_PEPPER_MINIMUM_BYTES",
     "BearerCredentialReplacement",
@@ -388,4 +561,5 @@ __all__ = [
     "CredentialAdminService",
     "CredentialMetadata",
     "IssuedBearerCredential",
+    "SecureTunnelIssuance",
 ]

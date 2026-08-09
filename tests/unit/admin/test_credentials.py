@@ -13,6 +13,7 @@ from kivra_memory.admin.credentials import (
     CredentialAdminRepository,
     CredentialAdminService,
     CredentialMetadata,
+    SecureTunnelIssuance,
 )
 from kivra_memory.auth import (
     BearerTokenCodec,
@@ -75,12 +76,37 @@ class _Repository:
         self.replacement: BearerCredentialReplacement | None = None
         self.rotated_credential_id: object | None = None
         self.records: tuple[CredentialMetadata, ...] = ()
+        self.secure_tunnel: SecureTunnelIssuance | None = None
 
     async def create_codex_installation(
         self, issuance: CodexInstallationIssuance
     ) -> CredentialMetadata:
         self.created = issuance
         record = _metadata(issuance)
+        self.records = (record,)
+        return record
+
+    async def create_or_load_secure_tunnel(
+        self,
+        issuance: SecureTunnelIssuance,
+    ) -> CredentialMetadata:
+        self.secure_tunnel = issuance
+        record = CredentialMetadata(
+            credential_id=issuance.credential_id,
+            tenant_id=issuance.tenant_id,
+            actor_id=issuance.actor_id,
+            client_id=issuance.client_id,
+            transport_binding_id=issuance.transport_binding_id,
+            host_label="chatgpt",
+            environment_label=issuance.tunnel_label,
+            public_hint=issuance.public_hint,
+            scopes=issuance.client_scopes,
+            capability_profile=issuance.client_capability_profile,
+            created_at=issuance.created_at,
+            expires_at=issuance.expires_at,
+            last_used_at=None,
+            revoked_at=None,
+        )
         self.records = (record,)
         return record
 
@@ -136,6 +162,21 @@ class _Repository:
         self.records = (new,)
         return new
 
+    async def rotate_or_load_secure_tunnel_credential(
+        self,
+        *,
+        tenant_id: UUID,
+        credential_id: UUID,
+        replacement: BearerCredentialReplacement,
+        rotated_at: datetime,
+    ) -> CredentialMetadata:
+        return await self.rotate_bearer_credential(
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+            replacement=replacement,
+            rotated_at=rotated_at,
+        )
+
 
 def _service(repository: _Repository) -> CredentialAdminService:
     return CredentialAdminService(
@@ -188,6 +229,90 @@ async def test_create_provisions_distinguishable_identity_without_persisting_sec
     assert issuance.authorized_operations == ("observed", "remembered")
     assert issuance.public_hint == "codex:production:workstation-one"
     assert issuance.client_public_id == f"codex-production-workstation-one-{tenant_id}"
+
+
+@pytest.mark.asyncio
+async def test_secure_tunnel_create_or_load_persists_closed_read_only_identity() -> None:
+    repository = _Repository()
+    service = _service(repository)
+    tenant_id = new_uuid7()
+    actor_id = new_uuid7()
+    installation_id = new_uuid7()
+    artifact: list[str] = []
+
+    metadata = await service.create_or_load_secure_tunnel(
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        installation_id=installation_id,
+        tunnel_label="workspace-one",
+        scopes=("memory.read.context", "memory.status.ingress"),
+        capability_profile=_capability(),
+        authorization_artifact=lambda proposed: artifact.append(proposed) or proposed,
+    )
+
+    issuance = repository.secure_tunnel
+    assert issuance is not None
+    assert artifact[0].startswith("Bearer svb1.")
+    assert metadata.credential_id == BearerTokenCodec.parse_authorization(artifact[0]).credential_id
+    assert issuance.actor_metadata == {
+        "provisioning_contract": "scalevault-chatgpt-secure-tunnel-v1"
+    }
+    assert issuance.installation_capability_profile == {
+        "association_mode": "single_chatgpt_workspace",
+        "contract_version": "scalevault-secure-tunnel-installation-v1",
+    }
+    assert issuance.installation_route_key == f"chatgpt-workspace-one-{tenant_id}"
+    assert issuance.client_public_id == f"chatgpt-secure-tunnel-workspace-one-{tenant_id}"
+    assert issuance.client_scopes == ("memory.read.context", "memory.status.ingress")
+    assert BearerTokenHasher(PEPPER).verify(
+        BearerTokenCodec.parse_authorization(artifact[0]),
+        issuance.secret_hash,
+    )
+    assert artifact[0] not in repr(issuance)
+
+
+@pytest.mark.asyncio
+async def test_secure_tunnel_rejects_write_or_legacy_scope() -> None:
+    service = _service(_Repository())
+    for scope in ("memory.write.nominate", "memory:read"):
+        with pytest.raises(CredentialAdminError, match="credential_request_invalid"):
+            await service.create_or_load_secure_tunnel(
+                tenant_id=new_uuid7(),
+                actor_id=new_uuid7(),
+                installation_id=new_uuid7(),
+                tunnel_label="workspace-one",
+                scopes=(scope,),
+                capability_profile=_capability(readable=False),
+                authorization_artifact=lambda proposed: proposed,
+            )
+
+
+@pytest.mark.asyncio
+async def test_secure_tunnel_rotation_publishes_authorization_before_repository() -> None:
+    repository = _Repository()
+    service = _service(repository)
+    created = await service.create_or_load_secure_tunnel(
+        tenant_id=new_uuid7(),
+        actor_id=new_uuid7(),
+        installation_id=new_uuid7(),
+        tunnel_label="workspace-one",
+        scopes=("memory.status.transport",),
+        capability_profile=_capability(readable=False),
+        authorization_artifact=lambda proposed: proposed,
+    )
+    artifact: list[str] = []
+
+    rotated = await service.rotate_secure_tunnel(
+        tenant_id=created.tenant_id,
+        credential_id=created.credential_id,
+        authorization_artifact=lambda proposed: artifact.append(proposed) or proposed,
+    )
+
+    assert artifact[0].startswith("Bearer svb1.")
+    assert repository.replacement is not None
+    assert rotated.credential_id == BearerTokenCodec.parse_authorization(artifact[0]).credential_id
+    assert repository.replacement.credential_id == rotated.credential_id
+    assert artifact[0] not in repr(repository.replacement)
 
 
 @pytest.mark.asyncio
