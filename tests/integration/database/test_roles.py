@@ -3,12 +3,18 @@ from __future__ import annotations
 import hmac
 import secrets
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 import pytest
+from kivra_memory.admin import CredentialAdminService
+from kivra_memory.auth import ClientCapabilityProfile
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage.archive import recovery_table_names
+from kivra_memory.storage.credentials import CredentialAdminStorageRepository
+from kivra_memory.storage.database import Database
 from psycopg import Connection
 from psycopg import sql as psycopg_sql
 from sqlalchemy import create_engine, text
@@ -31,6 +37,7 @@ ROLE_BOOTSTRAP = REPOSITORY_ROOT / "deploy/memory-node/postgresql/bootstrap_role
 OWNER_ROLE = "kivra_memory_owner"
 MIGRATOR_ROLE = "kivra_memory_migrator"
 RUNTIME_ROLES = (
+    "kivra_memory_credential_admin",
     "kivra_memory_api",
     "kivra_memory_policy",
     "kivra_memory_genesis_importer",
@@ -228,6 +235,7 @@ def test_role_bootstrap_upgrades_m1_ownership_and_is_idempotent(
     assert valid_until_after == valid_until_before
     assert role_rows == [
         ("kivra_memory_api", True, False, False, False, False, False, False),
+        ("kivra_memory_credential_admin", True, False, False, False, False, False, False),
         ("kivra_memory_exporter", True, False, False, False, False, False, False),
         ("kivra_memory_genesis_importer", True, False, False, False, False, False, False),
         ("kivra_memory_ingress", True, False, False, False, False, False, False),
@@ -356,6 +364,24 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
             "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
         ),
         (
+            "kivra_memory_credential_admin",
+            "client_credentials",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_credential_admin",
+            "memory_events",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_credential_admin",
+            "memories",
+            "",
+            "SELECT,INSERT,UPDATE,DELETE,TRUNCATE",
+        ),
+        (
             "kivra_memory_policy",
             "memory_content_keys",
             "",
@@ -438,6 +464,12 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
             "memory_content_keys",
             "SELECT,INSERT",
             "UPDATE,DELETE,TRUNCATE",
+        ),
+        (
+            "kivra_memory_api",
+            "client_credentials",
+            "SELECT",
+            "INSERT,UPDATE,DELETE,TRUNCATE",
         ),
         (
             "kivra_memory_api",
@@ -672,6 +704,180 @@ def test_content_key_roles_have_only_exact_lifecycle_update_columns(
                     {"role": role, "column": column},
                 ).scalar_one()
                 assert bool(has_update) is (column in allowed)
+
+
+def test_api_can_update_only_credential_last_used_audit() -> None:
+    source = ROLE_BOOTSTRAP.read_text(encoding="utf-8")
+    expected = (
+        "GRANT UPDATE (\n"
+        "            last_used_at\n"
+        "        ) ON TABLE public.client_credentials"
+    )
+    assert expected in source
+
+
+def test_api_credential_update_grant_is_exact(
+    role_secured_database: AlembicRunner,
+) -> None:
+    with role_secured_database.engine.begin() as connection:
+        columns = tuple(
+            connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' "
+                    "AND table_name = 'client_credentials'"
+                )
+            ).scalars()
+        )
+        for column in columns:
+            has_update = connection.execute(
+                text(
+                    "SELECT has_column_privilege('kivra_memory_api', "
+                    "'public.client_credentials', :column, 'UPDATE')"
+                ),
+                {"column": column},
+            ).scalar_one()
+            assert bool(has_update) is (column == "last_used_at")
+
+
+def test_credential_admin_role_has_exact_secret_safe_identity_privileges(
+    role_secured_database: AlembicRunner,
+) -> None:
+    credential_select = {
+        "credential_id",
+        "tenant_id",
+        "actor_id",
+        "client_id",
+        "transport_binding_id",
+        "kind",
+        "public_hint",
+        "created_at",
+        "expires_at",
+        "last_used_at",
+        "revoked_at",
+    }
+    credential_insert = {
+        "credential_id",
+        "tenant_id",
+        "actor_id",
+        "client_id",
+        "transport_binding_id",
+        "kind",
+        "public_hint",
+        "secret_hash",
+        "secret_hash_key_id",
+        "created_at",
+        "expires_at",
+    }
+    with role_secured_database.engine.begin() as connection:
+        columns = tuple(
+            connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' "
+                    "AND table_name = 'client_credentials'"
+                )
+            ).scalars()
+        )
+        for column in columns:
+            for privilege, expected in (
+                ("SELECT", column in credential_select),
+                ("INSERT", column in credential_insert),
+                ("UPDATE", column == "revoked_at"),
+            ):
+                assert bool(
+                    connection.execute(
+                        text(
+                            "SELECT has_column_privilege("
+                            "'kivra_memory_credential_admin', "
+                            "'public.client_credentials', :column, :privilege)"
+                        ),
+                        {"column": column, "privilege": privilege},
+                    ).scalar_one()
+                ) is expected
+
+        assert not connection.execute(
+            text(
+                "SELECT has_column_privilege('kivra_memory_credential_admin', "
+                "'public.client_credentials', 'secret_hash', 'SELECT')"
+            )
+        ).scalar_one()
+        for table_name in ("memory_events", "memories", "memory_evidence"):
+            assert not connection.execute(
+                text(
+                    "SELECT has_table_privilege('kivra_memory_credential_admin', "
+                    ":table_name, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')"
+                ),
+                {"table_name": f"public.{table_name}"},
+            ).scalar_one()
+
+
+async def test_credential_admin_role_executes_create_list_rotate_and_revoke(
+    postgresql_server: PostgreSQLTestServer,
+    role_secured_database: AlembicRunner,
+) -> None:
+    rows = seed_rows()
+    tenant_id = cast(UUID, rows["tenants"][0]["tenant_id"])
+    with Session(role_secured_database.engine) as session:
+        for layer in seed_model_layers():
+            session.add_all(layer)
+            session.flush()
+        session.commit()
+
+    password = secrets.token_urlsafe(32)
+    _set_role_password(
+        postgresql_server,
+        "kivra_memory_credential_admin",
+        password,
+    )
+    admin_url = make_url(postgresql_server.database_url).set(
+        username="kivra_memory_credential_admin",
+        password=password,
+    )
+    database = Database(admin_url.render_as_string(hide_password=False))
+    now = datetime(2026, 8, 9, 20, tzinfo=UTC)
+    repository = CredentialAdminStorageRepository(database.session_factory)
+    try:
+        service = CredentialAdminService(
+            repository,
+            token_pepper=bytes(range(32)),
+            secret_hash_key_id="role-test-v1",
+            now=lambda: now,
+        )
+        issued = await service.create(
+            tenant_id=tenant_id,
+            host_label="role-host",
+            environment_label="integration",
+            scopes=("memory.write.nominate",),
+            capability_profile=ClientCapabilityProfile(
+                contract_version="scalevault-client-capability-v1",
+                read=None,
+            ),
+        )
+        listed = await service.list_metadata(tenant_id=tenant_id)
+        assert [row.credential_id for row in listed] == [issued.metadata.credential_id]
+
+        rotated = await CredentialAdminService(
+            repository,
+            token_pepper=bytes(range(32)),
+            secret_hash_key_id="role-test-v1",
+            now=lambda: now + timedelta(minutes=1),
+        ).rotate(
+            tenant_id=tenant_id,
+            credential_id=issued.metadata.credential_id,
+        )
+        revoked = await CredentialAdminService(
+            repository,
+            token_pepper=bytes(range(32)),
+            secret_hash_key_id="role-test-v1",
+            now=lambda: now + timedelta(minutes=2),
+        ).revoke(
+            tenant_id=tenant_id,
+            credential_id=rotated.metadata.credential_id,
+        )
+        assert revoked.revoked_at == now + timedelta(minutes=2)
+    finally:
+        await database.dispose()
 
 
 def test_purge_role_has_only_handler_required_table_and_column_privileges(

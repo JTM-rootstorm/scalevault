@@ -45,6 +45,7 @@ BEGIN
         FROM (VALUES
             ('kivra_memory_owner', false),
             ('kivra_memory_migrator', true),
+            ('kivra_memory_credential_admin', true),
             ('kivra_memory_api', true),
             ('kivra_memory_policy', true),
             ('kivra_memory_genesis_importer', true),
@@ -69,6 +70,8 @@ ALTER ROLE kivra_memory_owner
     NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_migrator
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE kivra_memory_credential_admin
+    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_api
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_policy
@@ -85,6 +88,7 @@ ALTER ROLE kivra_memory_exporter
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 
 REVOKE kivra_memory_owner FROM
+    kivra_memory_credential_admin,
     kivra_memory_api,
     kivra_memory_policy,
     kivra_memory_genesis_importer,
@@ -93,6 +97,7 @@ REVOKE kivra_memory_owner FROM
     kivra_memory_ingress,
     kivra_memory_exporter;
 REVOKE kivra_memory_migrator FROM
+    kivra_memory_credential_admin,
     kivra_memory_api,
     kivra_memory_policy,
     kivra_memory_genesis_importer,
@@ -131,6 +136,7 @@ BEGIN
     );
     EXECUTE format(
         'GRANT CONNECT ON DATABASE %I TO kivra_memory_migrator, '
+        'kivra_memory_credential_admin, '
         'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
         'kivra_memory_exporter, kivra_memory_policy, kivra_memory_purge, '
         'kivra_memory_genesis_importer',
@@ -141,6 +147,7 @@ $bootstrap$;
 
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON SCHEMA public FROM
+    kivra_memory_credential_admin,
     kivra_memory_api,
     kivra_memory_policy,
     kivra_memory_genesis_importer,
@@ -150,6 +157,7 @@ REVOKE ALL ON SCHEMA public FROM
     kivra_memory_exporter;
 GRANT USAGE ON SCHEMA public TO
     kivra_memory_migrator,
+    kivra_memory_credential_admin,
     kivra_memory_api,
     kivra_memory_policy,
     kivra_memory_genesis_importer,
@@ -159,6 +167,7 @@ GRANT USAGE ON SCHEMA public TO
     kivra_memory_exporter;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM
+    kivra_memory_credential_admin,
     kivra_memory_api,
     kivra_memory_policy,
     kivra_memory_genesis_importer,
@@ -167,6 +176,7 @@ REVOKE ALL ON ALL TABLES IN SCHEMA public FROM
     kivra_memory_ingress,
     kivra_memory_exporter;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM
+    kivra_memory_credential_admin,
     kivra_memory_api,
     kivra_memory_policy,
     kivra_memory_genesis_importer,
@@ -185,9 +195,104 @@ BEGIN
     IF pg_catalog.to_regclass('public.alembic_version') IS NOT NULL THEN
         EXECUTE
             'GRANT SELECT ON TABLE public.alembic_version TO '
-            'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
+            'kivra_memory_credential_admin, kivra_memory_api, '
+            'kivra_memory_worker, kivra_memory_ingress, '
             'kivra_memory_exporter, kivra_memory_policy, '
             'kivra_memory_genesis_importer';
+    END IF;
+
+    -- Credential administration owns only distinguishable direct-private
+    -- identity issuance and bearer lifecycle audit. It cannot read verifier
+    -- material back, delete identity, or reach memory/event payload tables.
+    IF pg_catalog.to_regclass('public.alembic_compatibility') IS NOT NULL THEN
+        GRANT SELECT ON TABLE public.alembic_compatibility
+            TO kivra_memory_credential_admin;
+    END IF;
+    IF pg_catalog.to_regclass('public.tenants') IS NOT NULL THEN
+        GRANT SELECT (
+            tenant_id,
+            state
+        ) ON TABLE public.tenants TO kivra_memory_credential_admin;
+    END IF;
+    IF pg_catalog.to_regclass('public.actors') IS NOT NULL THEN
+        GRANT SELECT (
+            tenant_id,
+            actor_id,
+            metadata
+        ) ON TABLE public.actors TO kivra_memory_credential_admin;
+        GRANT INSERT (
+            actor_id,
+            tenant_id,
+            handle,
+            display_name,
+            kind,
+            metadata,
+            created_at
+        ) ON TABLE public.actors TO kivra_memory_credential_admin;
+    END IF;
+    IF pg_catalog.to_regclass('public.clients') IS NOT NULL THEN
+        GRANT SELECT (
+            tenant_id,
+            client_id,
+            scopes,
+            capability_profile
+        ) ON TABLE public.clients TO kivra_memory_credential_admin;
+        GRANT INSERT (
+            client_id,
+            tenant_id,
+            public_id,
+            display_name,
+            kind,
+            transport_kind,
+            scopes,
+            capability_profile,
+            created_at
+        ) ON TABLE public.clients TO kivra_memory_credential_admin;
+    END IF;
+    IF pg_catalog.to_regclass('public.transport_bindings') IS NOT NULL THEN
+        GRANT INSERT (
+            transport_binding_id,
+            tenant_id,
+            actor_id,
+            client_id,
+            transport_kind,
+            disclosure_boundary,
+            installation_id,
+            authorized_operations,
+            created_at,
+            valid_until
+        ) ON TABLE public.transport_bindings TO kivra_memory_credential_admin;
+    END IF;
+    IF pg_catalog.to_regclass('public.client_credentials') IS NOT NULL THEN
+        GRANT SELECT (
+            credential_id,
+            tenant_id,
+            actor_id,
+            client_id,
+            transport_binding_id,
+            kind,
+            public_hint,
+            created_at,
+            expires_at,
+            last_used_at,
+            revoked_at
+        ) ON TABLE public.client_credentials TO kivra_memory_credential_admin;
+        GRANT INSERT (
+            credential_id,
+            tenant_id,
+            actor_id,
+            client_id,
+            transport_binding_id,
+            kind,
+            public_hint,
+            secret_hash,
+            secret_hash_key_id,
+            created_at,
+            expires_at
+        ) ON TABLE public.client_credentials TO kivra_memory_credential_admin;
+        GRANT UPDATE (
+            revoked_at
+        ) ON TABLE public.client_credentials TO kivra_memory_credential_admin;
     END IF;
 
     -- The API reads canonical state, appends events/receipts/outbox work,
@@ -232,6 +337,11 @@ BEGIN
             state,
             destruction_requested_at
         ) ON TABLE public.memory_content_keys TO kivra_memory_api;
+    END IF;
+    IF pg_catalog.to_regclass('public.client_credentials') IS NOT NULL THEN
+        GRANT UPDATE (
+            last_used_at
+        ) ON TABLE public.client_credentials TO kivra_memory_api;
     END IF;
     FOREACH table_name IN ARRAY ARRAY[
         'memories', 'memory_links', 'memory_conflicts',
@@ -655,6 +765,7 @@ BEGIN
         'scalevault_reject_immutable_mutation()',
         'scalevault_reject_immutable_field_mutation()',
         'scalevault_enforce_branch_visibility()',
+        'scalevault_enforce_client_credential_lifecycle()',
         'scalevault_enforce_content_key_lifecycle()',
         'scalevault_enforce_event_ingress_provenance()',
         'scalevault_enforce_ingress_validation_write()',
@@ -665,7 +776,8 @@ BEGIN
         IF pg_catalog.to_regprocedure('public.' || function_signature) IS NOT NULL THEN
             EXECUTE format(
                 'REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, '
-                'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
+                'kivra_memory_credential_admin, kivra_memory_api, '
+                'kivra_memory_worker, kivra_memory_ingress, '
                 'kivra_memory_exporter, kivra_memory_policy, kivra_memory_purge, '
                 'kivra_memory_genesis_importer',
                 function_signature
@@ -676,7 +788,8 @@ BEGIN
     -- UUIDv7 is a CHECK helper, not a general RPC surface. Trigger functions
     -- remain executable only through their installed triggers.
     FOREACH runtime_role IN ARRAY ARRAY[
-        'kivra_memory_api', 'kivra_memory_worker', 'kivra_memory_ingress',
+        'kivra_memory_credential_admin', 'kivra_memory_api',
+        'kivra_memory_worker', 'kivra_memory_ingress',
         'kivra_memory_exporter', 'kivra_memory_policy', 'kivra_memory_purge',
         'kivra_memory_genesis_importer'
     ]

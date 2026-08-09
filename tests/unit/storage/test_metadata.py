@@ -119,6 +119,73 @@ def test_hybrid_retrieval_indexes_and_model_lifecycle_are_explicit() -> None:
     assert "retired_at >= activated_at" in lifecycle_sql
 
 
+def test_client_credentials_are_secret_safe_and_immutably_attributed() -> None:
+    credentials = metadata.tables["client_credentials"]
+    assert set(credentials.c.keys()) == {
+        "credential_id",
+        "tenant_id",
+        "actor_id",
+        "client_id",
+        "transport_binding_id",
+        "kind",
+        "public_hint",
+        "secret_hash",
+        "secret_hash_key_id",
+        "certificate_sha256",
+        "created_at",
+        "expires_at",
+        "last_used_at",
+        "revoked_at",
+    }
+    checks = {
+        str(constraint.name): str(constraint.sqltext)
+        for constraint in credentials.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    assert checks["ck_client_credentials_secret_hash_format"] == (
+        "secret_hash IS NULL OR "
+        "secret_hash ~ '^hmac-sha256-v1:[A-Za-z0-9_-]{43}$'"
+    )
+    assert "secret_hash_key_id IS NOT NULL" in checks[
+        "ck_client_credentials_material_matches_kind"
+    ]
+    binding = next(
+        constraint
+        for constraint in credentials.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+        and constraint.name == "transport_binding"
+    )
+    assert binding.column_keys == [
+        "tenant_id",
+        "transport_binding_id",
+        "actor_id",
+        "client_id",
+    ]
+    active_binding = next(
+        index
+        for index in credentials.indexes
+        if index.name == "uq_client_credentials_active_binding"
+    )
+    assert [column.name for column in active_binding.columns] == [
+        "tenant_id",
+        "client_id",
+        "transport_binding_id",
+    ]
+    assert str(active_binding.dialect_options["postgresql"]["where"]) == (
+        "revoked_at IS NULL AND kind = 'bearer_token'"
+    )
+    assert credentials.info["scalevault_contains_no_plaintext_secret"] is True
+    assert credentials.info["scalevault_delete_forbidden"] is True
+    assert set(credentials.info["scalevault_immutable_fields"]) >= {
+        "tenant_id",
+        "actor_id",
+        "client_id",
+        "transport_binding_id",
+        "secret_hash",
+        "secret_hash_key_id",
+    }
+
+
 def test_tenant_local_foreign_keys_are_tenant_qualified() -> None:
     for table_name in TENANT_TABLE_NAMES:
         table = metadata.tables[table_name]

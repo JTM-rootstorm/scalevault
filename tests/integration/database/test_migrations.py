@@ -10,10 +10,14 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.storage import metadata
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
+
+from tests.fixtures.database_seed import seed_model_layers, seed_rows
 
 from .conftest import (
     REQUIRED_EXTENSIONS,
@@ -22,7 +26,7 @@ from .conftest import (
     installed_extensions,
 )
 
-EXPECTED_HEAD = "0007_persistence_hardening"
+EXPECTED_HEAD = "0008_codex_credentials"
 revision_module = importlib.import_module("migrations.versions.0001_initial_domain")
 
 
@@ -124,7 +128,7 @@ def test_zero_to_head_and_full_round_trip(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (7, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (8, EXPECTED_HEAD, EXPECTED_HEAD)
 
     runner.downgrade("base")
     with runner.connect() as connection:
@@ -158,7 +162,76 @@ def test_existing_0001_database_upgrades_to_hybrid_retrieval(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (7, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (8, EXPECTED_HEAD, EXPECTED_HEAD)
+
+
+def test_existing_0007_live_like_identity_rows_upgrade_with_no_credentials(
+    bootstrapped_alembic_runner: AlembicRunner,
+) -> None:
+    runner = bootstrapped_alembic_runner
+    runner.upgrade("0007_persistence_hardening")
+    with Session(runner.engine) as session:
+        for layer in seed_model_layers():
+            session.add_all(layer)
+            session.flush()
+        session.commit()
+
+    runner.upgrade()
+
+    with runner.connect() as connection:
+        assert _current_revision(connection) == EXPECTED_HEAD
+        credential_columns = {
+            column["name"] for column in inspect(connection).get_columns("client_credentials")
+        }
+        assert {
+            "actor_id",
+            "transport_binding_id",
+            "secret_hash_key_id",
+            "last_used_at",
+        } <= credential_columns
+        assert connection.execute(text("SELECT count(*) FROM client_credentials")).scalar_one() == 0
+
+
+def test_existing_0007_legacy_bearer_requires_operator_reissue(
+    bootstrapped_alembic_runner: AlembicRunner,
+) -> None:
+    runner = bootstrapped_alembic_runner
+    runner.upgrade("0007_persistence_hardening")
+    rows = seed_rows()
+    tenant_id = rows["tenants"][0]["tenant_id"]
+    client_id = rows["clients"][0]["client_id"]
+    with Session(runner.engine) as session:
+        for layer in seed_model_layers():
+            session.add_all(layer)
+            session.flush()
+        session.execute(
+            text(
+                "INSERT INTO client_credentials ("
+                "credential_id, tenant_id, client_id, kind, public_hint, secret_hash"
+                ") VALUES ("
+                ":credential_id, :tenant_id, :client_id, 'bearer_token', "
+                "'legacy-public-hint', 'legacy-verifier-material'"
+                ")"
+            ),
+            {
+                "credential_id": new_uuid7(
+                    timestamp_ms=1_767_225_600_000,
+                    random_bits=401,
+                ),
+                "tenant_id": tenant_id,
+                "client_id": client_id,
+            },
+        )
+        session.commit()
+
+    with pytest.raises(DBAPIError, match="legacy bearer credentials require operator reissue"):
+        runner.upgrade()
+
+    with runner.connect() as connection:
+        assert _current_revision(connection) == "0007_persistence_hardening"
+        assert "actor_id" not in {
+            column["name"] for column in inspect(connection).get_columns("client_credentials")
+        }
 
 
 def test_existing_0002_database_upgrades_and_downgrades_policy_lifecycle(

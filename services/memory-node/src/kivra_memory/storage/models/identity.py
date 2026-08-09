@@ -133,16 +133,34 @@ class ClientCredential(Base):
             name="client",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "transport_binding_id", "actor_id", "client_id"],
+            [
+                "transport_bindings.tenant_id",
+                "transport_bindings.transport_binding_id",
+                "transport_bindings.actor_id",
+                "transport_bindings.client_id",
+            ],
+            name="transport_binding",
+            ondelete="RESTRICT",
+        ),
         values_check("kind", ("bearer_token", "client_certificate"), name="kind_values"),
         CheckConstraint(
-            "(kind = 'bearer_token' AND secret_hash IS NOT NULL AND certificate_sha256 IS NULL) OR "
-            "(kind = 'client_certificate' AND secret_hash IS NULL AND "
-            "certificate_sha256 IS NOT NULL)",
+            "(kind = 'bearer_token' AND secret_hash IS NOT NULL "
+            "AND secret_hash_key_id IS NOT NULL AND certificate_sha256 IS NULL) OR "
+            "(kind = 'client_certificate' AND secret_hash IS NULL "
+            "AND secret_hash_key_id IS NULL AND certificate_sha256 IS NOT NULL)",
             name="material_matches_kind",
         ),
         CheckConstraint(
-            "secret_hash IS NULL OR length(secret_hash) BETWEEN 16 AND 512",
-            name="secret_hash_length",
+            "secret_hash IS NULL OR "
+            "secret_hash ~ '^hmac-sha256-v1:[A-Za-z0-9_-]{43}$'",
+            name="secret_hash_format",
+        ),
+        CheckConstraint(
+            "secret_hash_key_id IS NULL OR "
+            "secret_hash_key_id ~ '^[a-z][a-z0-9_.-]{0,63}$'",
+            name="secret_hash_key_id_format",
         ),
         CheckConstraint(
             "certificate_sha256 IS NULL OR octet_length(certificate_sha256) = 32",
@@ -150,6 +168,11 @@ class ClientCredential(Base):
         ),
         CheckConstraint("expires_at IS NULL OR expires_at > created_at", name="expiry_order"),
         CheckConstraint("revoked_at IS NULL OR revoked_at >= created_at", name="revocation_order"),
+        CheckConstraint(
+            "last_used_at IS NULL OR (last_used_at >= created_at "
+            "AND (revoked_at IS NULL OR last_used_at <= revoked_at))",
+            name="last_used_order",
+        ),
         uuid_v7_check("credential_id", name="credential_id_uuid_v7"),
         Index(
             "uq_client_credentials_active_public_hint",
@@ -159,20 +182,52 @@ class ClientCredential(Base):
             unique=True,
             postgresql_where=text("revoked_at IS NULL AND public_hint IS NOT NULL"),
         ),
-        TENANT_TABLE_ARGS,
+        Index(
+            "uq_client_credentials_active_binding",
+            "tenant_id",
+            "client_id",
+            "transport_binding_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL AND kind = 'bearer_token'"),
+        ),
+        {
+            "info": {
+                TENANT_OWNED_INFO_KEY: True,
+                "scalevault_immutable_fields": (
+                    "credential_id",
+                    "tenant_id",
+                    "actor_id",
+                    "client_id",
+                    "transport_binding_id",
+                    "kind",
+                    "public_hint",
+                    "secret_hash",
+                    "secret_hash_key_id",
+                    "certificate_sha256",
+                    "created_at",
+                    "expires_at",
+                ),
+                "scalevault_delete_forbidden": True,
+                "scalevault_contains_no_plaintext_secret": True,
+            }
+        },
     )
 
     credential_id: Mapped[UUID] = mapped_column(primary_key=True)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    actor_id: Mapped[UUID] = mapped_column(nullable=False)
     client_id: Mapped[UUID] = mapped_column(nullable=False)
+    transport_binding_id: Mapped[UUID] = mapped_column(nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     public_hint: Mapped[str | None] = mapped_column(String(128))
     secret_hash: Mapped[str | None] = mapped_column(Text())
+    secret_hash_key_id: Mapped[str | None] = mapped_column(String(64))
     certificate_sha256: Mapped[bytes | None] = mapped_column(LargeBinary())
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
