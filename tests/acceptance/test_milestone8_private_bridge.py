@@ -453,20 +453,33 @@ def test_tunnel_deployment_requires_no_public_listener() -> None:
         encoding="utf-8"
     )
     tunnel_readme = (ROOT / "deploy/memory-node/tunnel/README.md").read_text(encoding="utf-8")
+    tunnel_probe = (ROOT / "deploy/memory-node/tunnel/kivra-memory-tunnel-mcp-probe").read_text(
+        encoding="utf-8"
+    )
 
     tunnel_target = "--mcp.server-url=url=http://127.0.0.1:8080/chatgpt/mcp,channel=main"
     authorization_header = '"Authorization: file:%d/chatgpt-mcp-authorization"'
 
-    assert tunnel_unit.count(tunnel_target) == 2
-    assert tunnel_unit.count(f"--mcp.extra-headers={authorization_header}") == 2
-    assert tunnel_unit.count(f"--mcp.discovery-extra-headers={authorization_header}") == 2
+    assert tunnel_unit.count(tunnel_target) == 1
+    assert tunnel_unit.count(f"--mcp.extra-headers={authorization_header}") == 1
+    assert tunnel_unit.count(f"--mcp.discovery-extra-headers={authorization_header}") == 1
     assert "LoadCredential=chatgpt-mcp-authorization:" in tunnel_unit
+    assert (
+        "ExecStartPre=/usr/local/libexec/kivra-memory-tunnel-mcp-probe "
+        "/usr/bin/curl %d/chatgpt-mcp-authorization "
+        "http://127.0.0.1:8080/chatgpt/mcp"
+    ) in tunnel_unit
+    assert "tunnel-client doctor" not in tunnel_unit
     assert "--health.listen-addr=127.0.0.1:8081" in tunnel_unit
     assert "0.0.0.0" not in tunnel_unit
     assert "ListenStream=" not in tunnel_unit
     assert "Bearer svb1." not in tunnel_unit
     assert "outbound HTTPS" in tunnel_readme
     assert "requires no public listener" in tunnel_readme
+    assert '[ "$endpoint" = "http://127.0.0.1:8080/chatgpt/mcp" ]' in tunnel_probe
+    assert "printf 'header = \"Authorization: %s\"\\n'" in tunnel_probe
+    assert "--config -" in tunnel_probe
+    assert "--header 'Authorization:" not in tunnel_probe
 
     with pytest.raises(ValidationError, match="host must be loopback"):
         Settings(
