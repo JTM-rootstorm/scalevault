@@ -1,47 +1,128 @@
 # Secure MCP Tunnel
 
 The tunnel client runs inside the Memory Node LXC and forwards only to the
-loopback MCP endpoint at `http://127.0.0.1:8080/mcp`. It opens an outbound HTTPS
-connection to OpenAI; it does not require a public listener, reverse-proxy
-route, or inbound firewall rule.
+dedicated authenticated read-only MCP endpoint at
+`http://127.0.0.1:8080/chatgpt/mcp`. It opens outbound HTTPS connections to
+OpenAI and requires no public listener, reverse-proxy route, or inbound firewall
+rule. It never forwards ChatGPT traffic to the direct Codex endpoint at `/mcp`.
 
-Install the checksum-verified official `tunnel-client` binary at
-`/usr/local/bin/tunnel-client`, then install
-`kivra-memory-tunnel.service`. Create the service account:
+This is a fixed-identity `secure_tunnel` deployment profile. The read-only MCP
+route must expose only read and status tools and must authenticate the exact
+server-issued tunnel credential. It must not trust a caller-provided transport
+header or silently fall back to a `direct_private` identity. Keep the service
+disabled until that route, its pinned tenant and installation binding, and its
+read-only capability profile have passed acceptance.
+
+## Install
+
+Install a checksum-verified official `tunnel-client` release at
+`/usr/local/bin/tunnel-client`. Static request and discovery header files were
+added in version `0.0.8`; the unit refuses older or incompatible clients. The
+currently probed Memory Node binary is `0.0.10`, whose `run --help` and
+`doctor --help` both advertise `--mcp.extra-headers` and
+`--mcp.discovery-extra-headers`. Recheck those flags after every client
+upgrade.
+
+Create a dedicated service account with no membership in `kivra-memory` or
+other service groups, then install the preflight helper and unit:
 
 ```sh
-useradd --system --no-create-home --home-dir /nonexistent \
-  --shell /usr/sbin/nologin --gid kivra-memory memory-tunnel
+useradd --system --user-group --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin memory-tunnel
+install -D -o root -g root -m 0755 \
+  deploy/memory-node/tunnel/kivra-memory-tunnel-preflight \
+  /usr/local/libexec/kivra-memory-tunnel-preflight
+install -D -o root -g root -m 0644 \
+  deploy/memory-node/systemd/kivra-memory-tunnel.service \
+  /etc/systemd/system/kivra-memory-tunnel.service
 ```
 
-Place only the tunnel identifier in `/etc/kivra-memory/tunnel.env`:
+Treat an existing account with a different primary group, supplementary group,
+shell, or home as a failed prerequisite. The service has no reason to read the
+database, application environment, `/mnt/memory`, or the direct Codex bearer
+credential.
+
+Install `/etc/kivra-memory/tunnel.env` as `root:root` mode `0600`. It must
+contain exactly one setting and no shell expansion:
 
 ```text
 CONTROL_PLANE_TUNNEL_ID=tunnel_REPLACE_WITH_32_LOWERCASE_HEX_CHARACTERS
 ```
 
-Place the restricted runtime API key in
-`/etc/kivra-memory/tunnel-api-key`, owned by root with mode `0600`. The systemd
-unit exposes it to the service as a transient credential; do not store the key
-in this repository, the environment file, or on the NAS. The daemon uses direct
-flags and the system journal, so it does not need mutable durable state. The NAS
-ACL must not be trusted as a secret boundary while broad modify access is
-enabled.
+Install two distinct root-owned mode-`0600` secret files:
 
-Keep the service disabled at boot unless continuous private access is intended.
-After associating the tunnel with the intended Platform organization and
-ChatGPT workspace, validate the credential and tunnel with:
+- `/etc/kivra-memory/tunnel-api-key` contains the restricted OpenAI runtime API
+  key used only to poll the tunnel control plane.
+- `/etc/kivra-memory/chatgpt-mcp-authorization` contains the complete HTTP
+  header value `Bearer svb1.<tenant-uuid7>.<credential-uuid7>.<43-character-base64url-secret>`.
+
+The second value must be issued through the reviewed ScaleVault secure-tunnel
+credential workflow. Do not copy a direct Codex token, hand-construct a token,
+or grant nomination or mutation scopes. Only the tunnel service reads this
+one-time bearer value. The API verifies its persisted credential hash using the
+existing protected bearer-token pepper and never receives the bearer value.
+The tunnel passes only `Authorization: file:%d/...` in its arguments; the
+bearer value is absent from the environment, process arguments, unit, and
+repository.
+
+The API profile is enabled with these non-secret settings:
+
+```text
+KIVRA_MEMORY_CHATGPT_SECURE_TUNNEL_ENABLED=true
+KIVRA_MEMORY_CHATGPT_SECURE_TUNNEL_INSTALLATION_ID=REPLACE_WITH_UUIDV7
+```
+
+It also requires the existing `KIVRA_MEMORY_CLIENT_TOKEN_PEPPER_CREDENTIAL` and
+`KIVRA_MEMORY_CLIENT_TOKEN_PEPPER_KEY_ID` verifier settings documented in the
+Memory Node systemd guide. Startup and readiness must fail closed unless the
+pepper, key ID, pinned installation, and distinct persisted `secure_tunnel`
+credential row are all valid.
+
+The preflight validates the tunnel ID, client version and static-header
+features, credential readability, and exact bearer grammar without printing
+secret values. `tunnel-client doctor` then validates control-plane access and
+performs authenticated discovery and initialization against `/chatgpt/mcp`.
+Both discovery and forwarded MCP calls use the same protected Authorization
+value. Raw HTTP logging, remote UI access, configuration profiles, ambient API
+keys, proxy variables, and ambient MCP header settings are removed from the
+service environment.
+
+## Activate and verify
+
+The service remains disabled until all of these gates are satisfied:
+
+1. The API owns `/chatgpt/mcp`, authenticates the fixed credential as
+   `secure_tunnel`, pins the intended installation, and lists no mutation or
+   nomination tools.
+2. The Platform runtime key has only Tunnels Read and Use permission and the
+   tunnel is associated with the intended Platform organization and ChatGPT
+   workspace.
+3. The environment and both credential files have the documented owner, mode,
+   and content boundary.
+4. A wrong, missing, revoked, or caller-overridden Authorization value fails
+   discovery and tool calls closed.
+
+Then validate and start the service:
 
 ```sh
+systemctl daemon-reload
+systemd-analyze verify kivra-memory-tunnel.service
 systemctl start kivra-memory-tunnel.service
 curl --fail --silent --show-error http://127.0.0.1:8081/healthz
 curl --fail --silent --show-error http://127.0.0.1:8081/readyz
 ```
 
-The admin UI remains loopback-only at `http://127.0.0.1:8081/ui`. This tunnel
-is for private developer-mode access and is not a public plugin endpoint.
+Inspect `journalctl -u kivra-memory-tunnel.service` only for fixed diagnostic
+states. Never enable `--log.http-raw-unsafe`, export a support bundle without
+review, or paste request/response data into an incident record. The admin UI
+remains loopback-only at `http://127.0.0.1:8081/ui`.
 
-The systemd unit waits for the loopback Memory API readiness endpoint before
-starting `tunnel-client`. This prevents the client's startup-only MCP probe from
-capturing a transient database or migration failure when both units start
-together.
+After the local checks, refresh the private developer-mode app and verify that
+the discovered tool list contains exactly the approved read/status surface.
+Exercise a bounded synthetic read, verify `memory_transport_status` reports the
+pinned secure-tunnel installation, and verify mutation tools are absent. Keep
+the unit disabled if any check fails.
+
+This tunnel is for private developer-mode access and is not a public plugin
+endpoint. See the official [Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+and the official [tunnel-client configuration reference](https://github.com/openai/tunnel-client/blob/master/docs/configuration.md).

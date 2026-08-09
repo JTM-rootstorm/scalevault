@@ -1,0 +1,88 @@
+#!/bin/sh
+
+set -eu
+
+fail() {
+    printf '%s\n' "tunnel preflight failed: $1" >&2
+    exit 1
+}
+
+if [ "$#" -ne 3 ]; then
+    fail "expected tunnel-client and two credential paths"
+fi
+
+tunnel_client=$1
+control_plane_credential=$2
+chatgpt_authorization_credential=$3
+
+case "${CONTROL_PLANE_TUNNEL_ID-}" in
+    tunnel_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) fail "CONTROL_PLANE_TUNNEL_ID must be tunnel_ plus 32 lowercase hexadecimal characters" ;;
+esac
+
+[ -x "$tunnel_client" ] || fail "tunnel-client is not executable"
+
+version_output=$("$tunnel_client" --version 2>/dev/null) \
+    || fail "tunnel-client version check failed"
+version=${version_output%%+*}
+version=${version%% *}
+old_ifs=$IFS
+IFS=.
+set -- $version
+IFS=$old_ifs
+[ "$#" -eq 3 ] || fail "tunnel-client returned an unrecognized version"
+major=$1
+minor=$2
+patch=$3
+case "$major.$minor.$patch" in
+    *[!0-9.]*) fail "tunnel-client returned an unrecognized version" ;;
+esac
+if [ "$major" -eq 0 ] && [ "$minor" -eq 0 ] && [ "$patch" -lt 8 ]; then
+    fail "tunnel-client 0.0.8 or newer is required"
+fi
+
+run_help=$("$tunnel_client" run --help 2>&1) \
+    || fail "tunnel-client run help check failed"
+case "$run_help" in
+    *--mcp.extra-headers*) ;;
+    *) fail "tunnel-client lacks static MCP request headers" ;;
+esac
+case "$run_help" in
+    *--mcp.discovery-extra-headers*) ;;
+    *) fail "tunnel-client lacks static MCP discovery headers" ;;
+esac
+
+for credential_path in "$control_plane_credential" "$chatgpt_authorization_credential"; do
+    [ -f "$credential_path" ] || fail "a required credential is not a regular file"
+    [ ! -L "$credential_path" ] || fail "a required credential must not be a symbolic link"
+    [ -r "$credential_path" ] || fail "a required credential is not readable"
+done
+
+control_plane_size=$(wc -c < "$control_plane_credential") \
+    || fail "could not inspect the control-plane credential"
+if [ "$control_plane_size" -lt 16 ] || [ "$control_plane_size" -gt 4096 ]; then
+    fail "the control-plane credential has an invalid size"
+fi
+
+authorization=$(sed -n '1p' "$chatgpt_authorization_credential") \
+    || fail "could not inspect the ChatGPT authorization credential"
+authorization_lines=$(wc -l < "$chatgpt_authorization_credential") \
+    || fail "could not inspect the ChatGPT authorization credential"
+if [ "$authorization_lines" -gt 1 ]; then
+    fail "the ChatGPT authorization credential must contain one value"
+fi
+authorization_size=$(wc -c < "$chatgpt_authorization_credential") \
+    || fail "could not inspect the ChatGPT authorization credential"
+authorization_length=${#authorization}
+if [ "$authorization_size" -ne "$authorization_length" ] \
+    && [ "$authorization_size" -ne $((authorization_length + 1)) ]; then
+    fail "the ChatGPT authorization credential must contain one value"
+fi
+
+uuid7='[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
+if ! printf '%s' "$authorization" \
+    | grep -Eq "^Bearer svb1\.${uuid7}\.${uuid7}\.[A-Za-z0-9_-]{43}$"; then
+    fail "the ChatGPT authorization credential has an invalid format"
+fi
+
+exit 0

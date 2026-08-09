@@ -15,8 +15,8 @@ useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-api
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-node
-useradd --system --no-create-home --home-dir /nonexistent \
-  --shell /usr/sbin/nologin --gid kivra-memory memory-tunnel
+useradd --system --user-group --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin memory-tunnel
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-worker
 useradd --system --no-create-home --home-dir /nonexistent \
@@ -414,6 +414,9 @@ install -D -o root -g root -m 0644 \
 install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-tunnel.service \
   /etc/systemd/system/kivra-memory-tunnel.service
+install -D -o root -g root -m 0755 \
+  deploy/memory-node/tunnel/kivra-memory-tunnel-preflight \
+  /usr/local/libexec/kivra-memory-tunnel-preflight
 install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-worker.service \
   /etc/systemd/system/kivra-memory-worker.service
@@ -470,9 +473,12 @@ remains disabled until its preprovisioned internal-service identity, policy-role
 credential, and candidate-expiry acceptance gate have been verified.
 
 The tunnel unit is installed separately and remains disabled until its Platform
-tunnel ID, restricted runtime credential, and ChatGPT workspace association are
-available. Its MCP target and health UI are both loopback-only; see
-`../tunnel/README.md` for the credential boundary and activation checks.
+tunnel ID, restricted runtime credential, dedicated ScaleVault secure-tunnel
+Authorization credential, pinned installation identity, and ChatGPT workspace
+association are available. It targets only the authenticated read-only
+`/chatgpt/mcp` route; it never forwards to the direct Codex `/mcp` route. Its
+MCP target and health UI are both loopback-only; see `../tunnel/README.md` for
+the credential boundary, minimum tunnel-client version, and activation checks.
 
 The sealed-content drop-in and purge unit remain uninstalled and disabled when
 sealed content is not explicitly enabled. Before activation, provision the
