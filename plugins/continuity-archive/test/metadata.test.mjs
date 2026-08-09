@@ -39,6 +39,7 @@ test("canonical plugin manifest declares read-only capabilities", async () => {
         new URL(".codex-plugin/plugin.json", pluginRoot),
     );
     const packageMetadata = await readJson(new URL("package.json", pluginRoot));
+    const packageProfile = await readJson(new URL("plugin.json", pluginRoot));
 
     assert.equal(manifest.name, "continuity-archive");
     assert.equal(manifest.version, packageMetadata.version);
@@ -46,11 +47,13 @@ test("canonical plugin manifest declares read-only capabilities", async () => {
     assert.equal(manifest.skills, "./skills/");
     assert.equal(manifest.apps, undefined);
     assert.equal(manifest.mcpServers, undefined);
+    assert.equal(packageProfile.capability_profile, "chatgpt_pro_private_read");
 });
 
 test("private app profile pins only the canonical read tools", async () => {
     const profile = await readJson(profileUrl);
 
+    assert.equal(profile.profile_id, "chatgpt_pro_private_read");
     assert.equal(profile.surface, "chatgpt_web_private_app");
     assert.equal(profile.transport.kind, "secure_mcp_tunnel");
     assert.equal(profile.transport.public_inbound_required, false);
