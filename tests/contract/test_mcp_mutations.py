@@ -9,7 +9,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app
-from kivra_memory.api.mcp import MutationExecutor
+from kivra_memory.api.mcp import AuthenticatedMutationExecutor
+from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.config import Settings
 from kivra_memory.domain.commands import (
     DirectMutationCommand,
@@ -52,6 +53,21 @@ MutationOperation = Literal[
 
 def uid(value: int) -> UUID:
     return new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=value)
+
+
+def principal() -> CommandPrincipal:
+    return CommandPrincipal(
+        tenant_id=uid(20),
+        actor_id=uid(21),
+        client_id=uid(22),
+        transport_binding_id=uid(23),
+        scopes=frozenset({"memory:write"}),
+    )
+
+
+async def resolve_principal(context: object) -> CommandPrincipal:
+    assert context is not None
+    return principal()
 
 
 def common_arguments() -> dict[str, Any]:
@@ -174,8 +190,12 @@ def mutation_arguments() -> list[tuple[str, dict[str, Any], type[DirectMutationC
 class RecordingExecutor:
     def __init__(self) -> None:
         self.calls: list[DirectMutationCommand] = []
+        self.principals: list[CommandPrincipal] = []
 
-    async def __call__(self, command: DirectMutationCommand) -> MutationResponse:
+    async def __call__(
+        self, authority: CommandPrincipal, command: DirectMutationCommand
+    ) -> MutationResponse:
+        self.principals.append(authority)
         self.calls.append(command)
         fields: dict[str, Any] = {}
         if command.OPERATION == "open_conflict":
@@ -194,8 +214,10 @@ class RecordingExecutor:
 
 
 class RaisingExecutor:
-    async def __call__(self, command: DirectMutationCommand) -> MutationResponse:
-        del command
+    async def __call__(
+        self, authority: CommandPrincipal, command: DirectMutationCommand
+    ) -> MutationResponse:
+        del authority, command
         raise RuntimeError("SENSITIVE_EXECUTOR_MARKER SQL SELECT private_memory")
 
 
@@ -214,9 +236,17 @@ async def mcp_session(app: FastAPI) -> AsyncIterator[ClientSession]:
         yield session
 
 
-def mutation_app(executor: MutationExecutor | None = None) -> FastAPI:
+def mutation_app(executor: AuthenticatedMutationExecutor | None = None) -> FastAPI:
     settings = Settings(environment="test")
-    return create_app(settings, mutation_executor=executor) if executor else create_app(settings)
+    return (
+        create_app(
+            settings,
+            mutation_principal_resolver=resolve_principal,
+            mutation_executor=executor,
+        )
+        if executor
+        else create_app(settings)
+    )
 
 
 async def test_mutation_schemas_keep_identity_out_of_top_level_arguments() -> None:
@@ -314,6 +344,7 @@ async def test_each_tool_constructs_one_strict_command_and_returns_unwrapped_str
     assert "root" not in result.structuredContent
     assert "result" not in result.structuredContent
     assert len(executor.calls) == 1
+    assert executor.principals == [principal()]
     assert type(executor.calls[0]) is command_type
     assert executor.calls[0].model_config["strict"] is True
 

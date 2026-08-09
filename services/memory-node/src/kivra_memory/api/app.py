@@ -13,12 +13,13 @@ from pydantic_settings import SettingsError
 
 from kivra_memory import __version__
 from kivra_memory.api.mcp import (
-    MutationExecutor,
+    AuthenticatedMutationExecutor,
+    MutationPrincipalResolver,
     NominationExecutor,
     ReadExecutor,
     ReadPrincipalResolver,
     create_mcp,
-    dependency_unavailable_executor,
+    dependency_unavailable_mutation_principal_resolver,
     dependency_unavailable_nomination_executor,
     dependency_unavailable_read_executor,
     dependency_unavailable_read_principal_resolver,
@@ -41,7 +42,10 @@ HEALTH_REQUESTS = Counter(
 def create_app(
     settings: Settings | None = None,
     database_probe: DatabaseProbe = database_is_ready,
-    mutation_executor: MutationExecutor = dependency_unavailable_executor,
+    mutation_principal_resolver: MutationPrincipalResolver = (
+        dependency_unavailable_mutation_principal_resolver
+    ),
+    mutation_executor: AuthenticatedMutationExecutor | None = None,
     read_principal_resolver: ReadPrincipalResolver = (
         dependency_unavailable_read_principal_resolver
     ),
@@ -56,6 +60,7 @@ def create_app(
     if runtime_settings.sealed_content_enabled != runtime_sealed.enabled:
         raise RuntimeError("invalid_sealed_content_configuration")
     mcp_server = create_mcp(
+        mutation_principal_resolver=mutation_principal_resolver,
         mutation_executor=mutation_executor,
         read_principal_resolver=read_principal_resolver,
         read_executor=read_executor,

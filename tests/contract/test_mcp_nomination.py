@@ -15,6 +15,7 @@ from kivra_memory.api.mcp import (
     NominationResponse,
     NominationWireRequest,
 )
+from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import NominationCommandLike, SelectionResult
 from kivra_memory.config import Settings
 from kivra_memory.domain.identifiers import new_uuid7
@@ -24,6 +25,21 @@ from mcp.client.streamable_http import streamable_http_client
 
 def uid(value: int) -> UUID:
     return new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=value)
+
+
+def principal() -> CommandPrincipal:
+    return CommandPrincipal(
+        tenant_id=uid(20),
+        actor_id=uid(21),
+        client_id=uid(22),
+        transport_binding_id=uid(23),
+        scopes=frozenset({"memory.write.nominate"}),
+    )
+
+
+async def resolve_principal(context: object) -> CommandPrincipal:
+    assert context is not None
+    return principal()
 
 
 def nomination_arguments() -> dict[str, Any]:
@@ -65,10 +81,12 @@ def nomination_arguments() -> dict[str, Any]:
 
 class RecordingNominationExecutor:
     def __init__(self) -> None:
-        self.calls: list[tuple[object, NominationCommandLike]] = []
+        self.calls: list[tuple[CommandPrincipal, NominationCommandLike]] = []
 
-    async def __call__(self, context: object, command: NominationCommandLike) -> NominationResponse:
-        self.calls.append((context, command))
+    async def __call__(
+        self, authority: CommandPrincipal, command: NominationCommandLike
+    ) -> NominationResponse:
+        self.calls.append((authority, command))
         return SelectionResult(
             receipt_id=uid(10),
             decision_id=uid(11),
@@ -84,8 +102,10 @@ class RecordingNominationExecutor:
 
 
 class RaisingNominationExecutor:
-    async def __call__(self, context: object, command: NominationCommandLike) -> NominationResponse:
-        del context, command
+    async def __call__(
+        self, authority: CommandPrincipal, command: NominationCommandLike
+    ) -> NominationResponse:
+        del authority, command
         raise RuntimeError("SENSITIVE_NOMINATION_MARKER SQL private statement")
 
 
@@ -108,7 +128,11 @@ async def mcp_session(app: FastAPI) -> AsyncIterator[ClientSession]:
 def nomination_app(executor: NominationExecutor | None = None) -> FastAPI:
     if executor is None:
         return create_app(Settings(environment="test"))
-    return create_app(Settings(environment="test"), nomination_executor=executor)
+    return create_app(
+        Settings(environment="test"),
+        mutation_principal_resolver=resolve_principal,
+        nomination_executor=executor,
+    )
 
 
 async def test_nomination_schema_excludes_trusted_and_identity_inputs() -> None:
@@ -174,6 +198,7 @@ async def test_nomination_constructs_strict_dto_and_calls_executor_once() -> Non
     assert result.structuredContent["policy_version"] == "selection-v1"
     assert "root" not in result.structuredContent
     assert len(executor.calls) == 1
+    assert executor.calls[0][0] == principal()
     command = executor.calls[0][1]
     assert type(command) is NominationWireRequest
     assert not hasattr(command.proposal, "effective_authority_class")
