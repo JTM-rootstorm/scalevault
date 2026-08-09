@@ -11,6 +11,8 @@ requires-python = ">=3.13"
 license = { text = "AGPL-3.0-only" }
 dependencies = [
     "alembic>=1.16,<2",
+    "cbor2>=5.7,<6",
+    "cryptography>=46,<51",
     "fastapi>=0.116,<1",
     "jsonschema>=4.25,<5",
     "mcp>=1.12,<2",
@@ -23,6 +25,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0,<3",
     "structlog>=25.4,<26",
     "uvicorn[standard]>=0.35,<1",
+    "zstandard>=0.24,<1",
 ]
 
 [project.optional-dependencies]
