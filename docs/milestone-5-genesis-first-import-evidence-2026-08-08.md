@@ -59,7 +59,10 @@ engine.
 
 ## Repository verification
 
-The final repository gate passed through the plugin step with:
+The repository gate completed in two invocations. The first command passed all
+stages through schema validation and stopped only because this workstation has
+no `pnpm` executable. The second command supplied the pinned pnpm release and
+passed the remaining plugin checks:
 
 ```bash
 make verify
