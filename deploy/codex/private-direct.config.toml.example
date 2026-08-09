@@ -1,0 +1,23 @@
+# Merge this table into ~/.codex/config.toml or a trusted project's
+# .codex/config.toml. Never put the bearer token in this file.
+[mcp_servers.kivra_memory]
+url = "https://memory.private.example/mcp"
+bearer_token_env_var = "KIVRA_MEMORY_TOKEN"
+enabled = true
+required = true
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+default_tools_approval_mode = "writes"
+enabled_tools = [
+  "memory_context_pack",
+  "memory_search",
+  "memory_get",
+  "memory_timeline",
+  "memory_conflicts",
+  "memory_lineage",
+  "memory_selection_history",
+  "memory_selection_decisions",
+  "memory_ingress_status",
+  "memory_transport_status",
+  "memory_nominate",
+]
