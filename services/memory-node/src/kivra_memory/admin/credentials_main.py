@@ -222,7 +222,7 @@ def _emit_metadata(records: Sequence[CredentialMetadata]) -> None:
     safe = [
         {
             "actor_id": str(record.actor_id),
-            "capability_profile": record.capability_profile.model_dump(mode="json"),
+            "capability_profile": _capability_json(record.capability_profile),
             "client_id": str(record.client_id),
             "created_at": _timestamp(record.created_at),
             "credential_id": str(record.credential_id),
@@ -240,6 +240,23 @@ def _emit_metadata(records: Sequence[CredentialMetadata]) -> None:
     ]
     sys.stdout.buffer.write(canonical_json_bytes(safe) + b"\n")
     sys.stdout.buffer.flush()
+
+
+def _capability_json(profile: ClientCapabilityProfile) -> dict[str, object]:
+    read = profile.read
+    return {
+        "contract_version": profile.contract_version,
+        "read": (
+            None
+            if read is None
+            else {
+                "allowed_memory_scopes": sorted(item.value for item in read.allowed_memory_scopes),
+                "allowed_visibilities": sorted(item.value for item in read.allowed_visibilities),
+                "max_sensitivity": read.max_sensitivity,
+                "allow_candidates": read.allow_candidates,
+            }
+        ),
+    }
 
 
 def _timestamp(value: datetime | None) -> str | None:

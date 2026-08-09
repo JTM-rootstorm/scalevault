@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -164,6 +166,33 @@ def test_metadata_output_never_contains_token_or_verifier(
     assert "secret_hash" not in captured.out
     assert "token" not in captured.out
     assert "hmac-sha256" not in captured.out
+
+
+def test_metadata_output_sorts_capability_sets_deterministically(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    record = replace(
+        _metadata(),
+        capability_profile=ClientCapabilityProfile(
+            contract_version="scalevault-client-capability-v1",
+            read=ReadCapability(
+                allowed_memory_scopes=frozenset(
+                    {MemoryScope.RELATIONSHIP, MemoryScope.GLOBAL, MemoryScope.PERSONA}
+                ),
+                allowed_visibilities=frozenset(
+                    {MemoryVisibility.RESTRICTED, MemoryVisibility.PRIVATE_ROOT}
+                ),
+                max_sensitivity=3,
+                allow_candidates=False,
+            ),
+        ),
+    )
+
+    credentials_main._emit_metadata((record,))
+
+    profile = json.loads(capsys.readouterr().out)[0]["capability_profile"]["read"]
+    assert profile["allowed_memory_scopes"] == ["global", "persona", "relationship"]
+    assert profile["allowed_visibilities"] == ["private_root", "restricted"]
 
 
 def test_main_reports_only_fixed_failure(

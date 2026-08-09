@@ -23,6 +23,7 @@ from kivra_memory.admin.credentials import (
 )
 from kivra_memory.application.authentication import CredentialIdentity, CredentialLookup
 from kivra_memory.auth import ClientCapabilityProfile
+from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import TransportKind
 from kivra_memory.domain.identifiers import require_uuid7
 from kivra_memory.storage.models import (
@@ -570,7 +571,7 @@ def _identity_from_state(state: _CredentialState) -> CredentialIdentity:
     if not scopes or len(scopes) != len(set(scopes)) or not set(scopes) <= ALLOWED_CLIENT_SCOPES:
         raise CredentialStorageError
     try:
-        capability = ClientCapabilityProfile.model_validate(state.client.capability_profile)
+        capability = _capability_profile_from_jsonb(state.client.capability_profile)
     except (TypeError, ValueError):
         raise CredentialStorageError from None
     operations = state.binding.authorized_operations
@@ -690,7 +691,7 @@ def _metadata_from_issuance(issuance: CodexInstallationIssuance) -> CredentialMe
 def _metadata_from_state(state: _AdminCredentialState) -> CredentialMetadata:
     host, environment = _actor_labels(state.actor_metadata)
     try:
-        profile = ClientCapabilityProfile.model_validate(state.capability_profile)
+        profile = _capability_profile_from_jsonb(state.capability_profile)
     except (TypeError, ValueError):
         raise CredentialAdminError("credential_metadata_invalid") from None
     return CredentialMetadata(
@@ -708,6 +709,35 @@ def _metadata_from_state(state: _AdminCredentialState) -> CredentialMetadata:
         expires_at=state.expires_at,
         last_used_at=state.last_used_at,
         revoked_at=state.revoked_at,
+    )
+
+
+def _capability_profile_from_jsonb(value: dict[str, object]) -> ClientCapabilityProfile:
+    """Hydrate strict capability types through their canonical JSON representation."""
+
+    if not isinstance(value, dict) or set(value) != {"contract_version", "read"}:
+        raise ValueError("capability profile JSON shape is invalid")
+    read = value["read"]
+    if read is not None:
+        if not isinstance(read, dict) or set(read) != {
+            "allowed_memory_scopes",
+            "allowed_visibilities",
+            "max_sensitivity",
+            "allow_candidates",
+        }:
+            raise ValueError("read capability JSON shape is invalid")
+        for field_name in ("allowed_memory_scopes", "allowed_visibilities"):
+            values = read[field_name]
+            if (
+                not isinstance(values, list)
+                or not values
+                or any(not isinstance(item, str) for item in values)
+                or len(values) != len(set(values))
+            ):
+                raise ValueError("read capability collection is invalid")
+    return ClientCapabilityProfile.model_validate_json(
+        canonical_json_bytes(value),
+        strict=True,
     )
 
 

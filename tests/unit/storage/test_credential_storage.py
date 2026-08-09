@@ -6,11 +6,16 @@ from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
-from kivra_memory.domain.enums import TransportKind
+import pytest
+from kivra_memory.admin.credentials import CredentialAdminError
+from kivra_memory.domain.enums import MemoryScope, MemoryVisibility, TransportKind
 from kivra_memory.storage.credentials import (
     CredentialStorageError,
+    _AdminCredentialState,
     _credential_lookup_statement,
     _CredentialState,
+    _identity_from_state,
+    _metadata_from_state,
     _monotonic_audit_timestamp,
     _state_is_active,
 )
@@ -96,6 +101,27 @@ def _state(
             secret_hash_key_id="test-v1",
             created_at=_NOW,
         ),
+    )
+
+
+def _admin_state(state: _CredentialState) -> _AdminCredentialState:
+    return _AdminCredentialState(
+        credential_id=state.credential.credential_id,
+        tenant_id=state.tenant.tenant_id,
+        actor_id=state.actor.actor_id,
+        client_id=state.client.client_id,
+        transport_binding_id=state.binding.transport_binding_id,
+        public_hint=state.credential.public_hint,
+        created_at=state.credential.created_at,
+        expires_at=state.credential.expires_at,
+        last_used_at=state.credential.last_used_at,
+        revoked_at=state.credential.revoked_at,
+        client_scopes=tuple(state.client.scopes),
+        capability_profile=state.client.capability_profile,
+        actor_metadata={
+            "host_label": "jsonb-host",
+            "environment_label": "integration",
+        },
     )
 
 
@@ -188,6 +214,79 @@ def test_last_used_audit_survives_database_clock_rollback() -> None:
     assert _monotonic_audit_timestamp(None, _NOW) == _NOW
     assert _monotonic_audit_timestamp(_NOW, later) == later
     assert _monotonic_audit_timestamp(later, _NOW) == later
+
+
+def test_jsonb_capability_lists_hydrate_for_authentication_and_metadata() -> None:
+    state = _state()
+    state.client.capability_profile = {
+        "contract_version": "scalevault-client-capability-v1",
+        "read": {
+            "allowed_memory_scopes": ["persona", "relationship"],
+            "allowed_visibilities": ["private_root", "restricted"],
+            "max_sensitivity": 3,
+            "allow_candidates": False,
+        },
+    }
+    state.client.scopes = ["memory.read.context", "memory.write.nominate"]
+
+    identity = _identity_from_state(state)
+    metadata = _metadata_from_state(_admin_state(state))
+
+    identity_read = identity.capability_profile["read"]
+    assert isinstance(identity_read, dict)
+    assert set(identity_read["allowed_memory_scopes"]) == {"persona", "relationship"}
+    assert set(identity_read["allowed_visibilities"]) == {"private_root", "restricted"}
+    assert identity_read["max_sensitivity"] == 3
+    assert identity_read["allow_candidates"] is False
+    assert metadata.capability_profile.read is not None
+    assert metadata.capability_profile.read.allowed_memory_scopes == frozenset(
+        {MemoryScope.PERSONA, MemoryScope.RELATIONSHIP}
+    )
+    assert metadata.capability_profile.read.allowed_visibilities == frozenset(
+        {MemoryVisibility.PRIVATE_ROOT, MemoryVisibility.RESTRICTED}
+    )
+
+
+@pytest.mark.parametrize(
+    "corrupt_profile",
+    [
+        {
+            "contract_version": "scalevault-client-capability-v1",
+            "read": {
+                "allowed_memory_scopes": ["persona", "persona"],
+                "allowed_visibilities": ["private_root"],
+                "max_sensitivity": 3,
+                "allow_candidates": False,
+            },
+        },
+        {
+            "contract_version": "scalevault-client-capability-v1",
+            "read": None,
+            "unknown": False,
+        },
+        {
+            "contract_version": "scalevault-client-capability-v1",
+            "read": {
+                "allowed_memory_scopes": ("persona",),
+                "allowed_visibilities": ["private_root"],
+                "max_sensitivity": 3,
+                "allow_candidates": False,
+            },
+        },
+    ],
+)
+def test_corrupt_jsonb_capability_shape_fails_with_safe_storage_errors(
+    corrupt_profile: dict[str, object],
+) -> None:
+    state = _state()
+    state.client.capability_profile = corrupt_profile
+
+    with pytest.raises(CredentialStorageError, match=r"^authentication failed$"):
+        _identity_from_state(state)
+    with pytest.raises(CredentialAdminError) as caught:
+        _metadata_from_state(_admin_state(state))
+
+    assert caught.value.code == "credential_metadata_invalid"
 
 
 def test_storage_failure_is_content_free() -> None:
