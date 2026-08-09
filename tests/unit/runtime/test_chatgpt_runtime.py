@@ -236,7 +236,8 @@ async def test_oauth_protected_resource_discovery_is_bare_not_advertised() -> No
         protected_mcp = await client.get("/chatgpt/mcp")
 
     assert all(response.status_code == 404 for response in responses)
-    assert all(response.content == b"" for response in responses)
+    assert all(response.content == b"{}" for response in responses)
+    assert all(response.headers["content-type"] == "application/json" for response in responses)
     assert all("www-authenticate" not in response.headers for response in responses)
     assert protected_mcp.status_code == 401
     assert protected_mcp.json() == {"error": "authentication_required"}
