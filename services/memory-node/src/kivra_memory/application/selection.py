@@ -21,6 +21,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from kivra_memory.application.mutations import CommandPrincipal
+from kivra_memory.application.sealed_content import (
+    ContentSealer,
+    SealedContentRequest,
+    SealedMemoryPlaintext,
+    envelope_state,
+)
 from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import (
     AuthorityClass,
@@ -34,8 +40,10 @@ from kivra_memory.domain.events import (
     CandidateLifecyclePayload,
     EvidenceState,
     MemoryCreatedPayloadV2,
+    MemoryCreatedPayloadV3,
     MemoryEvent,
     MemoryStateV2,
+    MemoryStateV3,
     event_hash_fields,
 )
 from kivra_memory.domain.fingerprints import exact_memory_fingerprint
@@ -56,6 +64,13 @@ from kivra_memory.policy import (
     evaluate_promotion,
     evaluate_selection,
 )
+from kivra_memory.security.keys import ContentKeyReference, KeyProvider, KeyProviderError
+from kivra_memory.security.sealed_content import (
+    SealedContentContext,
+    SealedContentEnvelope,
+    SealedContentError,
+    seal_with_provider,
+)
 from kivra_memory.storage.event_store import EventStoreError, append_memory_event
 from kivra_memory.storage.live_projection import (
     load_projection_state_for_update,
@@ -73,6 +88,7 @@ from kivra_memory.storage.models import (
     Lineage,
     LogicalSession,
     Memory,
+    MemoryContentKey,
     MemoryEvidence,
     Persona,
     SelectionDecision,
@@ -108,6 +124,7 @@ class NominationCommandLike(Protocol):
     reason: str
     proposal: NominationProposal
     logical_session_id: UUID | None
+    sealed_content: SealedContentRequest | None
 
 
 class ResolvedNominationContext(BaseModel):
@@ -239,6 +256,7 @@ class _NominationIdentifiers:
         self.decision_id = new_uuid7()
         self.event_id = new_uuid7()
         self.memory_id = new_uuid7()
+        self.content_key_id = new_uuid7()
         self.correlation_id = new_uuid7()
         self.evidence_ids = tuple(new_uuid7() for _ in range(evidence_count))
         self.job_ids = tuple(new_uuid7() for _ in range(4))
@@ -283,6 +301,11 @@ def _command_material(
             str(command.logical_session_id) if command.logical_session_id is not None else None
         ),
     }
+    sealed_request = getattr(command, "sealed_content", None)
+    if sealed_request is not None:
+        if not isinstance(sealed_request, SealedContentRequest):
+            raise ValueError("sealed-content request is invalid")
+        material["sealed_content"] = sealed_request.model_dump(mode="json")
     transaction_binding_sha256 = getattr(command, "transaction_binding_sha256", None)
     if transaction_binding_sha256 is not None:
         if (
@@ -458,7 +481,7 @@ def _event(
     principal: CommandPrincipal,
     command: NominationCommandLike,
     lineage_id: UUID,
-    payload: MemoryCreatedPayloadV2 | CandidateLifecyclePayload,
+    payload: MemoryCreatedPayloadV2 | MemoryCreatedPayloadV3 | CandidateLifecyclePayload,
     event_id: UUID,
     correlation_id: UUID,
     created_at: datetime,
@@ -468,10 +491,11 @@ def _event(
     idempotency_key: str | None = None,
     internal_lifecycle: bool = False,
 ) -> MemoryEvent:
+    contract_version: Literal[2, 3] = 3 if isinstance(payload, MemoryCreatedPayloadV3) else 2
     payload_value, payload_canonical, payload_sha256, command_sha256 = event_hash_fields(
         operation=operation,
         payload=payload,
-        payload_version=2,
+        payload_version=contract_version,
         tenant_id=principal.tenant_id,
         lineage_id=lineage_id,
         branch_id=command.branch_id,
@@ -483,8 +507,8 @@ def _event(
     )
     del policy_input_digest
     return MemoryEvent(
-        schema_version=2,
-        payload_version=2,
+        schema_version=contract_version,
+        payload_version=contract_version,
         sequence=1,
         event_id=event_id,
         tenant_id=principal.tenant_id,
@@ -525,10 +549,15 @@ class SelectionEngine:
         promotion_principal_provider: PromotionPrincipalProvider
         | Callable[[CommandPrincipal, NominationCommandLike, UUID], Awaitable[CommandPrincipal]]
         | None = None,
+        *,
+        key_provider: KeyProvider | None = None,
+        sealer: ContentSealer = seal_with_provider,
     ) -> None:
         self._session_factory = session_factory
         self._resolver = resolver
         self._promotion_principal_provider = promotion_principal_provider
+        self._key_provider = key_provider
+        self._sealer = sealer
 
     async def execute(
         self,
@@ -543,6 +572,15 @@ class SelectionEngine:
         if not self._authorized(principal):
             raise SelectionExecutionError("forbidden")
         try:
+            sealed_request = getattr(command, "sealed_content", None)
+            if sealed_request is not None and not isinstance(sealed_request, SealedContentRequest):
+                raise SelectionExecutionError("invalid_input")
+            if command.proposal.sensitivity == 4 and sealed_request is None:
+                raise SelectionExecutionError("invalid_input")
+            if sealed_request is not None and principal.ingress_id is not None:
+                raise SelectionExecutionError("forbidden")
+            if sealed_request is not None and self._key_provider is None:
+                raise SelectionExecutionError("dependency_unavailable")
             command_digest = _command_digest(principal, command)
             command_binding = getattr(command, "transaction_binding_sha256", None)
             if transaction_participant is not None and (
@@ -566,6 +604,8 @@ class SelectionEngine:
                 return replay
 
             resolved = await self._resolve(principal, command)
+            if sealed_request is not None and resolved.source_kind == "github_proposal":
+                raise SelectionExecutionError("forbidden")
             if principal.scopes == frozenset({"memory.write.genesis_import"}) and (
                 resolved.source_kind != "genesis_import"
                 or command.proposal.selection_basis is not SelectionBasis.IMPORTED_LEGACY
@@ -596,7 +636,13 @@ class SelectionEngine:
             raise
         except SerializableTransactionError as error:
             raise SelectionExecutionError("serialization_exhausted") from error
-        except (EventStoreError, ProjectionPersistenceError, SelectionHistoryError):
+        except (
+            EventStoreError,
+            ProjectionPersistenceError,
+            SelectionHistoryError,
+            KeyProviderError,
+            SealedContentError,
+        ):
             raise SelectionExecutionError("dependency_unavailable") from None
         except SQLAlchemyError:
             raise SelectionExecutionError("dependency_unavailable") from None
@@ -1040,63 +1086,142 @@ class SelectionEngine:
             else:
                 memory_id = identifiers.memory_id
                 status = MemoryStatus(outcome.value)
+                sealed_request = getattr(command, "sealed_content", None)
                 ttl_days = policy_decision.candidate_ttl_days
                 deadline = (
                     identifiers.created_at + timedelta(days=ttl_days)
                     if status is MemoryStatus.CANDIDATE and ttl_days is not None
                     else None
                 )
-                evidence_for_event = tuple(
-                    _evidence_state(
-                        summary=item,
-                        evidence_id=evidence_id,
+                common_state: dict[str, object] = {
+                    "memory_id": memory_id,
+                    "tenant_id": principal.tenant_id,
+                    "lineage_id": lineage_id,
+                    "branch_id": command.branch_id,
+                    "subject_id": proposal.subject_id,
+                    "subject_kind": proposal.subject_kind,
+                    "revision": 1,
+                    "category": proposal.category,
+                    "ontological_status": proposal.ontological_status,
+                    "scope": proposal.scope,
+                    "visibility": proposal.visibility,
+                    "status": status,
+                    "confidence": proposal.confidence,
+                    "salience": proposal.salience,
+                    "durability": proposal.durability,
+                    "sensitivity": proposal.sensitivity,
+                    "authority_class": resolved.effective_authority_class,
+                    "valid_from": proposal.valid_from,
+                    "valid_to": proposal.valid_to,
+                    "observed_at": proposal.observed_at or identifiers.created_at,
+                    "origin_session_id": proposal.origin_session_id,
+                    "publication_approved_at": None,
+                    "publication_approved_by_actor_id": None,
+                    "created_at": identifiers.created_at,
+                    "updated_at": identifiers.created_at,
+                    "fingerprint_version": 1,
+                    "candidate_expires_at": deadline,
+                }
+                state: MemoryStateV2 | MemoryStateV3
+                creation_payload: MemoryCreatedPayloadV2 | MemoryCreatedPayloadV3
+                if isinstance(sealed_request, SealedContentRequest):
+                    provider = self._key_provider
+                    if provider is None:
+                        raise SelectionExecutionError("dependency_unavailable")
+                    reference = await provider.provision_key(
+                        content_key_id=identifiers.content_key_id,
+                        tenant_id=principal.tenant_id,
+                        lineage_id=lineage_id,
+                        memory_id=memory_id,
+                    )
+                    if (
+                        not isinstance(reference, ContentKeyReference)
+                        or reference.content_key_id != identifiers.content_key_id
+                        or reference.provider_name != provider.name
+                    ):
+                        raise KeyProviderError()
+                    context = SealedContentContext(
                         tenant_id=principal.tenant_id,
                         lineage_id=lineage_id,
                         branch_id=command.branch_id,
                         memory_id=memory_id,
-                        created_at=identifiers.created_at,
+                        content_key_id=identifiers.content_key_id,
+                        revision=1,
+                        event_id=identifiers.event_id,
+                        schema_version=3,
+                        payload_version=3,
                     )
-                    for item, evidence_id in zip(
-                        resolved.evidence, identifiers.evidence_ids, strict=True
+                    plaintext = SealedMemoryPlaintext(
+                        statement=proposal.statement,
+                        reason_to_remember=proposal.reason_to_remember,
+                        interpretation_limits=proposal.interpretation_limits,
+                        metadata=proposal.metadata,
                     )
-                )
-                state = MemoryStateV2(
-                    memory_id=memory_id,
-                    tenant_id=principal.tenant_id,
-                    lineage_id=lineage_id,
-                    branch_id=command.branch_id,
-                    subject_id=proposal.subject_id,
-                    subject_kind=proposal.subject_kind,
-                    revision=1,
-                    category=proposal.category,
-                    ontological_status=proposal.ontological_status,
-                    scope=proposal.scope,
-                    visibility=proposal.visibility,
-                    status=status,
-                    statement=proposal.statement,
-                    reason_to_remember=proposal.reason_to_remember,
-                    interpretation_limits=proposal.interpretation_limits,
-                    confidence=proposal.confidence,
-                    salience=proposal.salience,
-                    durability=proposal.durability,
-                    sensitivity=proposal.sensitivity,
-                    authority_class=resolved.effective_authority_class,
-                    valid_from=proposal.valid_from,
-                    valid_to=proposal.valid_to,
-                    observed_at=proposal.observed_at or identifiers.created_at,
-                    origin_session_id=proposal.origin_session_id,
-                    publication_approved_at=None,
-                    publication_approved_by_actor_id=None,
-                    content_protection="plaintext",
-                    content_key_id=None,
-                    created_at=identifiers.created_at,
-                    updated_at=identifiers.created_at,
-                    fingerprint_version=1,
-                    normalized_fingerprint=fingerprint,
-                    metadata=proposal.metadata,
-                    candidate_expires_at=deadline,
-                )
-                creation_payload = MemoryCreatedPayloadV2(memory=state, evidence=evidence_for_event)
+                    envelope = await self._sealer(
+                        provider=provider,
+                        reference=reference,
+                        plaintext=plaintext.canonical_bytes(),
+                        context=context,
+                        safe_summary=sealed_request.safe_summary,
+                    )
+                    if not isinstance(envelope, SealedContentEnvelope):
+                        raise SealedContentError("sealed content encryption failed")
+                    state = MemoryStateV3.model_validate(
+                        {
+                            **common_state,
+                            "statement": None,
+                            "reason_to_remember": None,
+                            "interpretation_limits": (),
+                            "content_protection": "envelope_encrypted",
+                            "content_key_id": identifiers.content_key_id,
+                            "normalized_fingerprint": None,
+                            "metadata": {},
+                            "sealed_content": envelope_state(envelope),
+                        }
+                    )
+                    creation_payload = MemoryCreatedPayloadV3(memory=state)
+                    session.add(
+                        MemoryContentKey(
+                            content_key_id=reference.content_key_id,
+                            tenant_id=principal.tenant_id,
+                            lineage_id=lineage_id,
+                            memory_id=memory_id,
+                            provider_name=reference.provider_name,
+                            provider_key_reference=reference.provider_key_reference,
+                            state="active",
+                            created_at=identifiers.created_at,
+                        )
+                    )
+                else:
+                    evidence_for_event = tuple(
+                        _evidence_state(
+                            summary=item,
+                            evidence_id=evidence_id,
+                            tenant_id=principal.tenant_id,
+                            lineage_id=lineage_id,
+                            branch_id=command.branch_id,
+                            memory_id=memory_id,
+                            created_at=identifiers.created_at,
+                        )
+                        for item, evidence_id in zip(
+                            resolved.evidence, identifiers.evidence_ids, strict=True
+                        )
+                    )
+                    state = MemoryStateV2.model_validate(
+                        {
+                            **common_state,
+                            "statement": proposal.statement,
+                            "reason_to_remember": proposal.reason_to_remember,
+                            "interpretation_limits": proposal.interpretation_limits,
+                            "content_protection": "plaintext",
+                            "content_key_id": None,
+                            "normalized_fingerprint": fingerprint,
+                            "metadata": proposal.metadata,
+                        }
+                    )
+                    creation_payload = MemoryCreatedPayloadV2(
+                        memory=state, evidence=evidence_for_event
+                    )
                 assert memory_id is not None
                 new_memory_id = memory_id
                 operation = (
@@ -1309,21 +1434,30 @@ class SelectionEngine:
     ) -> None:
         if memory_id is None or revision is None:
             return
-        jobs: list[tuple[str, str, dict[str, OutboxReferenceValue], datetime | None]] = [
-            (
-                "embed_memory",
-                "memory",
-                {"memory_id": memory_id, "memory_version": revision, "event_id": event.event_id},
-                None,
-            ),
+        sealed = isinstance(event.typed_payload(), MemoryCreatedPayloadV3)
+        jobs: list[tuple[str, str, dict[str, OutboxReferenceValue], datetime | None]] = []
+        if not sealed:
+            jobs.append(
+                (
+                    "embed_memory",
+                    "memory",
+                    {
+                        "memory_id": memory_id,
+                        "memory_version": revision,
+                        "event_id": event.event_id,
+                    },
+                    None,
+                )
+            )
+        jobs.append(
             (
                 "export_git_batch",
                 "event",
                 {"event_id": event.event_id, "event_sequence": event.sequence},
                 None,
-            ),
-        ]
-        if not promotion:
+            )
+        )
+        if not promotion and not sealed:
             jobs.insert(
                 1,
                 (

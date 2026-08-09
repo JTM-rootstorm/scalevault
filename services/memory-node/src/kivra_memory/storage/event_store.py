@@ -32,6 +32,7 @@ from kivra_memory.domain.events import (
     MemoryCreatedPayload,
     MemoryEvent,
     MemoryState,
+    MemoryStateV3,
     MemoryTransitionPayload,
     validate_event_envelope_shape,
 )
@@ -148,6 +149,8 @@ def _validate_after_image_constraints(binding: TransportBinding, event: MemoryEv
             raise EventStoreError(
                 error.code, "memory after-image violates accepted constraints"
             ) from None
+        if memory.sensitivity == 4 and not isinstance(memory, MemoryStateV3):
+            _reject("sealed_content_required", "sensitivity-four writes require sealed content")
 
 
 def _validate_transport(binding: TransportBinding, event: MemoryEvent) -> None:
@@ -159,6 +162,8 @@ def _validate_transport(binding: TransportBinding, event: MemoryEvent) -> None:
             _reject("github_operation_forbidden", "GitHub ingress operation is not permitted")
         if event.ingress_id is None:
             _reject("github_ingress_required", "GitHub ingress event requires ingress provenance")
+        if any(isinstance(memory, MemoryStateV3) for memory in _after_images(event)):
+            _reject("github_sealed_content_forbidden", "GitHub ingress cannot write sealed content")
     elif event.ingress_id is not None:
         _reject("ingress_forbidden", "non-GitHub event cannot contain ingress provenance")
 

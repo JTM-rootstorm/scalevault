@@ -36,6 +36,7 @@ from kivra_memory.domain.events import (
     MemoryCreatedPayload,
     MemoryState,
     MemoryStateV2,
+    MemoryStateV3,
     MemoryTransitionPayload,
     SupersededPayload,
     UnlinkedPayload,
@@ -201,6 +202,7 @@ def _required[ValueT](mapping: Mapping[ValueT, UUID], key: ValueT, code: str) ->
 
 
 def _memory_row(state: MemoryState, last_event_id: UUID) -> Memory:
+    sealed = state.sealed_content if isinstance(state, MemoryStateV3) else None
     return Memory(
         memory_id=state.memory_id,
         tenant_id=state.tenant_id,
@@ -240,6 +242,16 @@ def _memory_row(state: MemoryState, last_event_id: UUID) -> Memory:
         publication_approved_by_actor_id=state.publication_approved_by_actor_id,
         content_protection=state.content_protection,
         content_key_id=state.content_key_id,
+        sealed_envelope_version=sealed.envelope_version if sealed is not None else None,
+        sealed_algorithm=sealed.algorithm if sealed is not None else None,
+        sealed_nonce=(
+            base64.b64decode(sealed.nonce, validate=True) if sealed is not None else None
+        ),
+        sealed_ciphertext=(
+            base64.b64decode(sealed.ciphertext, validate=True) if sealed is not None else None
+        ),
+        sealed_aad_sha256=(bytes.fromhex(sealed.aad_sha256) if sealed is not None else None),
+        safe_summary=sealed.safe_summary if sealed is not None else None,
         last_event_id=last_event_id,
     )
 
@@ -528,7 +540,14 @@ async def rebuild_semantic_projections(
 def memory_row_to_state(row: Memory) -> MemoryState:
     """Convert one memory projection row to its validated domain after-image."""
 
-    state_type = MemoryStateV2 if row.candidate_expires_at is not None else MemoryState
+    protected = row.content_protection in {"envelope_encrypted", "cryptographically_erased"}
+    state_type = (
+        MemoryStateV3
+        if protected
+        else MemoryStateV2
+        if row.candidate_expires_at is not None
+        else MemoryState
+    )
     values: dict[str, object] = {
         "memory_id": row.memory_id,
         "tenant_id": row.tenant_id,
@@ -570,6 +589,27 @@ def memory_row_to_state(row: Memory) -> MemoryState:
     }
     if state_type is MemoryStateV2:
         values["candidate_expires_at"] = row.candidate_expires_at
+    elif state_type is MemoryStateV3:
+        try:
+            if (
+                row.sealed_nonce is None
+                or row.sealed_ciphertext is None
+                or row.sealed_aad_sha256 is None
+            ):
+                raise ValueError
+            values["candidate_expires_at"] = row.candidate_expires_at
+            values["sealed_content"] = {
+                "contract_version": "scalevault.sealed-content-envelope.v1",
+                "envelope_version": row.sealed_envelope_version,
+                "algorithm": row.sealed_algorithm,
+                "content_key_id": row.content_key_id,
+                "nonce": base64.b64encode(bytes(row.sealed_nonce)).decode("ascii"),
+                "ciphertext": base64.b64encode(bytes(row.sealed_ciphertext)).decode("ascii"),
+                "aad_sha256": bytes(row.sealed_aad_sha256).hex(),
+                "safe_summary": row.safe_summary,
+            }
+        except (TypeError, ValueError):
+            raise ProjectionPersistenceError("invalid_sealed_projection") from None
     return state_type.model_validate(values)
 
 

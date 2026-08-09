@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
+from uuid import UUID
 
 import pytest
 from jsonschema import ValidationError  # type: ignore[import-untyped]
-from kivra_memory.domain.events import MemoryEvent
+from kivra_memory.domain.enums import EventOperation
+from kivra_memory.domain.events import MemoryCreatedPayloadV3, MemoryEvent, event_hash_fields
 from kivra_memory.policy import SELECTION_V1_PROFILE_SHA256, SelectionPolicyProfile
 from kivra_memory.retrieval.budgeting import estimate_utf8_upper_bound
 from kivra_memory.retrieval.contracts import ContextPackResult
@@ -378,6 +380,59 @@ def test_event_v2_candidate_lifecycle_requires_its_closed_versioned_payload() ->
     event["schema_version"] = 1
     with pytest.raises(ValidationError):
         validator.validate(event)
+
+
+def test_event_v3_sealed_creation_matches_checked_in_contract_branch() -> None:
+    schema_documents = load_schema_documents()
+    event_path = next(path for path in schema_documents if path.name == "memory-event.schema.json")
+    event = load_schema(FIXTURE_DIRECTORY / event_path.name)
+    envelope = load_schema(FIXTURE_DIRECTORY / "sealed-content-envelope-v1.schema.json")
+    memory = deepcopy(event["payload"]["memory"])
+    memory.update(
+        {
+            "statement": None,
+            "reason_to_remember": None,
+            "interpretation_limits": [],
+            "sensitivity": 4,
+            "content_protection": "envelope_encrypted",
+            "content_key_id": envelope["content_key_id"],
+            "normalized_fingerprint": None,
+            "metadata": {},
+            "candidate_expires_at": None,
+            "sealed_content": envelope,
+        }
+    )
+    payload = MemoryCreatedPayloadV3.model_validate(
+        {"memory": memory, "evidence": []}, strict=False
+    )
+    payload_value, payload_canonical, payload_sha256, command_sha256 = event_hash_fields(
+        operation=EventOperation.REMEMBERED,
+        payload=payload,
+        payload_version=3,
+        tenant_id=UUID(event["tenant_id"]),
+        lineage_id=UUID(event["lineage_id"]),
+        branch_id=UUID(event["branch_id"]),
+        actor_id=UUID(event["actor_id"]),
+        client_id=UUID(event["client_id"]),
+        memory_id=UUID(event["memory_id"]),
+        expected_revision=None,
+        causation_event_id=None,
+    )
+    event.update(
+        {
+            "schema_version": 3,
+            "payload_version": 3,
+            "payload": payload_value,
+            "payload_canonical": payload_canonical,
+            "payload_sha256": payload_sha256,
+            "command_sha256": command_sha256,
+        }
+    )
+    registry = build_registry(schema_documents)
+
+    validator_for(schema_documents[event_path], registry).validate(event)
+    MemoryEvent.model_validate(event, strict=False)
+    assert "Contract fixtures are validated" not in payload_canonical
 
 
 def test_event_fixture_canonical_payload_bytes_are_authoritative() -> None:

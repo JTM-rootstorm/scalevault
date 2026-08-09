@@ -7,7 +7,11 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from uuid import UUID
 
-from kivra_memory.domain.canonical_json import canonical_json_bytes, normalize_json_value
+from kivra_memory.domain.canonical_json import (
+    canonical_json_bytes,
+    normalize_json_value,
+    sha256_digest,
+)
 from kivra_memory.domain.enums import EventOperation, MemoryStatus, MemoryVisibility
 from kivra_memory.domain.events import (
     AffectedMemory,
@@ -27,6 +31,7 @@ from kivra_memory.domain.events import (
     MemoryCreatedPayload,
     MemoryEvent,
     MemoryState,
+    MemoryStateV3,
     MemoryTransitionPayload,
     PayloadPurgeCompletedPayload,
     SupersededPayload,
@@ -157,6 +162,30 @@ def _check_target(event: MemoryEvent, memory: MemoryState) -> None:
     _check_scoped_after_image(event, memory)
     if event.memory_id != memory.memory_id:
         raise _fail(event, "memory_mismatch", "envelope and payload memory IDs differ")
+    if (
+        isinstance(memory, MemoryStateV3)
+        and memory.content_protection == "envelope_encrypted"
+        and event.operation in {EventOperation.OBSERVED, EventOperation.REMEMBERED}
+    ):
+        if event.schema_version != 3 or event.payload_version != 3:
+            raise _fail(event, "invalid_sealed_contract", "sealed memory requires event v3")
+        aad = canonical_json_bytes(
+            {
+                "aad_contract": "scalevault.sealed-content-aad.v1",
+                "algorithm": "AES-256-GCM",
+                "branch_id": event.branch_id,
+                "content_key_id": memory.content_key_id,
+                "event_id": event.event_id,
+                "lineage_id": event.lineage_id,
+                "memory_id": memory.memory_id,
+                "payload_version": event.payload_version,
+                "revision": memory.revision,
+                "schema_version": event.schema_version,
+                "tenant_id": event.tenant_id,
+            }
+        )
+        if sha256_digest(aad).hex() != memory.sealed_content.aad_sha256:
+            raise _fail(event, "invalid_sealed_binding", "sealed memory AAD binding differs")
 
 
 def _check_revision(

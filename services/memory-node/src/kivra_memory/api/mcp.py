@@ -22,6 +22,7 @@ from pydantic import (
     model_validator,
 )
 
+from kivra_memory.application.sealed_content import SealedContentRequest
 from kivra_memory.application.selection import NominationCommandLike, SelectionResult
 from kivra_memory.application.status import (
     IngressStatusQuery,
@@ -213,6 +214,7 @@ class NominationWireRequest(BaseModel):
     reason: Annotated[str, Field(min_length=1, max_length=4096)]
     proposal: NominationProposal
     logical_session_id: UUID | None = None
+    sealed_content: SealedContentRequest | None = None
 
     @classmethod
     def _validate_uuid7(cls, value: UUID | None, field_name: str) -> UUID | None:

@@ -27,6 +27,7 @@ from kivra_memory.domain.enums import (
     SubjectKind,
 )
 from kivra_memory.domain.events import MemoryState
+from kivra_memory.security.keys import ContentKeyReference
 from kivra_memory.storage.models import (
     Branch,
     EmbeddingModel,
@@ -35,6 +36,7 @@ from kivra_memory.storage.models import (
     Memory,
     MemoryConflict,
     MemoryConflictMember,
+    MemoryContentKey,
     MemoryEmbeddingV1,
     Persona,
     Subject,
@@ -152,7 +154,9 @@ def _bounded_query(query: str) -> str:
     return value
 
 
-def _hard_predicates(filters: RetrievalFilters) -> tuple[ColumnElement[bool], ...]:
+def _hard_predicates(
+    filters: RetrievalFilters, *, require_searchable: bool = True
+) -> tuple[ColumnElement[bool], ...]:
     predicates: list[ColumnElement[bool]] = [
         Memory.tenant_id == filters.tenant_id,
         Memory.lineage_id == filters.lineage_id,
@@ -161,7 +165,6 @@ def _hard_predicates(filters: RetrievalFilters) -> tuple[ColumnElement[bool], ..
         Memory.visibility.in_(value.value for value in filters.allowed_visibilities),
         Memory.status.in_(status.value for status in filters.allowed_statuses),
         Memory.sensitivity <= filters.max_sensitivity,
-        Memory.statement.is_not(None),
         or_(
             Memory.scope.in_((MemoryScope.GLOBAL.value, MemoryScope.PERSONA.value)),
             and_(
@@ -178,6 +181,13 @@ def _hard_predicates(filters: RetrievalFilters) -> tuple[ColumnElement[bool], ..
             ),
         ),
     ]
+    if require_searchable:
+        predicates.extend(
+            (
+                Memory.content_protection == "plaintext",
+                Memory.statement.is_not(None),
+            )
+        )
     if filters.requested_subject_ids is not None:
         predicates.append(Memory.subject_id.in_(filters.requested_subject_ids))
     if filters.allowed_subject_kinds is not None:
@@ -497,8 +507,48 @@ class RetrievalRepository:
         return tuple(by_id[memory_id] for memory_id in ordered_ids if memory_id in by_id)
 
     async def get_memory(self, filters: RetrievalFilters, memory_id: UUID) -> HydratedMemory | None:
-        values = await self.hydrate_memories(filters, (memory_id,))
-        return values[0] if values else None
+        row = (
+            await self._session.execute(
+                select(Memory, Memory.last_event_id).where(
+                    *_hard_predicates(filters, require_searchable=False),
+                    Memory.memory_id == memory_id,
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        memory, last_event_id = row
+        return HydratedMemory(state=memory_row_to_state(memory), last_event_id=last_event_id)
+
+    async def content_key_reference(
+        self,
+        *,
+        tenant_id: UUID,
+        lineage_id: UUID,
+        memory_id: UUID,
+        content_key_id: UUID,
+    ) -> ContentKeyReference | None:
+        """Resolve opaque active key metadata after application eligibility succeeds."""
+
+        row = await self._session.scalar(
+            select(MemoryContentKey).where(
+                MemoryContentKey.tenant_id == tenant_id,
+                MemoryContentKey.lineage_id == lineage_id,
+                MemoryContentKey.memory_id == memory_id,
+                MemoryContentKey.content_key_id == content_key_id,
+                MemoryContentKey.state == "active",
+            )
+        )
+        if row is None:
+            return None
+        try:
+            return ContentKeyReference(
+                content_key_id=row.content_key_id,
+                provider_name=row.provider_name,
+                provider_key_reference=row.provider_key_reference,
+            )
+        except (TypeError, ValueError):
+            return None
 
     async def lineage_metadata(
         self, *, tenant_id: UUID, persona_id: UUID, branch_id: UUID

@@ -8,7 +8,7 @@ from typing import Annotated, Literal, Never
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -42,6 +42,7 @@ from kivra_memory.domain.events import (
     MemoryCreatedPayload,
     MemoryEvent,
     MemoryState,
+    MemoryStateV3,
     MemoryTransitionPayload,
     OperationPayload,
     TombstonedPayload,
@@ -204,6 +205,10 @@ def _branch_state(row: Branch) -> BranchState:
 
 def _fingerprint(state: MemoryState) -> str:
     if state.normalized_fingerprint is None:
+        if isinstance(state, MemoryStateV3):
+            return hashlib.sha256(
+                b"scalevault.sealed-lock.v1\x00" + state.memory_id.bytes
+            ).hexdigest()
         _fail("invalid_input")
     return state.normalized_fingerprint
 
@@ -279,6 +284,8 @@ def _event(
     expected_revision: int | None,
 ) -> MemoryEvent:
     operation = _EVENT_OPERATIONS[command.OPERATION]
+    sealed_v3 = isinstance(getattr(payload, "memory", None), MemoryStateV3)
+    contract_version: Literal[1, 3] = 3 if sealed_v3 else 1
     payload_value, payload_canonical, payload_sha256, command_sha256 = event_hash_fields(
         operation=operation,
         payload=payload,
@@ -290,10 +297,11 @@ def _event(
         memory_id=memory_id,
         expected_revision=expected_revision,
         causation_event_id=command.causation_event_id,
+        payload_version=contract_version,
     )
     return MemoryEvent(
-        schema_version=1,
-        payload_version=1,
+        schema_version=contract_version,
+        payload_version=contract_version,
         sequence=sequence,
         event_id=event_id,
         tenant_id=principal.tenant_id,
@@ -540,6 +548,21 @@ class MutationEngine:
         before = await load_projection_state_for_update(session, event=event, branch=branch)
         after = validate_live_event(before, event)
         await stage_live_projection(session, before=before, after=after, event=event)
+
+        if isinstance(command, ForgetCommand) and command.mode == "hard":
+            await session.execute(
+                update(MemoryContentKey)
+                .where(
+                    MemoryContentKey.tenant_id == principal.tenant_id,
+                    MemoryContentKey.lineage_id == lineage_id,
+                    MemoryContentKey.memory_id == result_memory_id,
+                    MemoryContentKey.state == "active",
+                )
+                .values(
+                    state="destruction_requested",
+                    destruction_requested_at=created_at,
+                )
+            )
 
         forget_state = None
         conflict_state = None

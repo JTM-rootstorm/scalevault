@@ -32,6 +32,9 @@ from kivra_memory.domain.identifiers import require_uuid7
 from kivra_memory.domain.values import UnitScore, normalize_utc_datetime
 
 HexDigest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+CanonicalBase64 = Annotated[
+    str, Field(pattern=r"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
+]
 SafePositiveInteger = Annotated[int, Field(ge=1, le=(1 << 53) - 1)]
 PositiveRevision = SafePositiveInteger
 
@@ -229,6 +232,113 @@ class MemoryStateV2(MemoryState):
         return self
 
 
+class SealedContentEnvelopeState(ContractModel):
+    """Canonical JSON-boundary form of one authenticated sealed envelope."""
+
+    contract_version: Literal["scalevault.sealed-content-envelope.v1"]
+    envelope_version: Literal[1]
+    algorithm: Literal["AES-256-GCM"]
+    content_key_id: UUID
+    nonce: CanonicalBase64
+    ciphertext: CanonicalBase64
+    aad_sha256: HexDigest
+    safe_summary: Annotated[str, Field(min_length=1, max_length=1024)]
+
+    @field_validator("content_key_id")
+    @classmethod
+    def validate_content_key_id(cls, value: UUID) -> UUID:
+        return _uuid7(value, "content_key_id")  # type: ignore[return-value]
+
+    @model_validator(mode="after")
+    def validate_envelope_bounds(self) -> SealedContentEnvelopeState:
+        try:
+            nonce = base64.b64decode(self.nonce, validate=True)
+            ciphertext = base64.b64decode(self.ciphertext, validate=True)
+        except ValueError as error:
+            raise ValueError("sealed envelope encoding is invalid") from error
+        if base64.b64encode(nonce).decode("ascii") != self.nonce or len(nonce) != 12:
+            raise ValueError("sealed envelope nonce is invalid")
+        if (
+            base64.b64encode(ciphertext).decode("ascii") != self.ciphertext
+            or not 17 <= len(ciphertext) <= 716_816
+        ):
+            raise ValueError("sealed envelope ciphertext is invalid")
+        if not self.safe_summary.strip() or len(self.safe_summary.encode("utf-8")) > 4096:
+            raise ValueError("sealed envelope safe summary is invalid")
+        return self
+
+
+class MemoryStateV3(MemoryStateV2):
+    """Sealed-only v3 after-image with no plaintext semantic content."""
+
+    statement: None
+    reason_to_remember: None
+    interpretation_limits: tuple[()] = ()
+    normalized_fingerprint: None
+    content_protection: Literal["envelope_encrypted", "cryptographically_erased"]
+    content_key_id: UUID
+    sealed_content: SealedContentEnvelopeState
+
+    @model_validator(mode="after")
+    def validate_state_shape(self) -> MemoryStateV3:
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at must not precede created_at")
+        if (
+            self.valid_from is not None
+            and self.valid_to is not None
+            and self.valid_to < self.valid_from
+        ):
+            raise ValueError("valid_to must not precede valid_from")
+        validate_category_ontology(self.category, self.ontological_status)
+        expected_subject = {
+            MemoryScope.GLOBAL: SubjectKind.GLOBAL,
+            MemoryScope.PERSONA: SubjectKind.PERSONA,
+            MemoryScope.RELATIONSHIP: SubjectKind.RELATIONSHIP,
+            MemoryScope.PROJECT: SubjectKind.PROJECT,
+            MemoryScope.EPISODIC: SubjectKind.EPISODE,
+            MemoryScope.SCENE_LOCAL: SubjectKind.SCENE,
+        }[self.scope]
+        if self.subject_kind is not expected_subject:
+            raise ValueError("memory scope does not match subject kind")
+        if (
+            self.scope is MemoryScope.GLOBAL
+            and self.ontological_status is OntologicalStatus.FICTIONAL_OR_ROLEPLAYED_SCENE
+        ):
+            raise ValueError("global memory cannot represent a roleplayed scene")
+        if (
+            self.scope is MemoryScope.EPISODIC
+            and self.origin_session_id is None
+            and self.authority_class is not AuthorityClass.IMPORTED_LEGACY_MEMORY
+        ):
+            raise ValueError("episodic memory requires an origin session or imported provenance")
+        if self.scope is MemoryScope.SCENE_LOCAL:
+            if self.origin_session_id is None:
+                raise ValueError("scene-local memory requires an origin session")
+            if self.visibility in {MemoryVisibility.SHAREABLE, MemoryVisibility.PUBLIC_SEED}:
+                raise ValueError("scene-local visibility exceeds its structural boundary")
+        if self.visibility is MemoryVisibility.PUBLIC_SEED:
+            raise ValueError("sealed memory cannot be a public seed")
+        if self.visibility is MemoryVisibility.SHAREABLE and self.sensitivity > 1:
+            raise ValueError("shareable memory sensitivity cannot exceed one")
+        if self.sensitivity == 4 and self.content_protection == "cryptographically_erased":
+            if self.status is not MemoryStatus.TOMBSTONED:
+                raise ValueError("cryptographic erasure requires a tombstoned memory")
+        elif (
+            self.content_protection == "cryptographically_erased"
+            and self.status is not MemoryStatus.TOMBSTONED
+        ):
+            raise ValueError("cryptographic erasure requires a tombstoned memory")
+        if self.content_key_id != self.sealed_content.content_key_id:
+            raise ValueError("sealed envelope content key differs from memory")
+        if self.interpretation_limits or self.normalized_fingerprint is not None or self.metadata:
+            raise ValueError("sealed memory plaintext derivatives must be absent")
+        if (self.publication_approved_at is None) != (
+            self.publication_approved_by_actor_id is None
+        ):
+            raise ValueError("publication approval time and actor must be supplied together")
+        return self
+
+
 class EvidenceState(ContractModel):
     """Complete evidence projection, including redaction state."""
 
@@ -411,9 +521,18 @@ class MemoryCreatedPayloadV2(MemoryCreatedPayload):
     memory: MemoryStateV2
 
 
+class MemoryCreatedPayloadV3(MemoryCreatedPayload):
+    memory: MemoryStateV3
+    evidence: tuple[()] = ()
+
+
 class MemoryTransitionPayload(ContractModel):
     previous_revision: PositiveRevision
     memory: MemoryState
+
+
+class MemoryTransitionPayloadV3(MemoryTransitionPayload):
+    memory: MemoryStateV3
 
 
 class CandidateLifecyclePayload(MemoryTransitionPayload):
@@ -436,12 +555,21 @@ class CandidateLifecyclePayload(MemoryTransitionPayload):
         return self
 
 
+class CandidateLifecyclePayloadV3(CandidateLifecyclePayload):
+    memory: MemoryStateV3
+    evidence: tuple[()] = ()
+
+
 class SupersededPayload(MemoryTransitionPayload):
     link: LinkState
 
 
 class TombstonedPayload(MemoryTransitionPayload):
     forget_mode: Literal["logical", "hard"]
+
+
+class TombstonedPayloadV3(TombstonedPayload):
+    memory: MemoryStateV3
 
 
 class EvidenceAttachedPayload(ContractModel):
@@ -530,29 +658,40 @@ class PayloadPurgeCompletedPayload(MemoryTransitionPayload):
         return _utc(value, "key_destroyed_at")
 
 
+class PayloadPurgeCompletedPayloadV3(PayloadPurgeCompletedPayload):
+    memory: MemoryStateV3
+
+
 type OperationPayload = (
     MemoryCreatedPayload
     | MemoryCreatedPayloadV2
+    | MemoryCreatedPayloadV3
     | MemoryTransitionPayload
+    | MemoryTransitionPayloadV3
     | CandidateLifecyclePayload
+    | CandidateLifecyclePayloadV3
     | SupersededPayload
     | EvidenceAttachedPayload
     | EvidenceRedactedPayload
     | TombstonedPayload
+    | TombstonedPayloadV3
     | LinkedPayload
     | UnlinkedPayload
     | ConflictOpenedPayload
     | ConflictResolvedPayload
     | BranchCreatedPayload
     | PayloadPurgeCompletedPayload
+    | PayloadPurgeCompletedPayloadV3
 )
 
 
 PAYLOAD_MODELS: dict[tuple[EventOperation, int, int], type[ContractModel]] = {
     (EventOperation.OBSERVED, 1, 1): MemoryCreatedPayload,
     (EventOperation.OBSERVED, 2, 2): MemoryCreatedPayloadV2,
+    (EventOperation.OBSERVED, 3, 3): MemoryCreatedPayloadV3,
     (EventOperation.REMEMBERED, 1, 1): MemoryCreatedPayload,
     (EventOperation.REMEMBERED, 2, 2): MemoryCreatedPayloadV2,
+    (EventOperation.REMEMBERED, 3, 3): MemoryCreatedPayloadV3,
     (EventOperation.CANDIDATE_PROMOTED, 2, 2): CandidateLifecyclePayload,
     (EventOperation.CANDIDATE_EXPIRED, 2, 2): CandidateLifecyclePayload,
     (EventOperation.REVISED, 1, 1): MemoryTransitionPayload,
@@ -565,9 +704,11 @@ PAYLOAD_MODELS: dict[tuple[EventOperation, int, int], type[ContractModel]] = {
     (EventOperation.SUPERSEDED, 1, 1): SupersededPayload,
     (EventOperation.RETIRED, 1, 1): MemoryTransitionPayload,
     (EventOperation.TOMBSTONED, 1, 1): TombstonedPayload,
+    (EventOperation.TOMBSTONED, 3, 3): TombstonedPayloadV3,
     (EventOperation.BRANCH_CREATED, 1, 1): BranchCreatedPayload,
     (EventOperation.VISIBILITY_CHANGED, 1, 1): MemoryTransitionPayload,
     (EventOperation.PAYLOAD_PURGE_COMPLETED, 1, 1): PayloadPurgeCompletedPayload,
+    (EventOperation.PAYLOAD_PURGE_COMPLETED, 3, 3): PayloadPurgeCompletedPayloadV3,
 }
 
 
@@ -620,11 +761,11 @@ def validate_event_envelope_shape(event: MemoryEvent) -> None:
 class MemoryEvent(ContractModel):
     """Immutable accepted event envelope with verified canonical payload bytes."""
 
-    EVENT_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({1, 2})
-    PAYLOAD_VERSIONS: ClassVar[frozenset[int]] = frozenset({1, 2})
+    EVENT_SCHEMA_VERSIONS: ClassVar[frozenset[int]] = frozenset({1, 2, 3})
+    PAYLOAD_VERSIONS: ClassVar[frozenset[int]] = frozenset({1, 2, 3})
 
-    schema_version: Literal[1, 2]
-    payload_version: Literal[1, 2]
+    schema_version: Literal[1, 2, 3]
+    payload_version: Literal[1, 2, 3]
     sequence: SafePositiveInteger
     event_id: UUID
     tenant_id: UUID

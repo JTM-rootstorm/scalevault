@@ -32,8 +32,8 @@
         "created_at"
     ],
     "properties": {
-        "schema_version": { "enum": [1, 2] },
-        "payload_version": { "enum": [1, 2] },
+        "schema_version": { "enum": [1, 2, 3] },
+        "payload_version": { "enum": [1, 2, 3] },
         "sequence": { "$ref": "#/$defs/safe_positive_integer" },
         "event_id": { "$ref": "#/$defs/uuidv7" },
         "tenant_id": { "$ref": "#/$defs/uuidv7" },
@@ -94,6 +94,54 @@
             }
         },
         {
+            "if": { "properties": { "schema_version": { "const": 3 } }, "required": ["schema_version"] },
+            "then": {
+                "properties": {
+                    "payload_version": { "const": 3 },
+                    "operation": { "enum": ["observed", "remembered", "tombstoned", "payload_purge_completed"] }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": { "operation": { "enum": ["observed", "remembered"] }, "schema_version": { "const": 3 }, "payload_version": { "const": 3 } },
+                "required": ["operation", "schema_version", "payload_version"]
+            },
+            "then": {
+                "properties": {
+                    "memory_id": { "$ref": "#/$defs/uuidv7" },
+                    "expected_revision": { "type": "null" },
+                    "payload": { "$ref": "#/$defs/sealed_create_payload_v3" }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": { "operation": { "const": "tombstoned" }, "schema_version": { "const": 3 }, "payload_version": { "const": 3 } },
+                "required": ["operation", "schema_version", "payload_version"]
+            },
+            "then": {
+                "properties": {
+                    "memory_id": { "$ref": "#/$defs/uuidv7" },
+                    "expected_revision": { "$ref": "#/$defs/safe_positive_integer" },
+                    "payload": { "$ref": "#/$defs/sealed_tombstone_payload_v3" }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": { "operation": { "const": "payload_purge_completed" }, "schema_version": { "const": 3 }, "payload_version": { "const": 3 } },
+                "required": ["operation", "schema_version", "payload_version"]
+            },
+            "then": {
+                "properties": {
+                    "memory_id": { "$ref": "#/$defs/uuidv7" },
+                    "expected_revision": { "$ref": "#/$defs/safe_positive_integer" },
+                    "payload": { "$ref": "#/$defs/sealed_purge_completed_payload_v3" }
+                }
+            }
+        },
+        {
             "if": {
                 "properties": { "operation": { "enum": ["observed", "remembered"] }, "schema_version": { "const": 2 }, "payload_version": { "const": 2 } },
                 "required": ["operation", "schema_version", "payload_version"]
@@ -121,8 +169,8 @@
         },
         {
             "if": {
-                "properties": { "operation": { "enum": ["observed", "remembered"] } },
-                "required": ["operation"]
+                "properties": { "operation": { "enum": ["observed", "remembered"] }, "schema_version": { "const": 1 } },
+                "required": ["operation", "schema_version"]
             },
             "then": {
                 "properties": {
@@ -150,7 +198,7 @@
             }
         },
         {
-            "if": { "properties": { "operation": { "const": "tombstoned" } }, "required": ["operation"] },
+            "if": { "properties": { "operation": { "const": "tombstoned" }, "schema_version": { "const": 1 } }, "required": ["operation", "schema_version"] },
             "then": {
                 "properties": {
                     "memory_id": { "$ref": "#/$defs/uuidv7" },
@@ -241,8 +289,8 @@
         },
         {
             "if": {
-                "properties": { "operation": { "const": "payload_purge_completed" } },
-                "required": ["operation"]
+                "properties": { "operation": { "const": "payload_purge_completed" }, "schema_version": { "const": 1 } },
+                "required": ["operation", "schema_version"]
             },
             "then": {
                 "properties": {
@@ -270,6 +318,7 @@
             "oneOf": [{ "$ref": "#/$defs/canonical_date_time" }, { "type": "null" }]
         },
         "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
         "operation": {
             "enum": [
                 "observed",
@@ -315,6 +364,129 @@
                     }
                 }
             ]
+        },
+        "sealed_memory_state_v3": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "memory_id", "tenant_id", "lineage_id", "branch_id", "subject_id",
+                "subject_kind", "revision", "category", "ontological_status", "scope",
+                "visibility", "status", "statement", "reason_to_remember",
+                "interpretation_limits", "confidence", "salience", "durability",
+                "sensitivity", "authority_class", "valid_from", "valid_to", "observed_at",
+                "origin_session_id", "publication_approved_at",
+                "publication_approved_by_actor_id", "content_protection", "content_key_id",
+                "created_at", "updated_at", "fingerprint_version", "normalized_fingerprint",
+                "metadata", "candidate_expires_at", "sealed_content"
+            ],
+            "properties": {
+                "memory_id": { "$ref": "#/$defs/uuidv7" },
+                "tenant_id": { "$ref": "#/$defs/uuidv7" },
+                "lineage_id": { "$ref": "#/$defs/uuidv7" },
+                "branch_id": { "$ref": "#/$defs/uuidv7" },
+                "subject_id": { "$ref": "#/$defs/uuidv7" },
+                "subject_kind": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/subject_kind" },
+                "revision": { "$ref": "#/$defs/safe_positive_integer" },
+                "category": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/category" },
+                "ontological_status": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/ontology" },
+                "scope": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/scope" },
+                "visibility": { "enum": ["private_root", "restricted", "shareable"] },
+                "status": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/status" },
+                "statement": { "type": "null" },
+                "reason_to_remember": { "type": "null" },
+                "interpretation_limits": { "type": "array", "maxItems": 0 },
+                "confidence": { "$ref": "#/$defs/score" },
+                "salience": { "$ref": "#/$defs/score" },
+                "durability": { "$ref": "#/$defs/score" },
+                "sensitivity": { "type": "integer", "minimum": 0, "maximum": 4 },
+                "authority_class": { "$ref": "https://schemas.scalevault.dev/memory-projection-v1.schema.json#/$defs/authority_class" },
+                "valid_from": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "valid_to": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "observed_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "origin_session_id": { "$ref": "#/$defs/nullable_uuidv7" },
+                "publication_approved_at": { "type": "null" },
+                "publication_approved_by_actor_id": { "type": "null" },
+                "content_protection": { "enum": ["envelope_encrypted", "cryptographically_erased"] },
+                "content_key_id": { "$ref": "#/$defs/uuidv7" },
+                "created_at": { "$ref": "#/$defs/canonical_date_time" },
+                "updated_at": { "$ref": "#/$defs/canonical_date_time" },
+                "fingerprint_version": { "$ref": "#/$defs/safe_positive_integer" },
+                "normalized_fingerprint": { "type": "null" },
+                "metadata": { "type": "object", "maxProperties": 0 },
+                "candidate_expires_at": { "$ref": "#/$defs/nullable_canonical_date_time" },
+                "sealed_content": { "$ref": "https://schemas.scalevault.dev/sealed-content-envelope-v1.schema.json" }
+            },
+            "allOf": [
+                {
+                    "oneOf": [
+                        { "properties": { "scope": { "const": "global" }, "subject_kind": { "const": "global" } } },
+                        { "properties": { "scope": { "const": "persona" }, "subject_kind": { "const": "persona" } } },
+                        { "properties": { "scope": { "const": "relationship" }, "subject_kind": { "const": "relationship" } } },
+                        { "properties": { "scope": { "const": "project" }, "subject_kind": { "const": "project" } } },
+                        { "properties": { "scope": { "const": "episodic" }, "subject_kind": { "const": "episode" } } },
+                        { "properties": { "scope": { "const": "scene_local" }, "subject_kind": { "const": "scene" } } }
+                    ]
+                },
+                {
+                    "if": { "properties": { "visibility": { "const": "shareable" } }, "required": ["visibility"] },
+                    "then": { "properties": { "sensitivity": { "maximum": 1 } } }
+                },
+                {
+                    "if": { "properties": { "status": { "const": "candidate" } }, "required": ["status"] },
+                    "then": { "properties": { "candidate_expires_at": { "$ref": "#/$defs/canonical_date_time" } } },
+                    "else": { "properties": { "candidate_expires_at": { "type": "null" } } }
+                },
+                {
+                    "if": { "properties": { "content_protection": { "const": "cryptographically_erased" } }, "required": ["content_protection"] },
+                    "then": { "properties": { "status": { "const": "tombstoned" } } }
+                }
+            ]
+        },
+        "sealed_create_payload_v3": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["memory", "evidence"],
+            "properties": {
+                "memory": {
+                    "allOf": [
+                        { "$ref": "#/$defs/sealed_memory_state_v3" },
+                        { "properties": { "content_protection": { "const": "envelope_encrypted" }, "status": { "enum": ["candidate", "active"] } } }
+                    ]
+                },
+                "evidence": { "type": "array", "maxItems": 0 }
+            }
+        },
+        "sealed_tombstone_payload_v3": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["previous_revision", "memory", "forget_mode"],
+            "properties": {
+                "previous_revision": { "$ref": "#/$defs/safe_positive_integer" },
+                "memory": {
+                    "allOf": [
+                        { "$ref": "#/$defs/sealed_memory_state_v3" },
+                        { "properties": { "content_protection": { "const": "envelope_encrypted" }, "status": { "const": "tombstoned" } } }
+                    ]
+                },
+                "forget_mode": { "enum": ["logical", "hard"] }
+            }
+        },
+        "sealed_purge_completed_payload_v3": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["previous_revision", "memory", "content_key_id", "key_destroyed_at", "destruction_receipt_sha256"],
+            "properties": {
+                "previous_revision": { "$ref": "#/$defs/safe_positive_integer" },
+                "memory": {
+                    "allOf": [
+                        { "$ref": "#/$defs/sealed_memory_state_v3" },
+                        { "properties": { "content_protection": { "const": "cryptographically_erased" }, "status": { "const": "tombstoned" } } }
+                    ]
+                },
+                "content_key_id": { "$ref": "#/$defs/uuidv7" },
+                "key_destroyed_at": { "$ref": "#/$defs/canonical_date_time" },
+                "destruction_receipt_sha256": { "$ref": "#/$defs/sha256" }
+            }
         },
         "state_change_payload": {
             "type": "object",

@@ -11,11 +11,15 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from kivra_memory.application.sealed_content import (
+    ContentOpener,
+    decrypt_memory_state,
+)
 from kivra_memory.domain.enums import (
     EventOperation,
     MemoryStatus,
 )
-from kivra_memory.domain.events import MemoryState
+from kivra_memory.domain.events import MemoryState, MemoryStateV3
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.retrieval.budgeting import BudgetTooSmallError
 from kivra_memory.retrieval.context_pack import assemble_context_pack
@@ -79,6 +83,12 @@ from kivra_memory.retrieval.ranking import (
     score_modifiers_v1,
     weighted_rrf_v1,
 )
+from kivra_memory.security.keys import ContentKeyReference, KeyProvider
+from kivra_memory.security.sealed_content import (
+    SealedContentContext,
+    SealedContentError,
+    open_with_provider,
+)
 from kivra_memory.storage.retrieval import (
     HydratedMemory,
     LineageMetadata,
@@ -138,6 +148,15 @@ class CandidateRepository(Protocol):
     async def get_memory(
         self, filters: RetrievalFilters, memory_id: UUID
     ) -> HydratedMemory | None: ...
+
+    async def content_key_reference(
+        self,
+        *,
+        tenant_id: UUID,
+        lineage_id: UUID,
+        memory_id: UUID,
+        content_key_id: UUID,
+    ) -> ContentKeyReference | None: ...
 
     async def open_conflict_members(
         self, filters: RetrievalFilters, memory_ids: Sequence[UUID]
@@ -429,11 +448,15 @@ class QueryEngine:
         selection_history_repository_factory: SelectionHistoryRepositoryFactory = (
             SelectionHistoryRepository
         ),
+        key_provider: KeyProvider | None = None,
+        content_opener: ContentOpener = open_with_provider,
     ) -> None:
         self._session_factory = session_factory
         self._repository_factory = repository_factory
         self._query_embedder = query_embedder
         self._selection_history_repository_factory = selection_history_repository_factory
+        self._key_provider = key_provider
+        self._content_opener = content_opener
 
     async def execute(
         self, principal: QueryPrincipal, query: DirectReadQuery | ReadQueryV2
@@ -640,6 +663,11 @@ class QueryEngine:
                 principal, context, requested, query, memory.state, evaluated_at
             ):
                 return _error("not_found")
+            if isinstance(memory.state, MemoryStateV3):
+                opened = await self._open_sealed_memory(repository, memory)
+                if opened is None:
+                    return _error("not_found")
+                memory = HydratedMemory(state=opened, last_event_id=memory.last_event_id)
             score = weighted_rrf_v1(
                 (SourceRanking(source="lexical", memory_ids=(memory.state.memory_id,)),),
                 {memory.state.memory_id: _modifiers(memory.state, evaluated_at)},
@@ -735,6 +763,46 @@ class QueryEngine:
                 metadata=ReadResultMetadata(),
             )
         return _error("invalid_input")
+
+    async def _open_sealed_memory(
+        self,
+        repository: CandidateRepository,
+        memory: HydratedMemory,
+    ) -> MemoryState | None:
+        """Decrypt only after the caller and state passed the normal eligibility gate."""
+
+        state = memory.state
+        provider = self._key_provider
+        if not isinstance(state, MemoryStateV3) or provider is None:
+            return None
+        reference = await repository.content_key_reference(
+            tenant_id=state.tenant_id,
+            lineage_id=state.lineage_id,
+            memory_id=state.memory_id,
+            content_key_id=state.content_key_id,
+        )
+        if reference is None:
+            return None
+        try:
+            return await decrypt_memory_state(
+                state=state,
+                provider=provider,
+                reference=reference,
+                context=SealedContentContext(
+                    tenant_id=state.tenant_id,
+                    lineage_id=state.lineage_id,
+                    branch_id=state.branch_id,
+                    memory_id=state.memory_id,
+                    content_key_id=state.content_key_id,
+                    revision=state.revision,
+                    event_id=memory.last_event_id,
+                    schema_version=3,
+                    payload_version=3,
+                ),
+                opener=self._content_opener,
+            )
+        except (SealedContentError, TypeError, ValueError):
+            return None
 
     def _eligible(
         self,
