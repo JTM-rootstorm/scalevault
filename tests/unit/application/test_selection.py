@@ -11,6 +11,10 @@ from uuid import UUID
 import pytest
 from kivra_memory.application import selection
 from kivra_memory.application.mutations import CommandPrincipal
+from kivra_memory.application.sealed_content import (
+    HmacSha256SealedDigestBinder,
+    SealedContentRequest,
+)
 from kivra_memory.application.selection import (
     NominationCommandLike,
     ResolvedNominationContext,
@@ -21,6 +25,8 @@ from kivra_memory.application.selection import (
     _input_digest,
     _new_candidate_evidence,
     _replay_from_receipt,
+    _stable_sealed_id,
+    _validate_sealed_policy_outcome,
     _validate_session_scope_anchors,
     _validate_unsealed_identity,
 )
@@ -45,7 +51,9 @@ from kivra_memory.policy import (
     EvidenceSummary,
     EvidenceTrust,
     NominationProposal,
+    PolicyOutcome,
     SelectionBasis,
+    evaluate_selection,
 )
 from kivra_memory.storage.event_store import EventStoreError
 from kivra_memory.storage.models import CommandReceipt
@@ -333,6 +341,72 @@ def test_receipt_digest_excludes_resolver_facts_but_decision_digest_includes_the
     assert _input_digest(principal, command, left) != _input_digest(principal, command, right)
 
 
+def test_sealed_digests_require_server_binding_and_preserve_retry_identity() -> None:
+    principal = _principal(scopes=frozenset({"memory.write.nominate"}))
+    binder = HmacSha256SealedDigestBinder(b"server-only-binding-secret-32-bytes")
+    base = _nomination_command()
+    first = cast(
+        NominationCommandLike,
+        SimpleNamespace(
+            **base.__dict__,
+            sealed_content=SealedContentRequest(safe_summary="A reviewed private preference."),
+        ),
+    )
+    second = cast(
+        NominationCommandLike,
+        SimpleNamespace(**{**first.__dict__, "idempotency_key": "another-idempotency-key"}),
+    )
+    resolved = ResolvedNominationContext(
+        source_kind="live_interaction",
+        effective_authority_class=AuthorityClass.EXPLICIT_USER_STATEMENT,
+    )
+
+    with pytest.raises(ValueError, match="binding unavailable"):
+        _command_digest(principal, first)
+    command_digest = _command_digest(principal, first, sealed_digest_binder=binder)
+    assert (
+        command_digest
+        != hashlib.sha256(
+            canonical_json_bytes(selection._command_material(principal, first))
+        ).digest()
+    )
+    assert command_digest == _command_digest(principal, first, sealed_digest_binder=binder)
+    assert command_digest != _command_digest(principal, second, sealed_digest_binder=binder)
+    assert _input_digest(principal, first, resolved, sealed_digest_binder=binder) == _input_digest(
+        principal, second, resolved, sealed_digest_binder=binder
+    )
+    memory_id = _stable_sealed_id(binder, purpose="memory-id-v1", command_digest=command_digest)
+    assert memory_id == _stable_sealed_id(
+        binder, purpose="memory-id-v1", command_digest=command_digest
+    )
+    assert memory_id != _stable_sealed_id(
+        binder, purpose="content-key-id-v1", command_digest=command_digest
+    )
+
+
+def test_sealed_policy_paths_fail_closed_unless_immediately_active() -> None:
+    request = SealedContentRequest(safe_summary="A reviewed private preference.")
+    evaluated = evaluate_selection(
+        selection._selection_request(
+            _proposal(),
+            ResolvedNominationContext(
+                source_kind="live_interaction",
+                effective_authority_class=AuthorityClass.EXPLICIT_USER_STATEMENT,
+            ),
+        )
+    )
+    active = evaluated.model_copy(update={"outcome": PolicyOutcome.ACTIVE})
+    assert active.outcome is PolicyOutcome.ACTIVE
+    _validate_sealed_policy_outcome(request, active)
+
+    candidate = active.model_copy(
+        update={"outcome": PolicyOutcome.CANDIDATE, "candidate_ttl_days": 30}
+    )
+    assert candidate.outcome is PolicyOutcome.CANDIDATE
+    with pytest.raises(SelectionExecutionError, match="invalid_input"):
+        _validate_sealed_policy_outcome(request, candidate)
+
+
 def test_receipt_replay_verifies_canonical_bytes_and_uses_json_coercion() -> None:
     command = _nomination_command()
     principal = _principal(scopes=frozenset({"memory.write.nominate"}))
@@ -406,6 +480,26 @@ async def test_persistence_failures_map_to_content_free_selection_codes(
             _nomination_command(),
         )
     assert caught.value.code == "dependency_unavailable"
+    assert caught.value.__cause__ is None
+
+
+async def test_sealed_write_fails_closed_without_server_digest_binding() -> None:
+    base = _nomination_command(proposal=_proposal().model_copy(update={"sensitivity": 4}))
+    command = cast(
+        NominationCommandLike,
+        SimpleNamespace(
+            **base.__dict__,
+            sealed_content=SealedContentRequest(safe_summary="A reviewed private preference."),
+        ),
+    )
+    engine = SelectionEngine(AsyncMock(), AsyncMock(), key_provider=AsyncMock())
+
+    with pytest.raises(SelectionExecutionError, match="dependency_unavailable") as caught:
+        await engine.execute(
+            _principal(scopes=frozenset({"memory.write.nominate"})),
+            command,
+        )
+
     assert caught.value.__cause__ is None
 
 

@@ -19,7 +19,11 @@ from kivra_memory.domain.enums import (
     EventOperation,
     MemoryStatus,
 )
-from kivra_memory.domain.events import MemoryState, MemoryStateV3
+from kivra_memory.domain.events import (
+    MemoryState,
+    MemoryStateV3,
+    SealedContentEnvelopeState,
+)
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.retrieval.budgeting import BudgetTooSmallError
 from kivra_memory.retrieval.context_pack import assemble_context_pack
@@ -86,7 +90,6 @@ from kivra_memory.retrieval.ranking import (
 from kivra_memory.security.keys import ContentKeyReference, KeyProvider
 from kivra_memory.security.sealed_content import (
     SealedContentContext,
-    SealedContentError,
     open_with_provider,
 )
 from kivra_memory.storage.retrieval import (
@@ -95,6 +98,7 @@ from kivra_memory.storage.retrieval import (
     OpenConflictGroup,
     RankedCandidate,
     RetrievalFilters,
+    SealedContentBinding,
     TimelineEntry,
 )
 from kivra_memory.storage.retrieval import (
@@ -157,6 +161,17 @@ class CandidateRepository(Protocol):
         memory_id: UUID,
         content_key_id: UUID,
     ) -> ContentKeyReference | None: ...
+
+    async def sealed_content_binding(
+        self,
+        *,
+        tenant_id: UUID,
+        lineage_id: UUID,
+        branch_id: UUID,
+        memory_id: UUID,
+        content_key_id: UUID,
+        sealed_content: SealedContentEnvelopeState,
+    ) -> SealedContentBinding | None: ...
 
     async def open_conflict_members(
         self, filters: RetrievalFilters, memory_ids: Sequence[UUID]
@@ -775,6 +790,16 @@ class QueryEngine:
         provider = self._key_provider
         if not isinstance(state, MemoryStateV3) or provider is None:
             return None
+        binding = await repository.sealed_content_binding(
+            tenant_id=state.tenant_id,
+            lineage_id=state.lineage_id,
+            branch_id=state.branch_id,
+            memory_id=state.memory_id,
+            content_key_id=state.content_key_id,
+            sealed_content=state.sealed_content,
+        )
+        if binding is None:
+            return None
         reference = await repository.content_key_reference(
             tenant_id=state.tenant_id,
             lineage_id=state.lineage_id,
@@ -794,14 +819,14 @@ class QueryEngine:
                     branch_id=state.branch_id,
                     memory_id=state.memory_id,
                     content_key_id=state.content_key_id,
-                    revision=state.revision,
-                    event_id=memory.last_event_id,
-                    schema_version=3,
-                    payload_version=3,
+                    revision=binding.revision,
+                    event_id=binding.event_id,
+                    schema_version=binding.schema_version,
+                    payload_version=binding.payload_version,
                 ),
                 opener=self._content_opener,
             )
-        except (SealedContentError, TypeError, ValueError):
+        except Exception:
             return None
 
     def _eligible(

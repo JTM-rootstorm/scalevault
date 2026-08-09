@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any, cast
 
 import pytest
+from kivra_memory.application.queries import CandidateRepository, QueryEngine
 from kivra_memory.application.sealed_content import (
+    HmacSha256SealedDigestBinder,
     SealedMemoryPlaintext,
     decrypt_memory_state,
     envelope_state,
@@ -26,6 +29,10 @@ from kivra_memory.security.keys import (
     KeyDestructionReceipt,
 )
 from kivra_memory.security.sealed_content import SealedContentContext, seal_content
+from kivra_memory.storage.retrieval import (
+    HydratedMemory,
+    SealedContentBinding,
+)
 
 
 class _Provider:
@@ -44,6 +51,15 @@ class _Provider:
     async def destroy_key(self, reference: ContentKeyReference) -> KeyDestructionReceipt:
         del reference
         return KeyDestructionReceipt(b"destroyed")
+
+
+def test_digest_binder_sanitizes_invalid_purpose() -> None:
+    binder = HmacSha256SealedDigestBinder(b"server-only-binding-secret-32-bytes")
+
+    with pytest.raises(ValueError, match="binding unavailable") as caught:
+        binder.bind_digest(purpose="private-\N{SNOWMAN}", material=b"sensitive")
+
+    assert caught.value.__cause__ is None
 
 
 @pytest.mark.asyncio
@@ -123,3 +139,52 @@ async def test_authorized_open_restores_semantic_shape() -> None:
     assert opened.reason_to_remember == plaintext.reason_to_remember
     assert opened.interpretation_limits == plaintext.interpretation_limits
     assert opened.metadata == plaintext.metadata
+
+    transition_event_id = new_uuid7()
+
+    class _Repository:
+        async def sealed_content_binding(self, **_: object) -> SealedContentBinding:
+            return SealedContentBinding(
+                event_id=event_id,
+                revision=1,
+                schema_version=3,
+                payload_version=3,
+            )
+
+        async def content_key_reference(self, **_: object) -> ContentKeyReference:
+            return reference
+
+    async def assert_creation_context(**kwargs: object) -> bytes:
+        assert kwargs["context"] == context
+        return plaintext.canonical_bytes()
+
+    engine = QueryEngine(
+        cast(Any, None),
+        cast(Any, None),
+        key_provider=_Provider(key),
+        content_opener=assert_creation_context,
+    )
+    reopened = await engine._open_sealed_memory(
+        cast(CandidateRepository, _Repository()),
+        HydratedMemory(state=state, last_event_id=transition_event_id),
+    )
+
+    assert reopened is not None
+    assert reopened.statement == plaintext.statement
+
+    async def provider_failure(**_: object) -> bytes:
+        raise RuntimeError("provider-private-diagnostic")
+
+    failing_engine = QueryEngine(
+        cast(Any, None),
+        cast(Any, None),
+        key_provider=_Provider(key),
+        content_opener=provider_failure,
+    )
+    assert (
+        await failing_engine._open_sealed_memory(
+            cast(CandidateRepository, _Repository()),
+            HydratedMemory(state=state, last_event_id=transition_event_id),
+        )
+        is None
+    )

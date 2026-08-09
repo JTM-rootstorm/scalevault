@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from collections.abc import Awaitable, Callable
-from typing import Annotated
+from typing import Annotated, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -71,6 +73,57 @@ type ContentSealer = Callable[
 type ContentOpener = Callable[..., Awaitable[bytes]]
 
 
+class SealedDigestBinder(Protocol):
+    """Bind sensitive canonical material to a server-only stable secret.
+
+    Implementations must be deterministic across node restarts and deployments
+    that share an archive.  The binding secret must never be persisted in the
+    canonical event store, selection history, command receipts, or archive.
+    """
+
+    def bind_digest(self, *, purpose: str, material: bytes) -> bytes: ...
+
+
+class HmacSha256SealedDigestBinder:
+    """HMAC-SHA-256 implementation of the sealed digest binding contract."""
+
+    __slots__ = ("_secret",)
+
+    def __init__(self, secret: bytes) -> None:
+        if not isinstance(secret, bytes) or len(secret) < 32:
+            raise ValueError("sealed digest binding secret is invalid")
+        self._secret = secret
+
+    def bind_digest(self, *, purpose: str, material: bytes) -> bytes:
+        try:
+            purpose_bytes = purpose.encode("ascii")
+        except (AttributeError, UnicodeEncodeError):
+            raise ValueError("sealed digest binding unavailable") from None
+        if not isinstance(material, bytes) or not purpose_bytes or len(purpose_bytes) > 64:
+            raise ValueError("sealed digest binding unavailable")
+        framed = len(purpose_bytes).to_bytes(2, "big") + purpose_bytes + material
+        return hmac.new(self._secret, framed, hashlib.sha256).digest()
+
+
+def bind_sealed_digest(
+    binder: SealedDigestBinder | None,
+    *,
+    purpose: str,
+    material: bytes,
+) -> bytes:
+    """Return one validated, content-free keyed digest or fail closed."""
+
+    if binder is None:
+        raise ValueError("sealed digest binding unavailable")
+    try:
+        digest = binder.bind_digest(purpose=purpose, material=material)
+    except Exception:
+        raise ValueError("sealed digest binding unavailable") from None
+    if not isinstance(digest, bytes) or len(digest) != hashlib.sha256().digest_size:
+        raise ValueError("sealed digest binding unavailable")
+    return digest
+
+
 def envelope_state(envelope: SealedContentEnvelope) -> SealedContentEnvelopeState:
     """Convert the security primitive into the canonical event representation."""
 
@@ -126,8 +179,11 @@ async def decrypt_memory_state(
 __all__ = [
     "ContentOpener",
     "ContentSealer",
+    "HmacSha256SealedDigestBinder",
     "SealedContentRequest",
+    "SealedDigestBinder",
     "SealedMemoryPlaintext",
+    "bind_sealed_digest",
     "decrypt_memory_state",
     "envelope_primitive",
     "envelope_state",

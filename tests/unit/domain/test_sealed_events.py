@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from kivra_memory.application.sealed_content import envelope_state
 from kivra_memory.domain.enums import (
     AuthorityClass,
@@ -19,9 +20,10 @@ from kivra_memory.domain.events import (
     MemoryCreatedPayloadV3,
     MemoryEvent,
     MemoryStateV3,
+    TombstonedPayloadV3,
     event_hash_fields,
 )
-from kivra_memory.domain.folding import ProjectionState, fold_event
+from kivra_memory.domain.folding import FoldError, ProjectionState, fold_event
 from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.security.keys import ContentKeyMaterial
 from kivra_memory.security.sealed_content import SealedContentContext, seal_content
@@ -141,3 +143,63 @@ def test_v3_sealed_creation_folds_without_plaintext_canary() -> None:
     assert folded.memories[memory_id] == state
     assert canary not in event.payload_canonical
     assert canary not in str(event.payload)
+
+    tombstoned_at = now + timedelta(seconds=1)
+    changed_envelope = state.sealed_content.model_copy(
+        update={"safe_summary": "A different reviewed summary."}
+    )
+    tombstone = TombstonedPayloadV3(
+        previous_revision=1,
+        memory=state.model_copy(
+            update={
+                "revision": 2,
+                "status": MemoryStatus.TOMBSTONED,
+                "updated_at": tombstoned_at,
+                "sealed_content": changed_envelope,
+            }
+        ),
+        forget_mode="hard",
+    )
+    values, canonical, payload_sha256, command_sha256 = event_hash_fields(
+        operation=EventOperation.TOMBSTONED,
+        payload=tombstone,
+        payload_version=3,
+        tenant_id=tenant_id,
+        lineage_id=lineage_id,
+        branch_id=branch_id,
+        actor_id=actor_id,
+        client_id=client_id,
+        memory_id=memory_id,
+        expected_revision=1,
+        causation_event_id=event_id,
+    )
+    transition = MemoryEvent(
+        schema_version=3,
+        payload_version=3,
+        sequence=2,
+        event_id=new_uuid7(),
+        tenant_id=tenant_id,
+        lineage_id=lineage_id,
+        branch_id=branch_id,
+        actor_id=actor_id,
+        client_id=client_id,
+        transport_binding_id=new_uuid7(),
+        session_id=None,
+        ingress_id=None,
+        operation=EventOperation.TOMBSTONED,
+        memory_id=memory_id,
+        expected_revision=1,
+        causation_event_id=event_id,
+        correlation_id=new_uuid7(),
+        idempotency_key="sealed-v3-tombstone",
+        policy_version=3,
+        normalization_version=1,
+        payload=values,
+        payload_canonical=canonical,
+        payload_sha256=payload_sha256,
+        command_sha256=command_sha256,
+        created_at=tombstoned_at,
+    )
+
+    with pytest.raises(FoldError, match="sealed_identity_changed"):
+        fold_event(folded, transition)

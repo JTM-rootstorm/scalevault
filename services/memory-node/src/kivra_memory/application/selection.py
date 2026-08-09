@@ -24,7 +24,9 @@ from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.sealed_content import (
     ContentSealer,
     SealedContentRequest,
+    SealedDigestBinder,
     SealedMemoryPlaintext,
+    bind_sealed_digest,
     envelope_state,
 )
 from kivra_memory.domain.canonical_json import canonical_json_bytes
@@ -251,12 +253,18 @@ class SelectionResult(BaseModel):
 
 
 class _NominationIdentifiers:
-    def __init__(self, *, evidence_count: int) -> None:
+    def __init__(
+        self,
+        *,
+        evidence_count: int,
+        memory_id: UUID | None = None,
+        content_key_id: UUID | None = None,
+    ) -> None:
         self.receipt_id = new_uuid7()
         self.decision_id = new_uuid7()
         self.event_id = new_uuid7()
-        self.memory_id = new_uuid7()
-        self.content_key_id = new_uuid7()
+        self.memory_id = memory_id or new_uuid7()
+        self.content_key_id = content_key_id or new_uuid7()
         self.correlation_id = new_uuid7()
         self.evidence_ids = tuple(new_uuid7() for _ in range(evidence_count))
         self.job_ids = tuple(new_uuid7() for _ in range(4))
@@ -317,16 +325,30 @@ def _command_material(
     return material
 
 
-def _command_digest(principal: CommandPrincipal, command: NominationCommandLike) -> bytes:
+def _command_digest(
+    principal: CommandPrincipal,
+    command: NominationCommandLike,
+    *,
+    sealed_digest_binder: SealedDigestBinder | None = None,
+) -> bytes:
     """Hash the stable command independently of resolver-owned trusted facts."""
 
-    return hashlib.sha256(canonical_json_bytes(_command_material(principal, command))).digest()
+    material = canonical_json_bytes(_command_material(principal, command))
+    if getattr(command, "sealed_content", None) is not None:
+        return bind_sealed_digest(
+            sealed_digest_binder,
+            purpose="selection-command-v1",
+            material=material,
+        )
+    return hashlib.sha256(material).digest()
 
 
 def _input_digest(
     principal: CommandPrincipal,
     command: NominationCommandLike,
     resolved: ResolvedNominationContext,
+    *,
+    sealed_digest_binder: SealedDigestBinder | None = None,
 ) -> bytes:
     """Hash the full policy input, including ordered resolver-owned facts."""
 
@@ -344,7 +366,49 @@ def _input_digest(
         ],
     }
     material = {**_command_material(principal, command), "resolved": resolved_material}
+    if getattr(command, "sealed_content", None) is not None:
+        # Selection input identity is semantic rather than transport-idempotency
+        # identity. Database tenant/lineage/branch/subject predicates provide
+        # the remaining scope for active sealed duplicate detection.
+        material.pop("idempotency_key", None)
+        material.pop("transaction_binding_sha256", None)
+        canonical = canonical_json_bytes(material)
+        return bind_sealed_digest(
+            sealed_digest_binder,
+            purpose="selection-input-v1",
+            material=canonical,
+        )
     return hashlib.sha256(canonical_json_bytes(material)).digest()
+
+
+def _stable_sealed_id(
+    binder: SealedDigestBinder | None,
+    *,
+    purpose: str,
+    command_digest: bytes,
+) -> UUID:
+    """Derive a retry-stable UUIDv7-shaped identifier from bound command material."""
+
+    raw = bytearray(
+        bind_sealed_digest(
+            binder,
+            purpose=purpose,
+            material=command_digest,
+        )[:16]
+    )
+    raw[6] = (raw[6] & 0x0F) | 0x70
+    raw[8] = (raw[8] & 0x3F) | 0x80
+    return UUID(bytes=bytes(raw))
+
+
+def _validate_sealed_policy_outcome(
+    request: SealedContentRequest | None,
+    decision: PolicyDecision,
+) -> None:
+    """Reject sealed candidate and non-durable policy paths until lifecycle v3 exists."""
+
+    if request is not None and decision.outcome is not PolicyOutcome.ACTIVE:
+        raise SelectionExecutionError("invalid_input")
 
 
 def _policy_rule_code(decision: PolicyDecision, fallback: str = "already_covered") -> str:
@@ -552,12 +616,14 @@ class SelectionEngine:
         *,
         key_provider: KeyProvider | None = None,
         sealer: ContentSealer = seal_with_provider,
+        sealed_digest_binder: SealedDigestBinder | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._resolver = resolver
         self._promotion_principal_provider = promotion_principal_provider
         self._key_provider = key_provider
         self._sealer = sealer
+        self._sealed_digest_binder = sealed_digest_binder
 
     async def execute(
         self,
@@ -579,9 +645,15 @@ class SelectionEngine:
                 raise SelectionExecutionError("invalid_input")
             if sealed_request is not None and principal.ingress_id is not None:
                 raise SelectionExecutionError("forbidden")
-            if sealed_request is not None and self._key_provider is None:
+            if sealed_request is not None and (
+                self._key_provider is None or self._sealed_digest_binder is None
+            ):
                 raise SelectionExecutionError("dependency_unavailable")
-            command_digest = _command_digest(principal, command)
+            command_digest = _command_digest(
+                principal,
+                command,
+                sealed_digest_binder=self._sealed_digest_binder,
+            )
             command_binding = getattr(command, "transaction_binding_sha256", None)
             if transaction_participant is not None and (
                 command_binding is None
@@ -613,8 +685,34 @@ class SelectionEngine:
                 raise SelectionExecutionError("forbidden")
             request = _selection_request(command.proposal, resolved)
             decision = evaluate_selection(request)
-            identifiers = _NominationIdentifiers(evidence_count=len(resolved.evidence))
-            input_digest = _input_digest(principal, command, resolved)
+            _validate_sealed_policy_outcome(sealed_request, decision)
+            identifiers = _NominationIdentifiers(
+                evidence_count=len(resolved.evidence),
+                memory_id=(
+                    _stable_sealed_id(
+                        self._sealed_digest_binder,
+                        purpose="memory-id-v1",
+                        command_digest=command_digest,
+                    )
+                    if sealed_request is not None
+                    else None
+                ),
+                content_key_id=(
+                    _stable_sealed_id(
+                        self._sealed_digest_binder,
+                        purpose="content-key-id-v1",
+                        command_digest=command_digest,
+                    )
+                    if sealed_request is not None
+                    else None
+                ),
+            )
+            input_digest = _input_digest(
+                principal,
+                command,
+                resolved,
+                sealed_digest_binder=self._sealed_digest_binder,
+            )
 
             async def attempt(session: AsyncSession) -> SelectionResult:
                 return await self._attempt(
@@ -903,13 +1001,23 @@ class SelectionEngine:
 
         # Serialize exact subject/fingerprint duplicates before projection
         # mutation. The idempotency lock above remains held by this transaction.
-        nomination_fingerprint = exact_memory_fingerprint(
+        sealed_request = getattr(command, "sealed_content", None)
+        exact_fingerprint = exact_memory_fingerprint(
             statement=proposal.statement,
             category=proposal.category,
             ontological_status=proposal.ontological_status,
             scope=proposal.scope,
             interpretation_limits=proposal.interpretation_limits,
         ).sha256_hex
+        nomination_fingerprint = (
+            bind_sealed_digest(
+                self._sealed_digest_binder,
+                purpose="duplicate-lock-v1",
+                material=bytes.fromhex(exact_fingerprint),
+            ).hex()
+            if isinstance(sealed_request, SealedContentRequest)
+            else exact_fingerprint
+        )
         await acquire_advisory_xact_locks(
             session,
             (
@@ -936,15 +1044,41 @@ class SelectionEngine:
         promotion_source: SelectionDecision | None = None
 
         if outcome in {PolicyOutcome.CANDIDATE, PolicyOutcome.ACTIVE}:
-            fingerprint = nomination_fingerprint
-            duplicate_query = select(Memory).where(
-                Memory.tenant_id == principal.tenant_id,
-                Memory.lineage_id == lineage_id,
-                Memory.branch_id == command.branch_id,
-                Memory.subject_id == proposal.subject_id,
-                Memory.normalized_fingerprint == bytes.fromhex(fingerprint),
-                Memory.status.in_((MemoryStatus.CANDIDATE.value, MemoryStatus.ACTIVE.value)),
+            _validate_sealed_policy_outcome(
+                sealed_request if isinstance(sealed_request, SealedContentRequest) else None,
+                policy_decision,
             )
+            fingerprint = nomination_fingerprint
+            if isinstance(sealed_request, SealedContentRequest):
+                duplicate_query = (
+                    select(Memory)
+                    .join(
+                        SelectionDecision,
+                        and_(
+                            SelectionDecision.tenant_id == Memory.tenant_id,
+                            SelectionDecision.memory_id == Memory.memory_id,
+                        ),
+                    )
+                    .where(
+                        Memory.tenant_id == principal.tenant_id,
+                        Memory.lineage_id == lineage_id,
+                        Memory.branch_id == command.branch_id,
+                        Memory.subject_id == proposal.subject_id,
+                        Memory.status == MemoryStatus.ACTIVE.value,
+                        Memory.content_protection == "envelope_encrypted",
+                        SelectionDecision.input_sha256 == input_digest,
+                        SelectionDecision.outcome == PolicyOutcome.ACTIVE.value,
+                    )
+                )
+            else:
+                duplicate_query = select(Memory).where(
+                    Memory.tenant_id == principal.tenant_id,
+                    Memory.lineage_id == lineage_id,
+                    Memory.branch_id == command.branch_id,
+                    Memory.subject_id == proposal.subject_id,
+                    Memory.normalized_fingerprint == bytes.fromhex(fingerprint),
+                    Memory.status.in_((MemoryStatus.CANDIDATE.value, MemoryStatus.ACTIVE.value)),
+                )
             # The exact fingerprint advisory lock above already serializes
             # Genesis duplicate creation. The importer is intentionally
             # INSERT-only on memories, while PostgreSQL requires UPDATE
@@ -1086,7 +1220,6 @@ class SelectionEngine:
             else:
                 memory_id = identifiers.memory_id
                 status = MemoryStatus(outcome.value)
-                sealed_request = getattr(command, "sealed_content", None)
                 ttl_days = policy_decision.candidate_ttl_days
                 deadline = (
                     identifiers.created_at + timedelta(days=ttl_days)
@@ -1128,18 +1261,21 @@ class SelectionEngine:
                     provider = self._key_provider
                     if provider is None:
                         raise SelectionExecutionError("dependency_unavailable")
-                    reference = await provider.provision_key(
-                        content_key_id=identifiers.content_key_id,
-                        tenant_id=principal.tenant_id,
-                        lineage_id=lineage_id,
-                        memory_id=memory_id,
-                    )
-                    if (
-                        not isinstance(reference, ContentKeyReference)
-                        or reference.content_key_id != identifiers.content_key_id
-                        or reference.provider_name != provider.name
-                    ):
-                        raise KeyProviderError()
+                    try:
+                        reference = await provider.provision_key(
+                            content_key_id=identifiers.content_key_id,
+                            tenant_id=principal.tenant_id,
+                            lineage_id=lineage_id,
+                            memory_id=memory_id,
+                        )
+                        if (
+                            not isinstance(reference, ContentKeyReference)
+                            or reference.content_key_id != identifiers.content_key_id
+                            or reference.provider_name != provider.name
+                        ):
+                            raise KeyProviderError()
+                    except Exception:
+                        raise SelectionExecutionError("dependency_unavailable") from None
                     context = SealedContentContext(
                         tenant_id=principal.tenant_id,
                         lineage_id=lineage_id,
@@ -1157,13 +1293,16 @@ class SelectionEngine:
                         interpretation_limits=proposal.interpretation_limits,
                         metadata=proposal.metadata,
                     )
-                    envelope = await self._sealer(
-                        provider=provider,
-                        reference=reference,
-                        plaintext=plaintext.canonical_bytes(),
-                        context=context,
-                        safe_summary=sealed_request.safe_summary,
-                    )
+                    try:
+                        envelope = await self._sealer(
+                            provider=provider,
+                            reference=reference,
+                            plaintext=plaintext.canonical_bytes(),
+                            context=context,
+                            safe_summary=sealed_request.safe_summary,
+                        )
+                    except Exception:
+                        raise SelectionExecutionError("dependency_unavailable") from None
                     if not isinstance(envelope, SealedContentEnvelope):
                         raise SealedContentError("sealed content encryption failed")
                     state = MemoryStateV3.model_validate(

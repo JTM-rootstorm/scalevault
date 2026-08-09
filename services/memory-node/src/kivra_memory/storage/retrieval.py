@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from kivra_memory.domain.enums import (
+    EventOperation,
     MemoryCategory,
     MemoryScope,
     MemoryStatus,
@@ -26,7 +27,11 @@ from kivra_memory.domain.enums import (
     OntologicalStatus,
     SubjectKind,
 )
-from kivra_memory.domain.events import MemoryState
+from kivra_memory.domain.events import (
+    MemoryCreatedPayloadV3,
+    MemoryState,
+    SealedContentEnvelopeState,
+)
 from kivra_memory.security.keys import ContentKeyReference
 from kivra_memory.storage.models import (
     Branch,
@@ -43,7 +48,7 @@ from kivra_memory.storage.models import (
     SubjectAlias,
 )
 from kivra_memory.storage.models import MemoryEvent as MemoryEventRow
-from kivra_memory.storage.projector import memory_row_to_state
+from kivra_memory.storage.projector import event_row_to_domain, memory_row_to_state
 from kivra_memory.storage.selection_history import (
     SelectionDecisionRecord,
     SelectionHistoryFilters,
@@ -98,6 +103,16 @@ class HydratedMemory:
 
     state: MemoryState
     last_event_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SealedContentBinding:
+    """Immutable creation-event coordinates used by the sealed AAD contract."""
+
+    event_id: UUID
+    revision: int
+    schema_version: int
+    payload_version: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -549,6 +564,57 @@ class RetrievalRepository:
             )
         except (TypeError, ValueError):
             return None
+
+    async def sealed_content_binding(
+        self,
+        *,
+        tenant_id: UUID,
+        lineage_id: UUID,
+        branch_id: UUID,
+        memory_id: UUID,
+        content_key_id: UUID,
+        sealed_content: SealedContentEnvelopeState,
+    ) -> SealedContentBinding | None:
+        """Recover and verify the immutable creation context for authorized opening."""
+
+        rows = (
+            await self._session.scalars(
+                select(MemoryEventRow)
+                .where(
+                    MemoryEventRow.tenant_id == tenant_id,
+                    MemoryEventRow.lineage_id == lineage_id,
+                    MemoryEventRow.branch_id == branch_id,
+                    MemoryEventRow.memory_id == memory_id,
+                    MemoryEventRow.schema_version == 3,
+                    MemoryEventRow.payload_version == 3,
+                    MemoryEventRow.operation.in_(
+                        (EventOperation.OBSERVED.value, EventOperation.REMEMBERED.value)
+                    ),
+                )
+                .order_by(MemoryEventRow.sequence)
+                .limit(2)
+            )
+        ).all()
+        if len(rows) != 1:
+            return None
+        try:
+            event = event_row_to_domain(rows[0])
+            payload = event.typed_payload()
+        except (TypeError, ValueError):
+            return None
+        if (
+            not isinstance(payload, MemoryCreatedPayloadV3)
+            or payload.memory.revision != 1
+            or payload.memory.content_key_id != content_key_id
+            or payload.memory.sealed_content != sealed_content
+        ):
+            return None
+        return SealedContentBinding(
+            event_id=event.event_id,
+            revision=payload.memory.revision,
+            schema_version=event.schema_version,
+            payload_version=event.payload_version,
+        )
 
     async def lineage_metadata(
         self, *, tenant_id: UUID, persona_id: UUID, branch_id: UUID

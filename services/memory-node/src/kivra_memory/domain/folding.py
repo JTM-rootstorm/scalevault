@@ -207,6 +207,31 @@ def _check_revision(
     for name in ("tenant_id", "lineage_id", "branch_id", "subject_id", "created_at"):
         if getattr(after, name) != getattr(current, name):
             raise _fail(event, "identity_changed", f"memory {name} cannot change")
+    if isinstance(current, MemoryStateV3) or isinstance(after, MemoryStateV3):
+        if not isinstance(current, MemoryStateV3) or not isinstance(after, MemoryStateV3):
+            raise _fail(
+                event,
+                "sealed_identity_changed",
+                "sealed memory contract cannot change",
+            )
+        if event.operation not in {
+            EventOperation.TOMBSTONED,
+            EventOperation.PAYLOAD_PURGE_COMPLETED,
+        }:
+            raise _fail(
+                event,
+                "unsupported_sealed_transition",
+                "sealed memory transition is unsupported",
+            )
+        if (
+            after.content_key_id != current.content_key_id
+            or after.sealed_content != current.sealed_content
+        ):
+            raise _fail(
+                event,
+                "sealed_identity_changed",
+                "sealed envelope and content-key identity are immutable",
+            )
     if after.updated_at != event.created_at:
         raise _fail(event, "timestamp_mismatch", "after-image update time must equal event time")
 
