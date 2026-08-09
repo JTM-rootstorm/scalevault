@@ -33,12 +33,13 @@ outbound to OpenAI. It forwards to the dedicated authenticated read-only MCP
 route and requires no public inbound listener. It is for private connections
 and developer-mode testing, not public plugin submission or distribution.
 
-The GitHub proposal fallback is a separately gated transport. Current official
-OpenAI guidance describes the standard ChatGPT GitHub integration as read-only,
-so keep this fallback disabled unless the exact target account exposes and
-successfully re-probes a create-file action. A historical probe is not durable
-authorization. When enabled, require explicit approval, create one new bounded
-proposal at one UUIDv7 path, and never update or delete an existing path.
+The GitHub proposal fallback is a separately gated transport. No current
+capability record in this repository establishes a supported create-file action
+for the target account, so keep this fallback disabled unless that exact
+account exposes and successfully re-probes one. A historical probe is not
+durable authorization. When enabled, require explicit approval, create one new
+bounded proposal at one UUIDv7 path, and never update or delete an existing
+path.
 
 See the [dated capability probe](capability-probe-2026-08-03.md) for source links
 and complete Milestone 0 acceptance evidence. Re-run that probe when account,
@@ -48,4 +49,3 @@ Current references:
 
 - [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 - [Connect and test a plugin](https://developers.openai.com/plugins/deploy/connect-chatgpt)
-- [ChatGPT GitHub integration](https://help.openai.com/en/articles/11145903-connecting-github-to-chatgpt-deep-research-to-chatgpt-deep-research)
