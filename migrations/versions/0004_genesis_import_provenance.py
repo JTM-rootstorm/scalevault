@@ -62,6 +62,7 @@ def _create_run() -> None:
         sa.Column("source_repository", sa.String(255), nullable=False),
         sa.Column("snapshot_commit", sa.String(40), nullable=False),
         sa.Column("plan_sha256", sa.LargeBinary(), nullable=False),
+        sa.Column("canonical_mapping_sha256", sa.LargeBinary(), nullable=False),
         sa.Column("manifest_version", sa.String(64), nullable=False),
         sa.Column("mapping_version", sa.String(64), nullable=False),
         sa.Column("compatibility_version", sa.String(64), nullable=False),
@@ -127,6 +128,10 @@ def _create_run() -> None:
         sa.CheckConstraint(
             "octet_length(plan_sha256) = 32",
             name=op.f("ck_genesis_import_runs_plan_sha256_length"),
+        ),
+        sa.CheckConstraint(
+            "octet_length(canonical_mapping_sha256) = 32",
+            name=op.f("ck_genesis_import_runs_canonical_mapping_sha256_length"),
         ),
         sa.CheckConstraint(
             "octet_length(policy_sha256) = 32",
@@ -777,6 +782,70 @@ def _create_run_result() -> None:
     )
 
 
+def _protect_run_completion() -> None:
+    op.execute(
+        sa.text(
+            "CREATE FUNCTION public.scalevault_enforce_genesis_run_completion() "
+            "RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $function$ "
+            "DECLARE actual_planned bigint; actual_candidate bigint; "
+            "actual_omit bigint; actual_reject bigint; "
+            "BEGIN "
+            "SELECT count(*) FILTER (WHERE processing_state = 'planned'), "
+            "count(*) FILTER (WHERE processing_state = 'candidate'), "
+            "count(*) FILTER (WHERE processing_state = 'omit'), "
+            "count(*) FILTER (WHERE processing_state = 'reject') "
+            "INTO actual_planned, actual_candidate, actual_omit, actual_reject "
+            "FROM public.genesis_import_records "
+            "WHERE tenant_id = NEW.tenant_id AND import_run_id = NEW.import_run_id; "
+            "IF actual_planned <> 0 OR NEW.planned_record_count <> "
+            "actual_candidate + actual_omit + actual_reject "
+            "OR NEW.candidate_count <> actual_candidate "
+            "OR NEW.omit_count <> actual_omit OR NEW.reject_count <> actual_reject "
+            "OR NOT NEW.replay_verified THEN "
+            "RAISE EXCEPTION 'genesis import completion counts are not verified' "
+            "USING ERRCODE = '23514'; "
+            "END IF; "
+            "IF EXISTS ("
+            "SELECT 1 FROM public.genesis_import_records AS r "
+            "LEFT JOIN public.selection_decisions AS d ON "
+            "d.tenant_id = r.tenant_id AND d.decision_id = r.selection_decision_id "
+            "LEFT JOIN public.memory_events AS e ON "
+            "e.tenant_id = r.tenant_id AND e.event_id = r.event_id "
+            "LEFT JOIN public.memories AS m ON "
+            "m.tenant_id = r.tenant_id AND m.memory_id = r.memory_id "
+            "WHERE r.tenant_id = NEW.tenant_id AND r.import_run_id = NEW.import_run_id "
+            "AND (d.decision_id IS NULL OR d.source_kind <> 'genesis_import' "
+            "OR d.requested_operation <> 'nominate' OR d.selection_basis <> 'imported_legacy' "
+            "OR d.outcome <> r.processing_state OR d.lineage_id <> r.lineage_id "
+            "OR d.branch_id <> r.branch_id OR d.event_id IS DISTINCT FROM r.event_id "
+            "OR d.memory_id IS DISTINCT FROM r.memory_id "
+            "OR (SELECT count(*) FROM public.command_receipts AS cr "
+            "WHERE cr.tenant_id = r.tenant_id "
+            "AND cr.selection_decision_id = r.selection_decision_id "
+            "AND cr.idempotency_key = r.nomination_idempotency_key "
+            "AND cr.event_id IS NOT DISTINCT FROM r.event_id "
+            "AND cr.memory_id IS NOT DISTINCT FROM r.memory_id) <> 1 "
+            "OR (r.processing_state = 'candidate' AND (e.event_id IS NULL "
+            "OR e.lineage_id <> r.lineage_id OR e.branch_id <> r.branch_id "
+            "OR e.memory_id <> r.memory_id OR e.idempotency_key <> r.nomination_idempotency_key "
+            "OR e.operation <> 'observed' OR m.memory_id IS NULL "
+            "OR m.lineage_id <> r.lineage_id OR m.branch_id <> r.branch_id "
+            "OR m.status <> 'candidate' OR m.last_event_id <> r.event_id)))) THEN "
+            "RAISE EXCEPTION 'genesis import completion linkage is not verified' "
+            "USING ERRCODE = '23514'; "
+            "END IF; "
+            "RETURN NEW; END; $function$"
+        )
+    )
+    op.execute(
+        sa.text(
+            "CREATE TRIGGER trg_genesis_import_run_results_verified "
+            "BEFORE INSERT ON public.genesis_import_run_results FOR EACH ROW "
+            "EXECUTE FUNCTION public.scalevault_enforce_genesis_run_completion()"
+        )
+    )
+
+
 def _protect_record_terminalization() -> None:
     op.execute(sa.text("ALTER TABLE public.genesis_import_records ENABLE ROW LEVEL SECURITY"))
     op.execute(sa.text("ALTER TABLE public.genesis_import_records FORCE ROW LEVEL SECURITY"))
@@ -909,6 +978,7 @@ def upgrade() -> None:
     _create_exclusion()
     _create_supersession()
     _create_run_result()
+    _protect_run_completion()
     for table_name in _GENESIS_TABLES:
         if table_name == "genesis_import_records":
             _protect_record_terminalization()
@@ -927,6 +997,16 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(
         sa.text(
+            "DO $guard$ BEGIN "
+            "IF EXISTS (SELECT 1 FROM public.selection_decisions "
+            "WHERE source_kind = 'genesis_import') THEN "
+            "RAISE EXCEPTION 'cannot downgrade while Genesis selection decisions exist' "
+            "USING ERRCODE = '55000'; "
+            "END IF; END $guard$"
+        )
+    )
+    op.execute(
+        sa.text(
             "UPDATE alembic_compatibility SET contract_version = 3, "
             "minimum_reader_revision = '0003_selection_policy_lifecycle', "
             "minimum_writer_revision = '0003_selection_policy_lifecycle' "
@@ -935,6 +1015,7 @@ def downgrade() -> None:
     )
     for table_name in reversed(_GENESIS_TABLES):
         op.drop_table(table_name)
+    op.execute(sa.text("DROP FUNCTION public.scalevault_enforce_genesis_run_completion()"))
     op.execute(sa.text("DROP FUNCTION public.scalevault_enforce_genesis_record_terminalization()"))
     op.drop_constraint(
         op.f("ck_selection_decisions_source_operation_compatible"),

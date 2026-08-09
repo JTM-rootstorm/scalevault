@@ -93,6 +93,7 @@ class GenesisImportRun(Base):
             "length(backup_reference) BETWEEN 1 AND 255", name="backup_reference_length"
         ),
         sha256_check("plan_sha256", name="plan_sha256_length"),
+        sha256_check("canonical_mapping_sha256", name="canonical_mapping_sha256_length"),
         sha256_check("policy_sha256", name="policy_sha256_length"),
         sha256_check("pre_state_sha256", name="pre_state_sha256_length"),
         json_object_check("parser_schema_versions", name="parser_schema_versions_object"),
@@ -105,6 +106,7 @@ class GenesisImportRun(Base):
     source_repository: Mapped[str] = mapped_column(String(255), nullable=False)
     snapshot_commit: Mapped[str] = mapped_column(String(40), nullable=False)
     plan_sha256: Mapped[bytes] = mapped_column(LargeBinary(), nullable=False)
+    canonical_mapping_sha256: Mapped[bytes] = mapped_column(LargeBinary(), nullable=False)
     manifest_version: Mapped[str] = mapped_column(String(64), nullable=False)
     mapping_version: Mapped[str] = mapped_column(String(64), nullable=False)
     compatibility_version: Mapped[str] = mapped_column(String(64), nullable=False)

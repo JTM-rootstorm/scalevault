@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
+from kivra_memory.domain.canonical_json import canonical_json_bytes
+from kivra_memory.storage import genesis_import as genesis_storage
 from kivra_memory.storage.genesis_import import (
     GenesisImportRepository,
     GenesisImportStorageError,
@@ -39,6 +43,121 @@ def checks(table_name: str) -> str:
     )
 
 
+def _bound_synthetic_plan() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
+    raw = b'{"contract":"synthetic"}'
+    parsed = {"contract": "synthetic"}
+    source = SimpleNamespace(
+        source_id=uid(2),
+        source_kind="checkpoint_v2",
+        source_identity="synthetic-source",
+        source_path="ingress/checkpoints/v2/genesis/2026/08/synthetic-source.json",
+        blob_object_id=hashlib.sha1(
+            f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False
+        ).hexdigest(),
+        raw_sha256=hashlib.sha256(raw).digest(),
+        raw_bytes=raw,
+        parsed_document=parsed,
+        parsed_canonical_json=canonical_json_bytes(parsed),
+        parsed_canonical_sha256=hashlib.sha256(canonical_json_bytes(parsed)).digest(),
+    )
+    run = SimpleNamespace(
+        manifest_version="scalevault.genesis-import-manifest.v1",
+        source_repository="JTM-rootstorm/scalevault-memory-ingress",
+        snapshot_commit="7dc1cae4b9a99173d2d227be1dd1d10c7f267ce9",
+        parser_schema_versions={
+            "scalevault.ingress.genesis-checkpoint.v2": "checkpoint-v2.schema.1"
+        },
+        mapping_version="genesis-import-mapping-v1",
+        compatibility_version="genesis-first-import-compat-v1",
+        policy_version="selection-v1",
+        policy_sha256=bytes.fromhex(
+            "b12dd83889d2a273e260c5b990eea5a0b6531ab38be76fca47642f471d2bf85e"
+        ),
+        plan_sha256=b"\x00" * 32,
+    )
+    semantics = {
+        "subject": {"subject_kind": "persona", "source_reference": "kivra:genesis"},
+        "category": "stable_fact",
+        "ontological_status": "literal_user_fact",
+        "scope": "persona",
+        "visibility": "private_root",
+        "statement": "synthetic",
+        "reason_to_remember": "synthetic test binding",
+        "interpretation_limits": ["synthetic test only"],
+        "confidence": 0.5,
+        "salience": 0.5,
+        "durability": 0.5,
+        "sensitivity": 4,
+    }
+    nomination_material = {
+        "mapping_version": run.mapping_version,
+        "source_repository": run.source_repository,
+        "source_snapshot_commit": run.snapshot_commit,
+        "source_path": source.source_path,
+        "source_raw_sha256": source.raw_sha256.hex(),
+        "source_record_id": "synthetic-record",
+        "semantics": semantics,
+        "selection_basis": "imported_legacy",
+        "epistemic_qualifiers": ["imported_source_unreconciled"],
+    }
+    nomination_sha = hashlib.sha256(
+        b"scalevault.genesis-import.nomination.v1\x00"
+        + canonical_json_bytes(nomination_material)
+    ).digest()
+    idempotency_sha = hashlib.sha256(
+        b"scalevault.genesis-import.idempotency.v1\x00"
+        + canonical_json_bytes(nomination_material)
+    ).hexdigest()
+    record = SimpleNamespace(
+        import_record_id=uid(3),
+        source_id=source.source_id,
+        lineage_id=uid(4),
+        branch_id=uid(5),
+        record_kind="candidate",
+        source_item_identity="synthetic-record",
+        source_item_document={"binding": {"owner_actor_id": "kivra:genesis"}},
+        nomination_sha256=nomination_sha,
+        nomination_idempotency_key=f"genesis-import-v1:{idempotency_sha}",
+        mapping_metadata={
+            "semantics": semantics,
+            "review_controls": {"automatic_promotion_allowed": False},
+            "canonical_mapping": {
+                "genesis_actor_id": str(uid(6)),
+                "persona_id": str(uid(7)),
+                "lineage_id": str(uid(4)),
+                "branch_id": str(uid(5)),
+                "subject_id": str(uid(8)),
+                "subject_kind": "persona",
+                "logical_session_id": None,
+            },
+        },
+    )
+    material = genesis_storage._manifest_material(run, (source,), (record,), (), ())
+    run.plan_sha256 = hashlib.sha256(canonical_json_bytes(material)).digest()
+    return run, source, record
+
+
+def test_plan_digest_is_recomputed_from_exact_children() -> None:
+    run, source, record = _bound_synthetic_plan()
+
+    assert genesis_storage._verify_plan_digest(run, (source,), (record,), (), ()) == (
+        run.plan_sha256
+    )
+
+    semantics = cast(dict[str, object], record.mapping_metadata["semantics"])
+    semantics["statement"] = "tampered"
+    with pytest.raises(GenesisImportStorageError, match="nomination_binding_mismatch"):
+        genesis_storage._verify_plan_digest(run, (source,), (record,), (), ())
+
+
+def test_plan_digest_rejects_an_unbound_approved_digest() -> None:
+    run, source, record = _bound_synthetic_plan()
+    run.plan_sha256 = b"x" * 32
+
+    with pytest.raises(GenesisImportStorageError, match="import_plan_digest_mismatch"):
+        genesis_storage._verify_plan_digest(run, (source,), (record,), (), ())
+
+
 def test_genesis_storage_is_tenant_owned_and_protected() -> None:
     assert set(metadata.tables) >= GENESIS_TABLES
     for table_name in GENESIS_TABLES:
@@ -64,8 +183,9 @@ def test_run_contract_is_exact_and_recovery_evidence_precedes_apply() -> None:
     assert "proposal-v1.schema.1" in run_checks
     assert "selection-v1" in run_checks
     assert set(metadata.tables["genesis_import_runs"].c.keys()).issuperset(
-        {"pre_state_sha256", "backup_reference"}
+        {"canonical_mapping_sha256", "pre_state_sha256", "backup_reference"}
     )
+    assert "octet_length(canonical_mapping_sha256) = 32" in run_checks
 
 
 def test_source_archive_preserves_bytes_json_hashes_and_source_bounds() -> None:
@@ -147,6 +267,7 @@ async def test_context_verification_rejects_bad_digests_without_database_access(
             raw_sha256=b"r" * 32,
             nomination_sha256=b"n" * 32,
             nomination_idempotency_key="genesis:test",
+            mapping_metadata_sha256=b"m" * 32,
         )
 
     assert error.value.code == "invalid_context_digest"

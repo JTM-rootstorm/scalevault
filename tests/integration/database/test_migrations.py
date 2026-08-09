@@ -13,6 +13,7 @@ from alembic.script import ScriptDirectory
 from kivra_memory.storage import metadata
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import DBAPIError
 
 from .conftest import (
     REQUIRED_EXTENSIONS,
@@ -227,3 +228,42 @@ def test_existing_0003_database_upgrades_to_genesis_provenance(
             "genesis_import_run_results",
         } <= set(inspect(connection).get_table_names())
         assert _schema_differences(connection) == []
+
+
+def test_genesis_downgrade_fails_closed_after_a_genesis_decision(
+    bootstrapped_alembic_runner: AlembicRunner,
+) -> None:
+    runner = bootstrapped_alembic_runner
+    runner.upgrade()
+    with runner.engine.begin() as connection:
+        connection.execute(text("SET LOCAL session_replication_role = 'replica'"))
+        connection.execute(
+            text(
+                "INSERT INTO selection_decisions ("
+                "selection_sequence, decision_id, tenant_id, lineage_id, branch_id, "
+                "persona_id, actor_id, client_id, transport_binding_id, policy_id, "
+                "policy_version, policy_sha256, policy_rule_code, input_sha256, source_kind, "
+                "requested_operation, outcome, reason_codes, matched_rule_ids, selection_basis, "
+                "scope, visibility, sensitivity, subject_id, subject_kind, memory_id, event_id) "
+                "VALUES (1, '019c0000-0000-7000-8000-000000000001', "
+                "'019c0000-0000-7000-8000-000000000002', "
+                "'019c0000-0000-7000-8000-000000000003', "
+                "'019c0000-0000-7000-8000-000000000004', "
+                "'019c0000-0000-7000-8000-000000000005', "
+                "'019c0000-0000-7000-8000-000000000006', "
+                "'019c0000-0000-7000-8000-000000000007', "
+                "'019c0000-0000-7000-8000-000000000008', "
+                "'scalevault-memory-selection', 1, decode(repeat('a', 64), 'hex'), "
+                "'genesis_import_test', decode(repeat('b', 64), 'hex'), "
+                "'genesis_import', 'nominate', 'omit', '[\"test_reason\"]'::jsonb, "
+                "'[]'::jsonb, 'imported_legacy', 'persona', 'private_root', 0, "
+                "'019c0000-0000-7000-8000-000000000009', 'persona', NULL, NULL)"
+            )
+        )
+
+    with pytest.raises(DBAPIError, match="cannot downgrade while Genesis"):
+        runner.downgrade("0003_selection_policy_lifecycle")
+
+    with runner.connect() as connection:
+        assert _current_revision(connection) == EXPECTED_HEAD
+        assert "genesis_import_runs" in inspect(connection).get_table_names()

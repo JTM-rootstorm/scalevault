@@ -551,7 +551,8 @@ BEGIN
         'scalevault_enforce_branch_visibility()',
         'scalevault_enforce_event_ingress_provenance()',
         'scalevault_enforce_ingress_validation_write()',
-        'scalevault_enforce_genesis_record_terminalization()'
+        'scalevault_enforce_genesis_record_terminalization()',
+        'scalevault_enforce_genesis_run_completion()'
     ]
     LOOP
         IF pg_catalog.to_regprocedure('public.' || function_signature) IS NOT NULL THEN
