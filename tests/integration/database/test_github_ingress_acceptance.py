@@ -90,7 +90,8 @@ def _proposal_payload(
         "category": "project_decision",
         "ontological_status": "literal_technical_fact",
         "scope": "project",
-        "visibility": "restricted",
+        # The shared synthetic root branch has the strict private-root ceiling.
+        "visibility": "private_root",
         "statement": f"Synthetic concurrent project decision {ordinal}.",
         "reason_to_remember": "Exercise the concurrent GitHub ingress acceptance gate.",
         "interpretation_limits": ["Synthetic integration-test data only."],
@@ -137,6 +138,12 @@ def _work_item(
         raw_bytes=raw_bytes,
     )
     return work_item_from_proposal(proposal, identity=identity, discovered_at=_NOW)
+
+
+def test_proposal_fixture_respects_the_seeded_branch_visibility_ceiling() -> None:
+    payload = _proposal_payload(0, project_subject_id=_identifier(900))
+
+    assert payload["visibility"] == seed_rows()["branches"][0]["visibility_ceiling"]
 
 
 async def _seed(database: Database, *, project_subject_id: UUID) -> None:

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import base64
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
@@ -41,8 +42,10 @@ from kivra_memory.domain.events import (
     MemoryCreatedPayload,
     MemoryEvent,
     MemoryState,
+    MemoryStateV3,
     MemoryTransitionPayload,
     TombstonedPayload,
+    TombstonedPayloadV3,
 )
 from kivra_memory.domain.identifiers import new_uuid7
 from pydantic import ValidationError
@@ -141,6 +144,34 @@ def memory() -> MemoryState:
         fingerprint_version=1,
         normalized_fingerprint="ab" * 32,
         metadata={"fixture": True},
+    )
+
+
+def sealed_memory() -> MemoryStateV3:
+    content_key_id = uid(12)
+    return MemoryStateV3.model_validate(
+        {
+            **memory().model_dump(mode="python"),
+            "statement": None,
+            "reason_to_remember": None,
+            "interpretation_limits": (),
+            "sensitivity": 4,
+            "content_protection": "envelope_encrypted",
+            "content_key_id": content_key_id,
+            "normalized_fingerprint": None,
+            "metadata": {},
+            "candidate_expires_at": None,
+            "sealed_content": {
+                "contract_version": "scalevault.sealed-content-envelope.v1",
+                "envelope_version": 1,
+                "algorithm": "AES-256-GCM",
+                "content_key_id": content_key_id,
+                "nonce": base64.b64encode(b"\x01" * 12).decode("ascii"),
+                "ciphertext": base64.b64encode(b"\x02" * 17).decode("ascii"),
+                "aad_sha256": "03" * 32,
+                "safe_summary": "Synthetic sealed mutation fixture.",
+            },
+        }
     )
 
 
@@ -284,6 +315,109 @@ def test_disputed_memory_terminal_mutations_require_conflict_resolution(
 
     assert failure.value.response.error.code == "conflict_state_changed"
     assert not failure.value.response.error.retryable
+
+
+def forget_command(*, mode: Literal["logical", "hard"]) -> ForgetCommand:
+    confirmation: Literal["confirm_logical_forget", "confirm_hard_forget"] = (
+        "confirm_hard_forget" if mode == "hard" else "confirm_logical_forget"
+    )
+    return ForgetCommand(
+        contract_version="mcp-mutation-v1",
+        idempotency_key=f"unit-{mode}-forget",
+        logical_session_id=None,
+        persona_id=uid(5),
+        branch_id=uid(6),
+        reason="Exercise tombstone event version selection.",
+        memory_id=uid(7),
+        expected_revision=3,
+        mode=mode,
+        confirmation=confirmation,
+    )
+
+
+async def _prepared_forget_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    current: MemoryState,
+    *,
+    mode: Literal["logical", "hard"],
+) -> tuple[TombstonedPayload, ForgetCommand]:
+    async def load_memories(*args: object, **kwargs: object) -> dict[UUID, MemoryState]:
+        del args, kwargs
+        return {current.memory_id: current}
+
+    monkeypatch.setattr(MutationEngine, "_load_memories", load_memories)
+    monkeypatch.setattr(mutations_module, "acquire_advisory_xact_locks", AsyncMock())
+    session = MagicMock()
+    session.scalar = AsyncMock(return_value=current.content_key_id)
+    command_value = forget_command(mode=mode)
+    payload, *_ = await MutationEngine(MagicMock())._prepare_payload(
+        session,
+        principal=principal(),
+        command=command_value,
+        lineage_id=uid(8),
+        aggregate_id=uid(40),
+        created_at=NOW,
+    )
+    assert isinstance(payload, TombstonedPayload)
+    return payload, command_value
+
+
+def _tombstone_event(
+    payload: TombstonedPayload,
+    command_value: ForgetCommand,
+    current: MemoryState,
+) -> MemoryEvent:
+    return mutations_module._event(
+        sequence=1,
+        principal=principal(),
+        command=command_value,
+        lineage_id=uid(8),
+        payload=payload,
+        event_id=uid(41),
+        correlation_id=uid(42),
+        created_at=NOW,
+        memory_id=current.memory_id,
+        expected_revision=current.revision,
+    )
+
+
+async def test_sealed_hard_forget_builds_a_v3_tombstone_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = sealed_memory()
+    payload, command_value = await _prepared_forget_payload(monkeypatch, current, mode="hard")
+
+    assert type(payload) is TombstonedPayloadV3
+    assert type(payload.memory) is MemoryStateV3
+    assert payload.memory.status is MemoryStatus.TOMBSTONED
+    assert payload.memory.sealed_content == current.sealed_content
+    event = _tombstone_event(payload, command_value, current)
+
+    assert event.schema_version == 3
+    assert event.payload_version == 3
+    assert type(event.typed_payload()) is TombstonedPayloadV3
+
+
+async def test_plaintext_logical_forget_preserves_v1_canonical_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = memory()
+    payload, command_value = await _prepared_forget_payload(monkeypatch, current, mode="logical")
+    assert type(payload) is TombstonedPayload
+    event = _tombstone_event(payload, command_value, current)
+    legacy_payload = TombstonedPayload(
+        previous_revision=payload.previous_revision,
+        memory=payload.memory,
+        forget_mode="logical",
+    )
+    legacy_event = _tombstone_event(legacy_payload, command_value, current)
+
+    assert event.schema_version == 1
+    assert event.payload_version == 1
+    assert type(event.typed_payload()) is TombstonedPayload
+    assert event.payload_canonical == legacy_event.payload_canonical
+    assert event.payload_sha256 == legacy_event.payload_sha256
+    assert event.command_sha256 == legacy_event.command_sha256
 
 
 async def test_retry_callback_reuses_attempt_identity_and_timestamp(

@@ -163,8 +163,14 @@ def test_identity_and_ancestry_fields_have_targeted_immutable_triggers(
     }
     assert set(by_table) == set(expected)
     for table, fields in expected.items():
-        assert "before update of" in by_table[table]
-        assert all(field in by_table[table] for field in fields)
+        definition = by_table[table]
+        assert "before update" in definition
+        assert "scalevault_reject_immutable_field_mutation" in definition
+        if table == "genesis_import_records":
+            assert "before update on public.genesis_import_records" in definition
+        else:
+            assert "before update of" in definition
+        assert all(field in definition for field in fields)
 
 
 def test_content_key_lifecycle_has_forward_only_audit_and_delete_barriers(

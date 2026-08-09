@@ -184,7 +184,8 @@ def _grant_ingress_runtime_privileges(runner: AlembicRunner) -> None:
         connection.execute(
             text(
                 f"GRANT SELECT ON public.actors, public.clients, public.transport_installations, "
-                f"public.transport_bindings, public.ingress_items, public.memory_events "
+                f"public.transport_bindings, public.ingress_items, public.memory_events, "
+                f"public.command_receipts, public.selection_decisions "
                 f"TO {API_ROLE}"
             )
         )
@@ -970,7 +971,7 @@ def test_ingress_lifecycle_and_provenance_fields_fail_closed(
     with migrated_database.engine.begin() as connection:
         connection.execute(
             text(
-                "UPDATE ingress_items SET state = 'rejected', error_code = 'invalid_proposal', "
+                "UPDATE ingress_items SET state = 'quarantined', error_code = 'invalid_proposal', "
                 "processed_at = CURRENT_TIMESTAMP WHERE ingress_id = :ingress"
             ),
             {"ingress": MISMATCHED_INSTALLATION_INGRESS},
@@ -982,7 +983,7 @@ def test_ingress_lifecycle_and_provenance_fields_fail_closed(
     ):
         connection.execute(
             text(
-                "UPDATE ingress_items SET state = 'quarantined', error_code = 'late_change' "
+                "UPDATE ingress_items SET state = 'rejected', error_code = 'late_change' "
                 "WHERE ingress_id = :ingress"
             ),
             {"ingress": MISMATCHED_INSTALLATION_INGRESS},

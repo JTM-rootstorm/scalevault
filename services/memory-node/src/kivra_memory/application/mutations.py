@@ -47,6 +47,7 @@ from kivra_memory.domain.events import (
     MemoryTransitionPayload,
     OperationPayload,
     TombstonedPayload,
+    TombstonedPayloadV3,
     event_hash_fields,
 )
 from kivra_memory.domain.fingerprints import exact_memory_fingerprint
@@ -1032,10 +1033,20 @@ class MutationEngine:
             normalized_fingerprint=None,
             metadata={},
         )
+        if isinstance(tombstone, MemoryStateV3):
+            tombstone_payload: TombstonedPayload = TombstonedPayloadV3(
+                previous_revision=current.revision,
+                memory=tombstone,
+                forget_mode=command.mode,
+            )
+        else:
+            tombstone_payload = TombstonedPayload(
+                previous_revision=current.revision,
+                memory=tombstone,
+                forget_mode=command.mode,
+            )
         return (
-            TombstonedPayload(
-                previous_revision=current.revision, memory=tombstone, forget_mode=command.mode
-            ),
+            tombstone_payload,
             current.memory_id,
             current.revision,
             current.memory_id,
