@@ -1197,6 +1197,9 @@ def _require_secure_tunnel_rotation_state(
     require_active: bool,
 ) -> None:
     credential = state.credential
+    hint = credential.public_hint or ""
+    hint_prefix = "chatgpt:secure-tunnel:"
+    label = hint.removeprefix(hint_prefix)
     try:
         _capability_profile_from_jsonb(credential.capability_profile)
     except (TypeError, ValueError):
@@ -1204,13 +1207,19 @@ def _require_secure_tunnel_rotation_state(
     scopes = credential.client_scopes
     if (
         state.tenant_state != "active"
+        or hint == label
+        or _LABEL_PATTERN.fullmatch(label) is None
         or state.actor_kind != "agent"
         or credential.actor_metadata
         != {"provisioning_contract": "scalevault-chatgpt-secure-tunnel-v1"}
         or state.actor_revoked_at is not None
+        or state.actor_handle != f"chatgpt-{label}"
+        or state.actor_display_name != f"ChatGPT secure tunnel ({label})"
         or state.client_kind != "interactive"
         or state.client_transport_kind != TransportKind.SECURE_TUNNEL.value
         or state.client_revoked_at is not None
+        or state.client_public_id != f"chatgpt-secure-tunnel-{label}-{credential.tenant_id}"
+        or state.client_display_name != f"ChatGPT secure tunnel ({label})"
         or not scopes
         or len(scopes) != len(set(scopes))
         or not set(scopes) <= _SECURE_TUNNEL_SCOPES
@@ -1219,6 +1228,7 @@ def _require_secure_tunnel_rotation_state(
         or state.installation_id is None
         or state.authorized_operations != {"operations": []}
         or state.binding_valid_until is not None
+        or state.installation_route_key != f"chatgpt-{label}-{credential.tenant_id}"
         or state.installation_capability_profile
         != {
             "association_mode": "single_chatgpt_workspace",

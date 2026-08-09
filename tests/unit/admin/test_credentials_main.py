@@ -163,15 +163,17 @@ def test_secure_tunnel_requires_file_output_and_exposes_only_read_status_scopes(
     assert parsed.secret_output == Path("/root/authorization")
     assert missing_output.value.code == 2
     assert stdout_rejected.value.code == 2
-    assert all(
-        scope.startswith("memory.read.") or scope.startswith("memory.status.")
-        for scope in credentials_main._DEFAULT_SECURE_TUNNEL_SCOPES
-    )
-    assert not any(
-        scope.startswith("memory.write.")
-        for scope in credentials_main._DEFAULT_SECURE_TUNNEL_SCOPES
-    )
-    assert "memory.status.ingress" in credentials_main._DEFAULT_SECURE_TUNNEL_SCOPES
+    assert set(credentials_main._DEFAULT_SECURE_TUNNEL_SCOPES) == {
+        "memory.read.conflicts",
+        "memory.read.context",
+        "memory.read.get",
+        "memory.read.lineage",
+        "memory.read.search",
+        "memory.read.selection_history",
+        "memory.read.timeline",
+        "memory.status.ingress",
+        "memory.status.transport",
+    }
 
     secure_rotate = [
         "rotate-secure-tunnel",

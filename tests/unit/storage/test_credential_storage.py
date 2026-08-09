@@ -21,6 +21,7 @@ from kivra_memory.storage.credentials import (
     _metadata_from_state,
     _monotonic_audit_timestamp,
     _require_matching_secure_tunnel_state,
+    _require_secure_tunnel_rotation_state,
     _SecureTunnelAdminState,
     _state_is_active,
     _validate_secure_tunnel_issuance,
@@ -479,6 +480,34 @@ def test_secure_tunnel_retry_matcher_rejects_any_distinguishing_state_drift() ->
     for existing in hostile:
         with pytest.raises(CredentialAdminError, match="credential_artifact_mismatch"):
             _require_matching_secure_tunnel_state(existing, issuance)
+
+
+def test_secure_tunnel_rotation_rejects_identity_derivation_drift() -> None:
+    _issuance, state = _secure_tunnel_admin_fixture()
+    _require_secure_tunnel_rotation_state(
+        state,
+        replacement=None,
+        require_active=True,
+    )
+
+    for existing in (
+        replace(state, actor_handle="chatgpt-other"),
+        replace(state, client_public_id="chatgpt-secure-tunnel-other"),
+        replace(state, installation_route_key="chatgpt-other"),
+        replace(
+            state,
+            credential=replace(
+                state.credential,
+                public_hint="chatgpt:secure-tunnel:other",
+            ),
+        ),
+    ):
+        with pytest.raises(CredentialAdminError, match="credential_artifact_mismatch"):
+            _require_secure_tunnel_rotation_state(
+                existing,
+                replacement=None,
+                require_active=True,
+            )
 
 
 def test_active_boundaries_use_database_snapshot_time_exclusively() -> None:
