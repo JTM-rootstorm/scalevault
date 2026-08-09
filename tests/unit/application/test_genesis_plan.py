@@ -101,9 +101,7 @@ def _payload() -> dict[str, object]:
 
 
 def _blob_sha(raw: bytes) -> str:
-    return hashlib.sha1(
-        f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False
-    ).hexdigest()
+    return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
 
 
 @dataclass

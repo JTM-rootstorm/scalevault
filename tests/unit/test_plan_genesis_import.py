@@ -66,9 +66,7 @@ def test_cli_plan_writes_only_report_and_safe_stdout(
     monkeypatch.setattr(cli, "LocalGitObjectReader", lambda _path: object())
     monkeypatch.setattr(cli, "plan_genesis_import", lambda _reader: fake_plan)
 
-    status = cli.main(
-        ["plan", "--repository", str(repository), "--output", str(destination)]
-    )
+    status = cli.main(["plan", "--repository", str(repository), "--output", str(destination)])
 
     captured = capsys.readouterr()
     assert status == 0

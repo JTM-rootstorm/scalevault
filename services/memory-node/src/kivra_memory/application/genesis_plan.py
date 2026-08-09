@@ -136,9 +136,7 @@ def plan_genesis_import(reader: GitObjectReader) -> GenesisImportPlan:
 
         sources_by_contract[source_item.source_contract.value] += 1
         compatibility_counts.update(code.value for code in validated.compatibility_codes)
-        unresolved_legacy_binding_count += len(
-            validated.unresolved_legacy_binding_candidate_ids
-        )
+        unresolved_legacy_binding_count += len(validated.unresolved_legacy_binding_candidate_ids)
         processed_sources.append(
             GenesisPlannedSource(
                 source_item=source_item,
@@ -160,8 +158,7 @@ def plan_genesis_import(reader: GitObjectReader) -> GenesisImportPlan:
 
     enumerated_contracts = {item.source_contract for item in source_items}
     parser_versions = {
-        contract: GENESIS_PARSER_SCHEMA_VERSIONS[contract]
-        for contract in enumerated_contracts
+        contract: GENESIS_PARSER_SCHEMA_VERSIONS[contract] for contract in enumerated_contracts
     }
     try:
         manifest = build_import_plan_manifest(
@@ -252,9 +249,7 @@ def _append_processed_records(
             "source_record_id": exclusion.exclusion_id,
             "exclusion": exclusion.model_dump(mode="python"),
         }
-        derived_sha = hashlib.sha256(
-            _EXCLUSION_DOMAIN + canonical_json_bytes(material)
-        ).hexdigest()
+        derived_sha = hashlib.sha256(_EXCLUSION_DOMAIN + canonical_json_bytes(material)).hexdigest()
         records.append(
             PlannedImportRecord(
                 source_path=source.source_path,
@@ -438,9 +433,7 @@ def _validate_safe_report(value: Mapping[str, object]) -> None:
         raise GenesisPlanError("invalid_expected_manifest")
     scalar_keys = expected_count_keys - {"sources_by_contract", "compatibility_codes"}
     if any(
-        isinstance(counts[key], bool)
-        or not isinstance(counts[key], int)
-        or counts[key] < 0
+        isinstance(counts[key], bool) or not isinstance(counts[key], int) or counts[key] < 0
         for key in scalar_keys
     ):
         raise GenesisPlanError("invalid_expected_manifest")

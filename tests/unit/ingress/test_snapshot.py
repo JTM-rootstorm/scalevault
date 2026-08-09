@@ -35,9 +35,7 @@ POST_PIN_PATH = "ingress/checkpoints/v2/genesis/2026/08/post-freeze-authorizatio
 
 
 def _blob_sha(raw: bytes) -> str:
-    return hashlib.sha1(
-        f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False
-    ).hexdigest()
+    return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
 
 
 @dataclass
@@ -144,9 +142,7 @@ def test_rejects_blob_bytes_that_do_not_match_tree_provenance() -> None:
     substituted = b'{"checkpoint":"substituted"}'
     declared_sha = _blob_sha(declared)
     reader = StubReader(
-        trees={
-            GENESIS_SOURCE_SNAPSHOT_COMMIT: (GitTreeEntry(CHECKPOINT_V2_PATH, declared_sha),)
-        },
+        trees={GENESIS_SOURCE_SNAPSHOT_COMMIT: (GitTreeEntry(CHECKPOINT_V2_PATH, declared_sha),)},
         blobs={declared_sha: substituted},
     )
 

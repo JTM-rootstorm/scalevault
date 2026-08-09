@@ -76,9 +76,7 @@ def _checkpoint(*, version: int = 2, relationship: bool = True) -> dict[str, obj
         exclusion.update(
             {
                 "applies_to_actor_ids": ["kivra:genesis", "person:mike"],
-                "applies_to_relationship_ids": [
-                    "relationship:kivra-genesis:person-mike"
-                ],
+                "applies_to_relationship_ids": ["relationship:kivra-genesis:person-mike"],
             }
         )
     return {
@@ -109,13 +107,9 @@ def _checkpoint(*, version: int = 2, relationship: bool = True) -> dict[str, obj
 def _processed(payload: dict[str, object], *, version: int = 2) -> GenesisProcessingResult:
     raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     checkpoint_id = str(payload["checkpoint"]["id"])  # type: ignore[index]
-    source_path = (
-        f"ingress/checkpoints/v{version}/genesis/2026/08/{checkpoint_id}.json"
-    )
+    source_path = f"ingress/checkpoints/v{version}/genesis/2026/08/{checkpoint_id}.json"
     validated = validate_ingress(raw, source_path)
-    blob_sha = hashlib.sha1(
-        f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False
-    ).hexdigest()
+    blob_sha = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
     source = SnapshotSourceItem(
         source_repository=AUTHORIZED_SOURCE_REPOSITORY,
         source_snapshot_commit=AUTHORIZED_SOURCE_SNAPSHOT,
@@ -149,14 +143,10 @@ def test_v2_mapping_is_lossless_and_uses_unreconciled_policy_posture() -> None:
     assert binding.original_visibility == "relationship_local"
     assert candidate.supersedes == ("candidate-earlier",)
     assert exclusion.applies_to_actor_ids == ("kivra:genesis", "person:mike")
-    assert exclusion.applies_to_relationship_ids == (
-        "relationship:kivra-genesis:person-mike",
-    )
+    assert exclusion.applies_to_relationship_ids == ("relationship:kivra-genesis:person-mike",)
     assert exclusion.supersedes == ("exclusion-earlier",)
     assert nomination.selection_basis is SelectionBasis.IMPORTED_LEGACY
-    assert nomination.epistemic_qualifiers == (
-        EpistemicQualifier.IMPORTED_SOURCE_UNRECONCILED,
-    )
+    assert nomination.epistemic_qualifiers == (EpistemicQualifier.IMPORTED_SOURCE_UNRECONCILED,)
     assert nomination.semantics.visibility is MemoryVisibility.PRIVATE_ROOT
     assert nomination.review_controls.automatic_promotion_allowed is False
     assert nomination.review_controls.relationship_retrieval_allowed is True
@@ -179,9 +169,7 @@ def test_source_confidence_and_disposition_do_not_confer_nomination_authority() 
     assert first.semantics.salience == second.semantics.salience
     assert first.semantics.durability == second.semantics.durability
     assert (
-        first.semantics.visibility
-        == second.semantics.visibility
-        == MemoryVisibility.PRIVATE_ROOT
+        first.semantics.visibility == second.semantics.visibility == MemoryVisibility.PRIVATE_ROOT
     )
 
 
@@ -253,8 +241,7 @@ def test_v1_relationship_binding_remains_unresolved_and_trigger_is_not_inferred(
     assert binding.participant_actor_ids == ()
     assert binding.relationship_ids == ()
     assert (
-        binding.relationship_binding_status
-        is RelationshipBindingStatus.UNRESOLVED_LEGACY_BINDING
+        binding.relationship_binding_status is RelationshipBindingStatus.UNRESOLVED_LEGACY_BINDING
     )
     assert result.nominations[0].semantics.subject.source_reference is None
     assert controls.relationship_retrieval_allowed is False

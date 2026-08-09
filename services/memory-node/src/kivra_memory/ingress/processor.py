@@ -237,8 +237,7 @@ class NominationReviewControls(_Contract):
     @model_validator(mode="after")
     def enforce_unresolved_legacy_holds(self) -> NominationReviewControls:
         unresolved = (
-            self.relationship_binding_status
-            is RelationshipBindingStatus.UNRESOLVED_LEGACY_BINDING
+            self.relationship_binding_status is RelationshipBindingStatus.UNRESOLVED_LEGACY_BINDING
         )
         if unresolved and (self.relationship_retrieval_allowed or self.automatic_promotion_allowed):
             raise ValueError("unresolved legacy bindings must remain held")
@@ -262,9 +261,7 @@ class GenesisNominationInput(_Contract):
 
     @model_validator(mode="after")
     def enforce_imported_policy_posture(self) -> GenesisNominationInput:
-        if self.epistemic_qualifiers != (
-            EpistemicQualifier.IMPORTED_SOURCE_UNRECONCILED,
-        ):
+        if self.epistemic_qualifiers != (EpistemicQualifier.IMPORTED_SOURCE_UNRECONCILED,):
             raise ValueError("Genesis nominations require the unreconciled qualifier")
         return self
 

@@ -101,12 +101,10 @@ def _bound_synthetic_plan() -> tuple[SimpleNamespace, SimpleNamespace, SimpleNam
         "epistemic_qualifiers": ["imported_source_unreconciled"],
     }
     nomination_sha = hashlib.sha256(
-        b"scalevault.genesis-import.nomination.v1\x00"
-        + canonical_json_bytes(nomination_material)
+        b"scalevault.genesis-import.nomination.v1\x00" + canonical_json_bytes(nomination_material)
     ).digest()
     idempotency_sha = hashlib.sha256(
-        b"scalevault.genesis-import.idempotency.v1\x00"
-        + canonical_json_bytes(nomination_material)
+        b"scalevault.genesis-import.idempotency.v1\x00" + canonical_json_bytes(nomination_material)
     ).hexdigest()
     record = SimpleNamespace(
         import_record_id=uid(3),

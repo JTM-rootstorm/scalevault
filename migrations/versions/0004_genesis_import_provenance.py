@@ -301,11 +301,11 @@ def _create_source() -> None:
             "checkpoint_id = "
             "'genesis-checkpoint-20260807T124400-0500-4cb2fa62-a30e-4e46-a165-c24031dcce20' "
             "AND raw_compatibility_values = "
-            "'{\"/candidates/1/disposition\":\"federation_shared_candidate\","
-            "\"/candidates/1/scope\":\"federation\","
-            "\"/candidates/1/binding/visibility\":\"federation_shared_candidate\","
-            "\"/exclusions/0/scope\":\"federation\","
-            "\"/exclusions/1/scope\":\"federation\"}'::jsonb)",
+            '\'{"/candidates/1/disposition":"federation_shared_candidate",'
+            '"/candidates/1/scope":"federation",'
+            '"/candidates/1/binding/visibility":"federation_shared_candidate",'
+            '"/exclusions/0/scope":"federation",'
+            '"/exclusions/1/scope":"federation"}\'::jsonb)',
             name=op.f("ck_genesis_import_sources_compatibility_correction_shape"),
         ),
         sa.CheckConstraint(

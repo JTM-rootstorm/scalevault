@@ -36,9 +36,7 @@ from kivra_memory.ingress.validator import (
 )
 from kivra_memory.policy import EpistemicQualifier, SelectionBasis
 
-_SOURCE_PATH = (
-    "ingress/checkpoints/v2/genesis/2026/08/synthetic-checkpoint.json"
-)
+_SOURCE_PATH = "ingress/checkpoints/v2/genesis/2026/08/synthetic-checkpoint.json"
 _V1_SOURCE_PATH = "ingress/checkpoints/v1/genesis/2026/08/synthetic-v1.json"
 _GENESIS = "kivra:genesis"
 _PERSPECTIVE = "kivra:archivist"
@@ -46,9 +44,7 @@ _TRIGGER = "human:requester"
 
 
 def _blob_sha(raw: bytes) -> str:
-    return hashlib.sha1(
-        f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False
-    ).hexdigest()
+    return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw, usedforsecurity=False).hexdigest()
 
 
 @dataclass
@@ -233,9 +229,7 @@ def _processed_v2(*, relationship: bool = False) -> GenesisProcessingResult:
         _SOURCE_PATH,
         known_actor_ids={_GENESIS, _PERSPECTIVE, _TRIGGER},
         relationship_participants=(
-            {"relationship:synthetic": {_GENESIS, _PERSPECTIVE}}
-            if relationship
-            else None
+            {"relationship:synthetic": {_GENESIS, _PERSPECTIVE}} if relationship else None
         ),
     )
     return process_validated_ingress(validated, source)
@@ -388,15 +382,12 @@ def test_processor_never_widens_relationship_visibility_or_launders_source_confi
     assert candidate.binding.relationship_ids == ("relationship:synthetic",)
     assert nomination.semantics.visibility is MemoryVisibility.PRIVATE_ROOT
     assert nomination.selection_basis is SelectionBasis.IMPORTED_LEGACY
-    assert nomination.epistemic_qualifiers == (
-        EpistemicQualifier.IMPORTED_SOURCE_UNRECONCILED,
-    )
+    assert nomination.epistemic_qualifiers == (EpistemicQualifier.IMPORTED_SOURCE_UNRECONCILED,)
     assert nomination.semantics.confidence == Decimal("0.5")
     assert nomination.semantics.salience == Decimal("0.5")
     assert nomination.semantics.durability == Decimal("0.5")
     assert (
-        nomination.review_controls.relationship_binding_status
-        is RelationshipBindingStatus.EXPLICIT
+        nomination.review_controls.relationship_binding_status is RelationshipBindingStatus.EXPLICIT
     )
     assert nomination.review_controls.automatic_promotion_allowed is False
     assert nomination.review_controls.promotion_block_reasons == (
