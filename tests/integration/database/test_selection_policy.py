@@ -433,6 +433,11 @@ async def test_expiry_is_internal_idempotent_and_keeps_authorized_audit_history(
             factory, lambda *_: _return(_candidate_context("expiry-observation"))
         ).execute(nominator, _command("expiry-candidate", proposal))
         assert candidate.memory_id is not None and candidate.revision is not None
+        async with database.tenant_session(nominator.tenant_id) as session:
+            candidate_deadline = await session.scalar(
+                select(Memory.candidate_expires_at).where(Memory.memory_id == candidate.memory_id)
+            )
+        assert candidate_deadline is not None
         lifecycle = CandidateLifecycleEngine(factory)
         command = CandidateExpiryCommand(
             memory_id=candidate.memory_id,
@@ -443,13 +448,13 @@ async def test_expiry_is_internal_idempotent_and_keeps_authorized_audit_history(
         expired = await lifecycle.expire(
             internal.model_copy(update={"scopes": frozenset({"memory.lifecycle.expire"})}),
             command,
-            now=_NOW + timedelta(days=181),
+            now=candidate_deadline,
         )
         assert expired.action == "expired"
         replay = await lifecycle.expire(
             internal.model_copy(update={"scopes": frozenset({"memory.lifecycle.expire"})}),
             command,
-            now=_NOW + timedelta(days=181),
+            now=candidate_deadline,
         )
         assert replay.action == "no_op"
         assert replay.reason_code == "stale_revision"
