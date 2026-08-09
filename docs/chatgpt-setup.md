@@ -22,11 +22,14 @@ other surfaces as unsupported until an account-side capability probe proves the
 exact surface, model, app snapshot, and tool list. Fall back to a supported web
 chat rather than weakening the server boundary.
 
-The target Pro account enabled developer mode, created the private app, and
-successfully invoked the tunnel-backed `echo` tool from ChatGPT web. The
-operator observed the exact response `chatgpt tunnel echo verified`. This
-confirms the private read-only path without changing the direct-mutation
-boundary.
+The target Pro account enabled developer mode and created the private app. An
+initial tunnel-backed `echo` invocation and the later Milestone 8 fresh-chat
+`memory_search` canary both succeeded from ChatGPT web. The read canary returned
+zero hits for a unique nonexistent marker, traversed the registered
+`kiv-memory` tunnel, and left the marker and authorization grammar absent from
+the service journals. See the
+[Milestone 8 acceptance checklist](milestone-8-acceptance-2026-08-09.md) for
+the exact content-free evidence and interpretation boundary.
 
 Secure MCP Tunnel runs inside the Memory Node trust boundary and connects
 outbound to OpenAI. It forwards to the dedicated authenticated read-only MCP

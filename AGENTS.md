@@ -24,8 +24,14 @@ same domain command handlers.
 
 ## Validation
 
-Run `make verify` before handing off changes. Keep generated artifacts
-deterministic and commit them with the source contract that produced them.
+Run tests when a change affects code or executable behavior. Use the most
+relevant targeted checks and run `make verify` before handing off substantive
+code, schema, migration, build, deployment, or runtime changes unless Mike
+explicitly approves a narrower gate. Documentation-only and other
+non-executable changes that cannot affect test behavior do not require test
+suites; validate their diff, formatting, links, and any applicable
+artifact-specific constraints instead. Keep generated artifacts deterministic
+and commit them with the source contract that produced them.
 
 ## Commit attribution
 
