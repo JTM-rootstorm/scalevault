@@ -118,6 +118,7 @@ class ResolvedNominationContext(BaseModel):
     source_kind: Literal[
         "live_interaction",
         "reviewed_seed",
+        "genesis_import",
         "github_proposal",
         "candidate_reassessment",
         "candidate_expiry",
@@ -141,6 +142,23 @@ class NominationResolver(Protocol):
     async def resolve(
         self, principal: CommandPrincipal, command: NominationCommandLike, /
     ) -> ResolvedNominationContext: ...
+
+
+class SelectionTransactionParticipant(Protocol):
+    """Stage an application-owned linkage in the selection transaction."""
+
+    @property
+    def transaction_binding_sha256(self) -> str: ...
+
+    async def stage(
+        self,
+        session: AsyncSession,
+        *,
+        principal: CommandPrincipal,
+        command: NominationCommandLike,
+        resolved: ResolvedNominationContext,
+        result: SelectionResult,
+    ) -> None: ...
 
 
 class PromotionPrincipalProvider(Protocol):
@@ -252,7 +270,7 @@ def _command_material(
 ) -> dict[str, object]:
     """Return only authenticated wire-command material for idempotent replay."""
 
-    return {
+    material: dict[str, object] = {
         "tenant_id": str(principal.tenant_id),
         "actor_id": str(principal.actor_id),
         "client_id": str(principal.client_id),
@@ -265,6 +283,15 @@ def _command_material(
             str(command.logical_session_id) if command.logical_session_id is not None else None
         ),
     }
+    transaction_binding_sha256 = getattr(command, "transaction_binding_sha256", None)
+    if transaction_binding_sha256 is not None:
+        if (
+            not isinstance(transaction_binding_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", transaction_binding_sha256) is None
+        ):
+            raise ValueError("transaction binding digest is invalid")
+        material["transaction_binding_sha256"] = transaction_binding_sha256
+    return material
 
 
 def _command_digest(principal: CommandPrincipal, command: NominationCommandLike) -> bytes:
@@ -504,12 +531,25 @@ class SelectionEngine:
         self._promotion_principal_provider = promotion_principal_provider
 
     async def execute(
-        self, principal: CommandPrincipal, command: NominationCommandLike
+        self,
+        principal: CommandPrincipal,
+        command: NominationCommandLike,
+        *,
+        transaction_participant: SelectionTransactionParticipant | None = None,
     ) -> SelectionResult:
+        genesis_scope = principal.scopes == frozenset({"memory.write.genesis_import"})
+        if genesis_scope and transaction_participant is None:
+            raise SelectionExecutionError("forbidden")
         if not self._authorized(principal):
             raise SelectionExecutionError("forbidden")
         try:
             command_digest = _command_digest(principal, command)
+            command_binding = getattr(command, "transaction_binding_sha256", None)
+            if transaction_participant is not None and (
+                command_binding is None
+                or transaction_participant.transaction_binding_sha256 != command_binding
+            ):
+                raise SelectionExecutionError("forbidden")
 
             async def preflight(session: AsyncSession) -> SelectionResult | None:
                 receipt = await self._load_receipt(session, principal=principal, command=command)
@@ -526,6 +566,11 @@ class SelectionEngine:
                 return replay
 
             resolved = await self._resolve(principal, command)
+            if principal.scopes == frozenset({"memory.write.genesis_import"}) and (
+                resolved.source_kind != "genesis_import"
+                or command.proposal.selection_basis is not SelectionBasis.IMPORTED_LEGACY
+            ):
+                raise SelectionExecutionError("forbidden")
             request = _selection_request(command.proposal, resolved)
             decision = evaluate_selection(request)
             identifiers = _NominationIdentifiers(evidence_count=len(resolved.evidence))
@@ -541,6 +586,7 @@ class SelectionEngine:
                     command_digest=command_digest,
                     input_digest=input_digest,
                     identifiers=identifiers,
+                    transaction_participant=transaction_participant,
                 )
 
             return await run_serializable_transaction(
@@ -640,6 +686,10 @@ class SelectionEngine:
         return bool(
             {"memory.write.nominate", "memory:write"} & principal.scopes
             or ("memory:propose" in principal.scopes and principal.ingress_id is not None)
+            or (
+                principal.scopes == frozenset({"memory.write.genesis_import"})
+                and principal.ingress_id is None
+            )
         )
 
     @staticmethod
@@ -667,6 +717,7 @@ class SelectionEngine:
         command_digest: bytes,
         input_digest: bytes,
         identifiers: _NominationIdentifiers,
+        transaction_participant: SelectionTransactionParticipant | None,
     ) -> SelectionResult:
         # A committed receipt is terminal even if the mutable persona, lineage,
         # branch, subject, or resolver state later changes. Serialize this check
@@ -686,9 +737,28 @@ class SelectionEngine:
         if receipt is not None:
             return _replay_from_receipt(receipt, command_digest=command_digest)
 
+        genesis_import = principal.scopes == frozenset({"memory.write.genesis_import"})
+        if genesis_import:
+            binding_kind = await session.scalar(
+                select(TransportBinding.transport_kind).where(
+                    TransportBinding.tenant_id == principal.tenant_id,
+                    TransportBinding.transport_binding_id == principal.transport_binding_id,
+                    TransportBinding.actor_id == principal.actor_id,
+                    TransportBinding.client_id == principal.client_id,
+                )
+            )
+            if binding_kind != "internal_service":
+                raise SelectionExecutionError("forbidden")
+
         identity = (
             await session.execute(
-                select(Lineage.lineage_id, Lineage.sealed_at, Persona.retired_at, Branch)
+                select(
+                    Lineage.lineage_id,
+                    Lineage.sealed_at,
+                    Persona.retired_at,
+                    Persona.actor_id,
+                    Branch,
+                )
                 .join(
                     Persona,
                     and_(
@@ -707,28 +777,41 @@ class SelectionEngine:
                     Lineage.tenant_id == principal.tenant_id,
                     Lineage.persona_id == command.persona_id,
                     Branch.branch_id == command.branch_id,
+                    *(
+                        (Lineage.lineage_id == getattr(command, "genesis_lineage_id", None),)
+                        if genesis_import
+                        else ()
+                    ),
                 )
             )
         ).one_or_none()
         if identity is None:
             raise SelectionExecutionError("not_found")
-        lineage_id, lineage_sealed_at, persona_retired_at, branch_row = identity
+        lineage_id, lineage_sealed_at, persona_retired_at, persona_actor_id, branch_row = identity
+        if genesis_import and persona_actor_id != getattr(command, "genesis_actor_id", None):
+            raise SelectionExecutionError("forbidden")
         _validate_unsealed_identity(
             persona_retired_at=persona_retired_at,
             lineage_sealed_at=lineage_sealed_at,
             branch_sealed_at=branch_row.sealed_at,
         )
         if command.logical_session_id is not None:
-            session_exists = await session.scalar(
-                select(LogicalSession.session_id).where(
-                    LogicalSession.tenant_id == principal.tenant_id,
-                    LogicalSession.session_id == command.logical_session_id,
-                    LogicalSession.actor_id == principal.actor_id,
-                    LogicalSession.client_id == principal.client_id,
-                    LogicalSession.lineage_id == lineage_id,
-                    LogicalSession.branch_id == command.branch_id,
-                    LogicalSession.transport_binding_id == principal.transport_binding_id,
+            session_filters = [
+                LogicalSession.tenant_id == principal.tenant_id,
+                LogicalSession.session_id == command.logical_session_id,
+                LogicalSession.lineage_id == lineage_id,
+                LogicalSession.branch_id == command.branch_id,
+            ]
+            if not genesis_import:
+                session_filters.extend(
+                    (
+                        LogicalSession.actor_id == principal.actor_id,
+                        LogicalSession.client_id == principal.client_id,
+                        LogicalSession.transport_binding_id == principal.transport_binding_id,
+                    )
                 )
+            session_exists = await session.scalar(
+                select(LogicalSession.session_id).where(*session_filters)
             )
             if session_exists is None:
                 raise SelectionExecutionError("not_found")
@@ -744,10 +827,33 @@ class SelectionEngine:
         )
         if subject is None:
             raise SelectionExecutionError("not_found")
-        _validate_session_scope_anchors(
-            command,
-            subject_origin_session_id=subject.origin_session_id,
-        )
+        if genesis_import and proposal.scope in {
+            MemoryScope.SCENE_LOCAL,
+            MemoryScope.EPISODIC,
+        }:
+            source_session_id = proposal.origin_session_id
+            if (
+                command.logical_session_id is not None
+                or source_session_id is None
+                or subject.origin_session_id != source_session_id
+            ):
+                raise SelectionExecutionError("forbidden")
+            source_session_exists = await session.scalar(
+                select(LogicalSession.session_id).where(
+                    LogicalSession.tenant_id == principal.tenant_id,
+                    LogicalSession.session_id == source_session_id,
+                    LogicalSession.actor_id == persona_actor_id,
+                    LogicalSession.lineage_id == lineage_id,
+                    LogicalSession.branch_id == command.branch_id,
+                )
+            )
+            if source_session_exists is None:
+                raise SelectionExecutionError("not_found")
+        else:
+            _validate_session_scope_anchors(
+                command,
+                subject_origin_session_id=subject.origin_session_id,
+            )
 
         # Serialize exact subject/fingerprint duplicates before projection
         # mutation. The idempotency lock above remains held by this transaction.
@@ -1092,6 +1198,14 @@ class SelectionEngine:
             )
         )
         await session.flush()
+        if transaction_participant is not None:
+            await transaction_participant.stage(
+                session,
+                principal=principal,
+                command=command,
+                resolved=resolved,
+                result=result,
+            )
         return result
 
     async def _append_decision(
