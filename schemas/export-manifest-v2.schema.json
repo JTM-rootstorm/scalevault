@@ -1,0 +1,300 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://schemas.scalevault.dev/export-manifest-v2.schema.json",
+    "title": "ScaleVault deterministic archive export manifest v2",
+    "description": "Canonical manifest for the scalevault-archive-v1 recovery archive. File descriptors are sorted by path with unique paths, schema descriptors are sorted by schema_id with unique schema identities and paths, event_count equals last_event_sequence - first_event_sequence + 1, and source_high_water_sequence is at least last_event_sequence.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "schema_version",
+        "archive_format",
+        "source_high_water_sequence",
+        "first_event_sequence",
+        "last_event_sequence",
+        "event_count",
+        "previous_manifest_sha256",
+        "snapshot",
+        "files",
+        "schemas",
+        "exporter_version",
+        "exported_at",
+        "postgres_timeline_id",
+        "git_commit_sha"
+    ],
+    "properties": {
+        "schema_version": {
+            "const": 2
+        },
+        "archive_format": {
+            "const": "scalevault-archive-v1"
+        },
+        "source_high_water_sequence": {
+            "$ref": "#/$defs/sequence"
+        },
+        "first_event_sequence": {
+            "$ref": "#/$defs/sequence"
+        },
+        "last_event_sequence": {
+            "$ref": "#/$defs/sequence"
+        },
+        "event_count": {
+            "$ref": "#/$defs/sequence"
+        },
+        "previous_manifest_sha256": {
+            "oneOf": [
+                {
+                    "$ref": "#/$defs/sha256"
+                },
+                {
+                    "type": "null"
+                }
+            ]
+        },
+        "snapshot": {
+            "oneOf": [
+                {
+                    "$ref": "#/$defs/snapshotDescriptor"
+                },
+                {
+                    "type": "null"
+                }
+            ]
+        },
+        "files": {
+            "type": "array",
+            "description": "Descriptors in ascending bytewise path order. Each path occurs exactly once.",
+            "minItems": 1,
+            "maxItems": 100000,
+            "uniqueItems": true,
+            "items": {
+                "$ref": "#/$defs/fileDescriptor"
+            },
+            "x-scalevault-sort-key": "path",
+            "x-scalevault-unique-key": "path"
+        },
+        "schemas": {
+            "type": "array",
+            "description": "Checked-in schema identities in ascending bytewise schema_id order. Schema identities and paths are unique.",
+            "minItems": 1,
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": {
+                "$ref": "#/$defs/schemaDescriptor"
+            },
+            "x-scalevault-sort-key": "schema_id",
+            "x-scalevault-unique-keys": [
+                "schema_id",
+                "path"
+            ]
+        },
+        "exporter_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
+        },
+        "exported_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+        },
+        "postgres_timeline_id": {
+            "oneOf": [
+                {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4294967295
+                },
+                {
+                    "type": "null"
+                }
+            ]
+        },
+        "git_commit_sha": {
+            "const": null
+        }
+    },
+    "$defs": {
+        "sequence": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+        },
+        "archivePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "oneOf": [
+                {
+                    "const": "archive-format.json"
+                },
+                {
+                    "pattern": "^events/\\d{4}/(?:0[1-9]|1[0-2])/(?:0[1-9]|[12]\\d|3[01])/\\d{12}-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.json$"
+                },
+                {
+                    "pattern": "^projections/[a-z][a-z0-9_-]{0,63}(?:/[A-Za-z0-9._-]{1,128})*\\.json$"
+                },
+                {
+                    "pattern": "^lineages/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/(?:lineage|branches/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\\.json$"
+                },
+                {
+                    "$ref": "#/$defs/snapshotPath"
+                },
+                {
+                    "$ref": "#/$defs/schemaPath"
+                }
+            ]
+        },
+        "snapshotPath": {
+            "type": "string",
+            "pattern": "^snapshots/snapshot-\\d{12}\\.cbor\\.zst$"
+        },
+        "schemaPath": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 140,
+            "pattern": "^schemas/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.json$"
+        },
+        "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+        },
+        "fileDescriptor": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "path",
+                "sha256",
+                "size",
+                "media_type"
+            ],
+            "properties": {
+                "path": {
+                    "$ref": "#/$defs/archivePath"
+                },
+                "sha256": {
+                    "$ref": "#/$defs/sha256"
+                },
+                "size": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 536870912
+                },
+                "media_type": {
+                    "enum": [
+                        "application/cbor+zstd",
+                        "application/json",
+                        "application/schema+json"
+                    ]
+                }
+            },
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "path": {
+                                "pattern": "^schemas/"
+                            }
+                        },
+                        "required": [
+                            "path"
+                        ]
+                    },
+                    "then": {
+                        "properties": {
+                            "media_type": {
+                                "const": "application/schema+json"
+                            }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "path": {
+                                "pattern": "^snapshots/"
+                            }
+                        },
+                        "required": [
+                            "path"
+                        ]
+                    },
+                    "then": {
+                        "properties": {
+                            "media_type": {
+                                "const": "application/cbor+zstd"
+                            }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "path": {
+                                "pattern": "^(?:archive-format\\.json|events/|projections/|lineages/)"
+                            }
+                        },
+                        "required": [
+                            "path"
+                        ]
+                    },
+                    "then": {
+                        "properties": {
+                            "media_type": {
+                                "const": "application/json"
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        "schemaDescriptor": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "schema_id",
+                "path",
+                "sha256"
+            ],
+            "properties": {
+                "schema_id": {
+                    "type": "string",
+                    "format": "uri",
+                    "minLength": 32,
+                    "maxLength": 159,
+                    "pattern": "^https://schemas\\.scalevault\\.dev/[A-Za-z0-9._-]{1,128}$"
+                },
+                "path": {
+                    "$ref": "#/$defs/schemaPath"
+                },
+                "sha256": {
+                    "$ref": "#/$defs/sha256"
+                }
+            }
+        },
+        "snapshotDescriptor": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "path",
+                "high_water_sequence",
+                "uncompressed_size"
+            ],
+            "properties": {
+                "path": {
+                    "$ref": "#/$defs/snapshotPath"
+                },
+                "high_water_sequence": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9223372036854775807
+                },
+                "uncompressed_size": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4294967296
+                }
+            }
+        }
+    }
+}

@@ -28,7 +28,26 @@ from scripts.validate_schemas import (
 
 
 def test_repository_schemas_and_representative_instances_are_valid() -> None:
-    assert validate_repository() == 8
+    schema_names = {path.name for path in load_schema_documents()}
+
+    assert "export-manifest-v2.schema.json" in schema_names
+    assert validate_repository() == len(schema_names)
+
+
+def test_export_manifest_v2_fixture_has_exact_range_and_canonical_order() -> None:
+    manifest = load_schema(FIXTURE_DIRECTORY / "export-manifest-v2.schema.json")
+    file_paths = [descriptor["path"] for descriptor in manifest["files"]]
+    schema_ids = [descriptor["schema_id"] for descriptor in manifest["schemas"]]
+    schema_paths = [descriptor["path"] for descriptor in manifest["schemas"]]
+
+    assert manifest["event_count"] == (
+        manifest["last_event_sequence"] - manifest["first_event_sequence"] + 1
+    )
+    assert manifest["source_high_water_sequence"] >= manifest["last_event_sequence"]
+    assert file_paths == sorted(set(file_paths))
+    assert schema_ids == sorted(set(schema_ids))
+    assert len(schema_paths) == len(set(schema_paths))
+    assert manifest["git_commit_sha"] is None
 
 
 def test_selection_policy_schema_matches_the_canonical_profile() -> None:

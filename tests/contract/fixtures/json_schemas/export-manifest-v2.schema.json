@@ -1,0 +1,51 @@
+{
+    "schema_version": 2,
+    "archive_format": "scalevault-archive-v1",
+    "source_high_water_sequence": 42,
+    "first_event_sequence": 41,
+    "last_event_sequence": 42,
+    "event_count": 2,
+    "previous_manifest_sha256": null,
+    "snapshot": {
+        "path": "snapshots/snapshot-000000000040.cbor.zst",
+        "high_water_sequence": 40,
+        "uncompressed_size": 4096
+    },
+    "files": [
+        {
+            "path": "events/2026/08/09/000000000041-019c9f71-0000-7000-8000-000000000041.json",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "size": 1024,
+            "media_type": "application/json"
+        },
+        {
+            "path": "events/2026/08/09/000000000042-019c9f71-0000-7000-8000-000000000042.json",
+            "sha256": "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+            "size": 1056,
+            "media_type": "application/json"
+        },
+        {
+            "path": "schemas/memory-event.schema.json",
+            "sha256": "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+            "size": 8192,
+            "media_type": "application/schema+json"
+        },
+        {
+            "path": "snapshots/snapshot-000000000040.cbor.zst",
+            "sha256": "3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+            "size": 2048,
+            "media_type": "application/cbor+zstd"
+        }
+    ],
+    "schemas": [
+        {
+            "schema_id": "https://schemas.scalevault.dev/memory-event.schema.json",
+            "path": "schemas/memory-event.schema.json",
+            "sha256": "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01"
+        }
+    ],
+    "exporter_version": "0.1.0",
+    "exported_at": "2026-08-09T18:42:00.000000Z",
+    "postgres_timeline_id": null,
+    "git_commit_sha": null
+}
