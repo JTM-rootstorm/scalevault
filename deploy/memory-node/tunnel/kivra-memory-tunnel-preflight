@@ -26,14 +26,13 @@ version_output=$("$tunnel_client" --version 2>/dev/null) \
     || fail "tunnel-client version check failed"
 version=${version_output%%+*}
 version=${version%% *}
-old_ifs=$IFS
-IFS=.
-set -- $version
-IFS=$old_ifs
-[ "$#" -eq 3 ] || fail "tunnel-client returned an unrecognized version"
-major=$1
-minor=$2
-patch=$3
+major=${version%%.*}
+version_tail=${version#*.}
+minor=${version_tail%%.*}
+patch=${version_tail#*.}
+if [ "$version_tail" = "$version" ] || [ "$patch" = "$version_tail" ]; then
+    fail "tunnel-client returned an unrecognized version"
+fi
 case "$major.$minor.$patch" in
     *[!0-9.]*) fail "tunnel-client returned an unrecognized version" ;;
 esac
