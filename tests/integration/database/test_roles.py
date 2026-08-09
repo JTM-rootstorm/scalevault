@@ -252,7 +252,8 @@ def test_role_bootstrap_is_safe_before_migrating_an_existing_0004_database(
     alembic_runner: AlembicRunner,
 ) -> None:
     bootstrap_required_extensions(postgresql_server.database_url)
-    alembic_runner.upgrade("0004_genesis_import_provenance")
+    run_operator_sql_file(postgresql_server, ROLE_BOOTSTRAP)
+    alembic_runner.upgrade_as_scalevault_migrator("0004_genesis_import_provenance")
 
     with alembic_runner.engine.begin() as connection:
         credential_columns = {
