@@ -393,7 +393,7 @@ async def test_candidate_promotion_locks_and_stages_policy_evidence() -> None:
 
 
 @pytest.mark.asyncio
-async def test_created_memory_locks_and_stages_initial_evidence() -> None:
+async def test_created_memory_stages_initial_evidence_without_update_locks() -> None:
     created = memory_state()
     created_v2 = MemoryStateV2.model_validate(
         {**created.model_dump(mode="python"), "candidate_expires_at": None}
@@ -431,7 +431,15 @@ async def test_created_memory_locks_and_stages_initial_evidence() -> None:
         for statement in session.statements
         if isinstance(statement, Select) and "memory_evidence" in str(statement)
     )
-    assert "FOR UPDATE" in str(evidence_select)
+    memory_select = next(
+        statement
+        for statement in session.statements
+        if isinstance(statement, Select)
+        and "FROM memories" in str(statement)
+        and "memory_evidence" not in str(statement)
+    )
+    assert "FOR UPDATE" not in str(memory_select)
+    assert "FOR UPDATE" not in str(evidence_select)
 
 
 @pytest.mark.asyncio

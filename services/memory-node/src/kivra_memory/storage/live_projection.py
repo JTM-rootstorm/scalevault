@@ -104,10 +104,12 @@ async def load_projection_state_for_update(
         raise ProjectionPersistenceError("branch_scope_mismatch")
 
     memory_ids, link_id, conflict_id = _targets(event)
+    typed_payload = event.typed_payload()
+    creates_memory = isinstance(typed_payload, MemoryCreatedPayload)
     try:
         memories: list[Memory] = []
         if memory_ids:
-            result = await session.execute(
+            memory_query = (
                 select(Memory)
                 .where(
                     Memory.tenant_id == event.tenant_id,
@@ -115,12 +117,17 @@ async def load_projection_state_for_update(
                     Memory.memory_id.in_(memory_ids),
                 )
                 .order_by(Memory.memory_id)
-                .with_for_update()
             )
+            # A create event targets newly allocated UUIDv7 rows. There is no
+            # existing projection to lock, and the event/identity constraints
+            # remain the collision authority. Avoiding FOR UPDATE here lets
+            # the Genesis importer retain INSERT-only projection privileges.
+            if not creates_memory:
+                memory_query = memory_query.with_for_update()
+            result = await session.execute(memory_query)
             memories = list(result.scalars().all())
 
         evidence: list[MemoryEvidence] = []
-        typed_payload = event.typed_payload()
         if isinstance(typed_payload, TombstonedPayload):
             result = await session.execute(
                 select(MemoryEvidence)
@@ -138,7 +145,7 @@ async def load_projection_state_for_update(
             and typed_payload.evidence
         ):
             evidence_ids = _sorted_ids(item.evidence_id for item in typed_payload.evidence)
-            result = await session.execute(
+            evidence_query = (
                 select(MemoryEvidence)
                 .where(
                     MemoryEvidence.tenant_id == event.tenant_id,
@@ -146,8 +153,10 @@ async def load_projection_state_for_update(
                     MemoryEvidence.evidence_id.in_(evidence_ids),
                 )
                 .order_by(MemoryEvidence.evidence_id)
-                .with_for_update()
             )
+            if not creates_memory:
+                evidence_query = evidence_query.with_for_update()
+            result = await session.execute(evidence_query)
             evidence = list(cast(Sequence[MemoryEvidence], result.scalars().all()))
 
         links: list[MemoryLink] = []

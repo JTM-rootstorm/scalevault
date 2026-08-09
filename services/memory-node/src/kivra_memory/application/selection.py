@@ -891,18 +891,23 @@ class SelectionEngine:
 
         if outcome in {PolicyOutcome.CANDIDATE, PolicyOutcome.ACTIVE}:
             fingerprint = nomination_fingerprint
-            duplicate = await session.scalar(
-                select(Memory)
-                .where(
-                    Memory.tenant_id == principal.tenant_id,
-                    Memory.lineage_id == lineage_id,
-                    Memory.branch_id == command.branch_id,
-                    Memory.subject_id == proposal.subject_id,
-                    Memory.normalized_fingerprint == bytes.fromhex(fingerprint),
-                    Memory.status.in_((MemoryStatus.CANDIDATE.value, MemoryStatus.ACTIVE.value)),
-                )
-                .with_for_update()
+            duplicate_query = select(Memory).where(
+                Memory.tenant_id == principal.tenant_id,
+                Memory.lineage_id == lineage_id,
+                Memory.branch_id == command.branch_id,
+                Memory.subject_id == proposal.subject_id,
+                Memory.normalized_fingerprint == bytes.fromhex(fingerprint),
+                Memory.status.in_((MemoryStatus.CANDIDATE.value, MemoryStatus.ACTIVE.value)),
             )
+            # The exact fingerprint advisory lock above already serializes
+            # Genesis duplicate creation. The importer is intentionally
+            # INSERT-only on memories, while PostgreSQL requires UPDATE
+            # privilege even to issue SELECT ... FOR UPDATE. Imported records
+            # cannot auto-promote, so a plain policy-filtered read preserves
+            # the least-privilege boundary without weakening other writers.
+            if not genesis_import:
+                duplicate_query = duplicate_query.with_for_update()
+            duplicate = await session.scalar(duplicate_query)
             if duplicate is not None:
                 if duplicate.status == MemoryStatus.ACTIVE.value:
                     result_outcome = PolicyOutcome.OMIT.value

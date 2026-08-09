@@ -588,6 +588,54 @@ async def test_raw_archive_is_importer_only_and_rls_is_forced(
         importer.dispose()
 
 
+async def test_importer_role_can_create_candidate_without_memory_update_privilege(
+    postgresql_server: PostgreSQLTestServer,
+    genesis_role_database: AlembicRunner,
+) -> None:
+    _ = genesis_role_database
+    tenant_id = _seed_id("tenants", "tenant_id")
+    async with _seeded_database(postgresql_server.database_url) as owner_database:
+        rows = _plan_rows()
+        async with owner_database.tenant_session(tenant_id) as session:
+            await GenesisImportRepository(session).stage_import_plan(
+                run=rows.run,
+                sources=rows.prepared.sources,
+                records=rows.prepared.records,
+                exclusions=rows.prepared.exclusions,
+                supersessions=rows.prepared.supersessions,
+            )
+        context = await _application_context(owner_database, rows)
+
+        password = secrets.token_urlsafe(24)
+        _set_role_password(postgresql_server, "kivra_memory_genesis_importer", password)
+        importer_url = make_url(postgresql_server.database_url).set(
+            drivername="postgresql+psycopg",
+            username="kivra_memory_genesis_importer",
+            password=password,
+        )
+        importer_database = Database(importer_url.render_as_string(hide_password=False))
+        try:
+            engine = GenesisImportEngine(
+                importer_database.session_factory,
+                context.mappings,
+                context.authority,
+            )
+            nomination, source = context.nominations[0]
+            result = await engine.execute(
+                context.principal,
+                nomination,
+                plan=context.plan,
+                run=context.run,
+                source_record=source,
+            )
+        finally:
+            await importer_database.dispose()
+
+        assert result.outcome == "candidate"
+        assert result.event_id is not None
+        assert result.memory_id is not None
+
+
 async def test_application_commits_selection_receipt_event_projection_and_terminal_link_once(
     postgresql_server: PostgreSQLTestServer,
     migrated_database: object,
