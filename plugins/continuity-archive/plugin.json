@@ -1,14 +1,24 @@
 {
     "schema_version": 1,
     "name": "Continuity Archive",
-    "description": "Private, read-only continuity retrieval with an optional immutable GitHub proposal fallback.",
+    "description": "Continuity retrieval through private or operator-registered relay transports, with an optional immutable GitHub proposal fallback.",
     "privacy": {
         "memory_node": "user_hosted",
         "private_transport": "secure_mcp_tunnel",
         "public_inbound_required": false,
-        "github_bridge": "optional_third_party_transport"
+        "github_bridge": "optional_third_party_transport",
+        "public_relay": "operator_registered_transport_only"
     },
     "capability_profile": "chatgpt_pro_private_read",
-    "profiles": ["./profiles/chatgpt-pro-private.json"],
+    "profiles": [
+        "./profiles/chatgpt-pro-private.json",
+        "./profiles/chatgpt-public-relay-read.json"
+    ],
+    "public_candidate": {
+        "profile": "chatgpt_public_plugin_read",
+        "registered_app_connection_required": true,
+        "app_registration_bundled": false,
+        "activation": "oauth_installation_binding_relay_and_exact_capability_probe"
+    },
     "skills": ["./skills/persona-continuity/SKILL.md"]
 }
