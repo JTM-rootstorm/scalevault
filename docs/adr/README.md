@@ -25,6 +25,7 @@ documentation and do not change these decisions implicitly.
 | [0017](0017-sealed-canonical-memory-content.md) | Accepted | Store protected content only in versioned authenticated envelopes backed by external per-memory keys. |
 | [0018](0018-request-scoped-bearer-authentication.md) | Accepted | Authenticate direct-private clients with request-scoped bearer credentials and database-derived identity. |
 | [0019](0019-chatgpt-secure-tunnel-read-access.md) | Accepted | Expose a query-only ChatGPT MCP surface through a pinned, single-workspace secure-tunnel bearer identity. |
+| [0020](0020-relay-enrollment-and-transport.md) | Accepted | Bind one-use node enrollment, mTLS connection identity, and bounded relay transport without granting memory authority. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries
