@@ -23,6 +23,7 @@ message NodeEnvelope {
     Cancelled cancelled = 13;
     RelayError error = 14;
     Health health = 15;
+    NodeHello node_hello = 16;
   }
 }
 
@@ -37,7 +38,48 @@ message RelayEnvelope {
     BodyChunk body_chunk = 11;
     StreamEnd stream_end = 12;
     Cancelled cancelled = 13;
+    RelayHello relay_hello = 14;
   }
+}
+
+// NodeHello is the first node-to-relay frame on every connection. Envelope
+// installation and connection identifiers carry the certificate-bound
+// connection identity; request and trace identifiers must be empty.
+message NodeHello {
+  repeated string capabilities = 1;
+  Limits supported_limits = 2;
+}
+
+// RelayHello acknowledges a valid NodeHello and freezes the effective limits
+// for the connection. No request may be sent before this acknowledgement.
+message RelayHello {
+  repeated string capabilities = 1;
+  Limits effective_limits = 2;
+}
+
+// Limits contains every bounded v1 connection parameter negotiated during the
+// hello exchange. Production peers require all fields to equal a supported,
+// non-zero value and the relay may only select lower or equal values.
+message Limits {
+  uint32 max_encoded_message_bytes = 1;
+  uint32 max_body_chunk_bytes = 2;
+  uint32 max_request_body_bytes = 3;
+  uint32 max_response_body_bytes = 4;
+  uint32 max_header_count = 5;
+  uint32 max_header_name_bytes = 6;
+  uint32 max_header_value_bytes = 7;
+  uint32 max_aggregate_header_bytes = 8;
+  uint32 max_capability_count = 9;
+  uint32 max_capability_name_bytes = 10;
+  uint32 max_in_flight_requests_per_connection = 11;
+  uint32 max_in_flight_requests_global = 12;
+  uint32 max_queued_chunks_per_request = 13;
+  uint32 max_queued_bytes_per_request = 14;
+  uint32 max_queued_bytes_per_connection = 15;
+  uint32 handshake_timeout_millis = 16;
+  uint32 max_request_lifetime_millis = 17;
+  uint32 heartbeat_interval_millis = 18;
+  uint32 disconnect_timeout_millis = 19;
 }
 
 message RequestStart {
@@ -54,20 +96,57 @@ message ResponseStart {
 
 message BodyChunk {
   bytes data = 1;
+  uint64 sequence = 2;
 }
 
 message StreamEnd {}
 
 message Cancelled {
-  string reason = 1;
+  string reason = 1 [deprecated = true];
+  CancellationCode code = 2;
 }
 
 message RelayError {
-  string error_code = 1;
-  string safe_message = 2;
+  string error_code = 1 [deprecated = true];
+  string safe_message = 2 [deprecated = true];
+  RelayErrorCode code = 3;
 }
 
 message Health {
-  string state = 1;
-  repeated string capabilities = 2;
+  string state = 1 [deprecated = true];
+  repeated string capabilities = 2 [deprecated = true];
+  HealthState health_state = 3;
+}
+
+enum CancellationCode {
+  CANCELLATION_CODE_UNSPECIFIED = 0;
+  CANCELLATION_CODE_CLIENT_CLOSED = 1;
+  CANCELLATION_CODE_DEADLINE_EXCEEDED = 2;
+  CANCELLATION_CODE_QUEUE_EXHAUSTED = 3;
+  CANCELLATION_CODE_INSTALLATION_REVOKED = 4;
+  CANCELLATION_CODE_RELAY_SHUTDOWN = 5;
+  CANCELLATION_CODE_CONNECTION_LOST = 6;
+}
+
+enum RelayErrorCode {
+  RELAY_ERROR_CODE_UNSPECIFIED = 0;
+  RELAY_ERROR_CODE_INVALID_ENVELOPE = 1;
+  RELAY_ERROR_CODE_UNSUPPORTED_VERSION = 2;
+  RELAY_ERROR_CODE_INSTALLATION_MISMATCH = 3;
+  RELAY_ERROR_CODE_REQUEST_REJECTED = 4;
+  RELAY_ERROR_CODE_UPSTREAM_UNAVAILABLE = 5;
+  RELAY_ERROR_CODE_UPSTREAM_PROTOCOL = 6;
+  RELAY_ERROR_CODE_BODY_TOO_LARGE = 7;
+  RELAY_ERROR_CODE_HEADERS_INVALID = 8;
+  RELAY_ERROR_CODE_DEADLINE_EXCEEDED = 9;
+  RELAY_ERROR_CODE_QUEUE_EXHAUSTED = 10;
+  RELAY_ERROR_CODE_INSTALLATION_REVOKED = 11;
+  RELAY_ERROR_CODE_INTERNAL = 12;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_READY = 1;
+  HEALTH_STATE_DEGRADED = 2;
+  HEALTH_STATE_DRAINING = 3;
 }

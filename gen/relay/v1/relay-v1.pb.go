@@ -21,6 +21,198 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type CancellationCode int32
+
+const (
+	CancellationCode_CANCELLATION_CODE_UNSPECIFIED          CancellationCode = 0
+	CancellationCode_CANCELLATION_CODE_CLIENT_CLOSED        CancellationCode = 1
+	CancellationCode_CANCELLATION_CODE_DEADLINE_EXCEEDED    CancellationCode = 2
+	CancellationCode_CANCELLATION_CODE_QUEUE_EXHAUSTED      CancellationCode = 3
+	CancellationCode_CANCELLATION_CODE_INSTALLATION_REVOKED CancellationCode = 4
+	CancellationCode_CANCELLATION_CODE_RELAY_SHUTDOWN       CancellationCode = 5
+	CancellationCode_CANCELLATION_CODE_CONNECTION_LOST      CancellationCode = 6
+)
+
+// Enum value maps for CancellationCode.
+var (
+	CancellationCode_name = map[int32]string{
+		0: "CANCELLATION_CODE_UNSPECIFIED",
+		1: "CANCELLATION_CODE_CLIENT_CLOSED",
+		2: "CANCELLATION_CODE_DEADLINE_EXCEEDED",
+		3: "CANCELLATION_CODE_QUEUE_EXHAUSTED",
+		4: "CANCELLATION_CODE_INSTALLATION_REVOKED",
+		5: "CANCELLATION_CODE_RELAY_SHUTDOWN",
+		6: "CANCELLATION_CODE_CONNECTION_LOST",
+	}
+	CancellationCode_value = map[string]int32{
+		"CANCELLATION_CODE_UNSPECIFIED":          0,
+		"CANCELLATION_CODE_CLIENT_CLOSED":        1,
+		"CANCELLATION_CODE_DEADLINE_EXCEEDED":    2,
+		"CANCELLATION_CODE_QUEUE_EXHAUSTED":      3,
+		"CANCELLATION_CODE_INSTALLATION_REVOKED": 4,
+		"CANCELLATION_CODE_RELAY_SHUTDOWN":       5,
+		"CANCELLATION_CODE_CONNECTION_LOST":      6,
+	}
+)
+
+func (x CancellationCode) Enum() *CancellationCode {
+	p := new(CancellationCode)
+	*p = x
+	return p
+}
+
+func (x CancellationCode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CancellationCode) Descriptor() protoreflect.EnumDescriptor {
+	return file_relay_v1_proto_enumTypes[0].Descriptor()
+}
+
+func (CancellationCode) Type() protoreflect.EnumType {
+	return &file_relay_v1_proto_enumTypes[0]
+}
+
+func (x CancellationCode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CancellationCode.Descriptor instead.
+func (CancellationCode) EnumDescriptor() ([]byte, []int) {
+	return file_relay_v1_proto_rawDescGZIP(), []int{0}
+}
+
+type RelayErrorCode int32
+
+const (
+	RelayErrorCode_RELAY_ERROR_CODE_UNSPECIFIED           RelayErrorCode = 0
+	RelayErrorCode_RELAY_ERROR_CODE_INVALID_ENVELOPE      RelayErrorCode = 1
+	RelayErrorCode_RELAY_ERROR_CODE_UNSUPPORTED_VERSION   RelayErrorCode = 2
+	RelayErrorCode_RELAY_ERROR_CODE_INSTALLATION_MISMATCH RelayErrorCode = 3
+	RelayErrorCode_RELAY_ERROR_CODE_REQUEST_REJECTED      RelayErrorCode = 4
+	RelayErrorCode_RELAY_ERROR_CODE_UPSTREAM_UNAVAILABLE  RelayErrorCode = 5
+	RelayErrorCode_RELAY_ERROR_CODE_UPSTREAM_PROTOCOL     RelayErrorCode = 6
+	RelayErrorCode_RELAY_ERROR_CODE_BODY_TOO_LARGE        RelayErrorCode = 7
+	RelayErrorCode_RELAY_ERROR_CODE_HEADERS_INVALID       RelayErrorCode = 8
+	RelayErrorCode_RELAY_ERROR_CODE_DEADLINE_EXCEEDED     RelayErrorCode = 9
+	RelayErrorCode_RELAY_ERROR_CODE_QUEUE_EXHAUSTED       RelayErrorCode = 10
+	RelayErrorCode_RELAY_ERROR_CODE_INSTALLATION_REVOKED  RelayErrorCode = 11
+	RelayErrorCode_RELAY_ERROR_CODE_INTERNAL              RelayErrorCode = 12
+)
+
+// Enum value maps for RelayErrorCode.
+var (
+	RelayErrorCode_name = map[int32]string{
+		0:  "RELAY_ERROR_CODE_UNSPECIFIED",
+		1:  "RELAY_ERROR_CODE_INVALID_ENVELOPE",
+		2:  "RELAY_ERROR_CODE_UNSUPPORTED_VERSION",
+		3:  "RELAY_ERROR_CODE_INSTALLATION_MISMATCH",
+		4:  "RELAY_ERROR_CODE_REQUEST_REJECTED",
+		5:  "RELAY_ERROR_CODE_UPSTREAM_UNAVAILABLE",
+		6:  "RELAY_ERROR_CODE_UPSTREAM_PROTOCOL",
+		7:  "RELAY_ERROR_CODE_BODY_TOO_LARGE",
+		8:  "RELAY_ERROR_CODE_HEADERS_INVALID",
+		9:  "RELAY_ERROR_CODE_DEADLINE_EXCEEDED",
+		10: "RELAY_ERROR_CODE_QUEUE_EXHAUSTED",
+		11: "RELAY_ERROR_CODE_INSTALLATION_REVOKED",
+		12: "RELAY_ERROR_CODE_INTERNAL",
+	}
+	RelayErrorCode_value = map[string]int32{
+		"RELAY_ERROR_CODE_UNSPECIFIED":           0,
+		"RELAY_ERROR_CODE_INVALID_ENVELOPE":      1,
+		"RELAY_ERROR_CODE_UNSUPPORTED_VERSION":   2,
+		"RELAY_ERROR_CODE_INSTALLATION_MISMATCH": 3,
+		"RELAY_ERROR_CODE_REQUEST_REJECTED":      4,
+		"RELAY_ERROR_CODE_UPSTREAM_UNAVAILABLE":  5,
+		"RELAY_ERROR_CODE_UPSTREAM_PROTOCOL":     6,
+		"RELAY_ERROR_CODE_BODY_TOO_LARGE":        7,
+		"RELAY_ERROR_CODE_HEADERS_INVALID":       8,
+		"RELAY_ERROR_CODE_DEADLINE_EXCEEDED":     9,
+		"RELAY_ERROR_CODE_QUEUE_EXHAUSTED":       10,
+		"RELAY_ERROR_CODE_INSTALLATION_REVOKED":  11,
+		"RELAY_ERROR_CODE_INTERNAL":              12,
+	}
+)
+
+func (x RelayErrorCode) Enum() *RelayErrorCode {
+	p := new(RelayErrorCode)
+	*p = x
+	return p
+}
+
+func (x RelayErrorCode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RelayErrorCode) Descriptor() protoreflect.EnumDescriptor {
+	return file_relay_v1_proto_enumTypes[1].Descriptor()
+}
+
+func (RelayErrorCode) Type() protoreflect.EnumType {
+	return &file_relay_v1_proto_enumTypes[1]
+}
+
+func (x RelayErrorCode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RelayErrorCode.Descriptor instead.
+func (RelayErrorCode) EnumDescriptor() ([]byte, []int) {
+	return file_relay_v1_proto_rawDescGZIP(), []int{1}
+}
+
+type HealthState int32
+
+const (
+	HealthState_HEALTH_STATE_UNSPECIFIED HealthState = 0
+	HealthState_HEALTH_STATE_READY       HealthState = 1
+	HealthState_HEALTH_STATE_DEGRADED    HealthState = 2
+	HealthState_HEALTH_STATE_DRAINING    HealthState = 3
+)
+
+// Enum value maps for HealthState.
+var (
+	HealthState_name = map[int32]string{
+		0: "HEALTH_STATE_UNSPECIFIED",
+		1: "HEALTH_STATE_READY",
+		2: "HEALTH_STATE_DEGRADED",
+		3: "HEALTH_STATE_DRAINING",
+	}
+	HealthState_value = map[string]int32{
+		"HEALTH_STATE_UNSPECIFIED": 0,
+		"HEALTH_STATE_READY":       1,
+		"HEALTH_STATE_DEGRADED":    2,
+		"HEALTH_STATE_DRAINING":    3,
+	}
+)
+
+func (x HealthState) Enum() *HealthState {
+	p := new(HealthState)
+	*p = x
+	return p
+}
+
+func (x HealthState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (HealthState) Descriptor() protoreflect.EnumDescriptor {
+	return file_relay_v1_proto_enumTypes[2].Descriptor()
+}
+
+func (HealthState) Type() protoreflect.EnumType {
+	return &file_relay_v1_proto_enumTypes[2]
+}
+
+func (x HealthState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use HealthState.Descriptor instead.
+func (HealthState) EnumDescriptor() ([]byte, []int) {
+	return file_relay_v1_proto_rawDescGZIP(), []int{2}
+}
+
 type NodeEnvelope struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ProtocolVersion string                 `protobuf:"bytes,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
@@ -36,6 +228,7 @@ type NodeEnvelope struct {
 	//	*NodeEnvelope_Cancelled
 	//	*NodeEnvelope_Error
 	//	*NodeEnvelope_Health
+	//	*NodeEnvelope_NodeHello
 	Payload       isNodeEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -167,6 +360,15 @@ func (x *NodeEnvelope) GetHealth() *Health {
 	return nil
 }
 
+func (x *NodeEnvelope) GetNodeHello() *NodeHello {
+	if x != nil {
+		if x, ok := x.Payload.(*NodeEnvelope_NodeHello); ok {
+			return x.NodeHello
+		}
+	}
+	return nil
+}
+
 type isNodeEnvelope_Payload interface {
 	isNodeEnvelope_Payload()
 }
@@ -195,6 +397,10 @@ type NodeEnvelope_Health struct {
 	Health *Health `protobuf:"bytes,15,opt,name=health,proto3,oneof"`
 }
 
+type NodeEnvelope_NodeHello struct {
+	NodeHello *NodeHello `protobuf:"bytes,16,opt,name=node_hello,json=nodeHello,proto3,oneof"`
+}
+
 func (*NodeEnvelope_ResponseStart) isNodeEnvelope_Payload() {}
 
 func (*NodeEnvelope_BodyChunk) isNodeEnvelope_Payload() {}
@@ -206,6 +412,8 @@ func (*NodeEnvelope_Cancelled) isNodeEnvelope_Payload() {}
 func (*NodeEnvelope_Error) isNodeEnvelope_Payload() {}
 
 func (*NodeEnvelope_Health) isNodeEnvelope_Payload() {}
+
+func (*NodeEnvelope_NodeHello) isNodeEnvelope_Payload() {}
 
 type RelayEnvelope struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
@@ -220,6 +428,7 @@ type RelayEnvelope struct {
 	//	*RelayEnvelope_BodyChunk
 	//	*RelayEnvelope_StreamEnd
 	//	*RelayEnvelope_Cancelled
+	//	*RelayEnvelope_RelayHello
 	Payload       isRelayEnvelope_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -333,6 +542,15 @@ func (x *RelayEnvelope) GetCancelled() *Cancelled {
 	return nil
 }
 
+func (x *RelayEnvelope) GetRelayHello() *RelayHello {
+	if x != nil {
+		if x, ok := x.Payload.(*RelayEnvelope_RelayHello); ok {
+			return x.RelayHello
+		}
+	}
+	return nil
+}
+
 type isRelayEnvelope_Payload interface {
 	isRelayEnvelope_Payload()
 }
@@ -353,6 +571,10 @@ type RelayEnvelope_Cancelled struct {
 	Cancelled *Cancelled `protobuf:"bytes,13,opt,name=cancelled,proto3,oneof"`
 }
 
+type RelayEnvelope_RelayHello struct {
+	RelayHello *RelayHello `protobuf:"bytes,14,opt,name=relay_hello,json=relayHello,proto3,oneof"`
+}
+
 func (*RelayEnvelope_RequestStart) isRelayEnvelope_Payload() {}
 
 func (*RelayEnvelope_BodyChunk) isRelayEnvelope_Payload() {}
@@ -360,6 +582,308 @@ func (*RelayEnvelope_BodyChunk) isRelayEnvelope_Payload() {}
 func (*RelayEnvelope_StreamEnd) isRelayEnvelope_Payload() {}
 
 func (*RelayEnvelope_Cancelled) isRelayEnvelope_Payload() {}
+
+func (*RelayEnvelope_RelayHello) isRelayEnvelope_Payload() {}
+
+// NodeHello is the first node-to-relay frame on every connection. Envelope
+// installation and connection identifiers carry the certificate-bound
+// connection identity; request and trace identifiers must be empty.
+type NodeHello struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Capabilities    []string               `protobuf:"bytes,1,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	SupportedLimits *Limits                `protobuf:"bytes,2,opt,name=supported_limits,json=supportedLimits,proto3" json:"supported_limits,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *NodeHello) Reset() {
+	*x = NodeHello{}
+	mi := &file_relay_v1_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeHello) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeHello) ProtoMessage() {}
+
+func (x *NodeHello) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeHello.ProtoReflect.Descriptor instead.
+func (*NodeHello) Descriptor() ([]byte, []int) {
+	return file_relay_v1_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeHello) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+func (x *NodeHello) GetSupportedLimits() *Limits {
+	if x != nil {
+		return x.SupportedLimits
+	}
+	return nil
+}
+
+// RelayHello acknowledges a valid NodeHello and freezes the effective limits
+// for the connection. No request may be sent before this acknowledgement.
+type RelayHello struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Capabilities    []string               `protobuf:"bytes,1,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	EffectiveLimits *Limits                `protobuf:"bytes,2,opt,name=effective_limits,json=effectiveLimits,proto3" json:"effective_limits,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RelayHello) Reset() {
+	*x = RelayHello{}
+	mi := &file_relay_v1_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RelayHello) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RelayHello) ProtoMessage() {}
+
+func (x *RelayHello) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RelayHello.ProtoReflect.Descriptor instead.
+func (*RelayHello) Descriptor() ([]byte, []int) {
+	return file_relay_v1_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *RelayHello) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+func (x *RelayHello) GetEffectiveLimits() *Limits {
+	if x != nil {
+		return x.EffectiveLimits
+	}
+	return nil
+}
+
+// Limits contains every bounded v1 connection parameter negotiated during the
+// hello exchange. Production peers require all fields to equal a supported,
+// non-zero value and the relay may only select lower or equal values.
+type Limits struct {
+	state                            protoimpl.MessageState `protogen:"open.v1"`
+	MaxEncodedMessageBytes           uint32                 `protobuf:"varint,1,opt,name=max_encoded_message_bytes,json=maxEncodedMessageBytes,proto3" json:"max_encoded_message_bytes,omitempty"`
+	MaxBodyChunkBytes                uint32                 `protobuf:"varint,2,opt,name=max_body_chunk_bytes,json=maxBodyChunkBytes,proto3" json:"max_body_chunk_bytes,omitempty"`
+	MaxRequestBodyBytes              uint32                 `protobuf:"varint,3,opt,name=max_request_body_bytes,json=maxRequestBodyBytes,proto3" json:"max_request_body_bytes,omitempty"`
+	MaxResponseBodyBytes             uint32                 `protobuf:"varint,4,opt,name=max_response_body_bytes,json=maxResponseBodyBytes,proto3" json:"max_response_body_bytes,omitempty"`
+	MaxHeaderCount                   uint32                 `protobuf:"varint,5,opt,name=max_header_count,json=maxHeaderCount,proto3" json:"max_header_count,omitempty"`
+	MaxHeaderNameBytes               uint32                 `protobuf:"varint,6,opt,name=max_header_name_bytes,json=maxHeaderNameBytes,proto3" json:"max_header_name_bytes,omitempty"`
+	MaxHeaderValueBytes              uint32                 `protobuf:"varint,7,opt,name=max_header_value_bytes,json=maxHeaderValueBytes,proto3" json:"max_header_value_bytes,omitempty"`
+	MaxAggregateHeaderBytes          uint32                 `protobuf:"varint,8,opt,name=max_aggregate_header_bytes,json=maxAggregateHeaderBytes,proto3" json:"max_aggregate_header_bytes,omitempty"`
+	MaxCapabilityCount               uint32                 `protobuf:"varint,9,opt,name=max_capability_count,json=maxCapabilityCount,proto3" json:"max_capability_count,omitempty"`
+	MaxCapabilityNameBytes           uint32                 `protobuf:"varint,10,opt,name=max_capability_name_bytes,json=maxCapabilityNameBytes,proto3" json:"max_capability_name_bytes,omitempty"`
+	MaxInFlightRequestsPerConnection uint32                 `protobuf:"varint,11,opt,name=max_in_flight_requests_per_connection,json=maxInFlightRequestsPerConnection,proto3" json:"max_in_flight_requests_per_connection,omitempty"`
+	MaxInFlightRequestsGlobal        uint32                 `protobuf:"varint,12,opt,name=max_in_flight_requests_global,json=maxInFlightRequestsGlobal,proto3" json:"max_in_flight_requests_global,omitempty"`
+	MaxQueuedChunksPerRequest        uint32                 `protobuf:"varint,13,opt,name=max_queued_chunks_per_request,json=maxQueuedChunksPerRequest,proto3" json:"max_queued_chunks_per_request,omitempty"`
+	MaxQueuedBytesPerRequest         uint32                 `protobuf:"varint,14,opt,name=max_queued_bytes_per_request,json=maxQueuedBytesPerRequest,proto3" json:"max_queued_bytes_per_request,omitempty"`
+	MaxQueuedBytesPerConnection      uint32                 `protobuf:"varint,15,opt,name=max_queued_bytes_per_connection,json=maxQueuedBytesPerConnection,proto3" json:"max_queued_bytes_per_connection,omitempty"`
+	HandshakeTimeoutMillis           uint32                 `protobuf:"varint,16,opt,name=handshake_timeout_millis,json=handshakeTimeoutMillis,proto3" json:"handshake_timeout_millis,omitempty"`
+	MaxRequestLifetimeMillis         uint32                 `protobuf:"varint,17,opt,name=max_request_lifetime_millis,json=maxRequestLifetimeMillis,proto3" json:"max_request_lifetime_millis,omitempty"`
+	HeartbeatIntervalMillis          uint32                 `protobuf:"varint,18,opt,name=heartbeat_interval_millis,json=heartbeatIntervalMillis,proto3" json:"heartbeat_interval_millis,omitempty"`
+	DisconnectTimeoutMillis          uint32                 `protobuf:"varint,19,opt,name=disconnect_timeout_millis,json=disconnectTimeoutMillis,proto3" json:"disconnect_timeout_millis,omitempty"`
+	unknownFields                    protoimpl.UnknownFields
+	sizeCache                        protoimpl.SizeCache
+}
+
+func (x *Limits) Reset() {
+	*x = Limits{}
+	mi := &file_relay_v1_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Limits) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Limits) ProtoMessage() {}
+
+func (x *Limits) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Limits.ProtoReflect.Descriptor instead.
+func (*Limits) Descriptor() ([]byte, []int) {
+	return file_relay_v1_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Limits) GetMaxEncodedMessageBytes() uint32 {
+	if x != nil {
+		return x.MaxEncodedMessageBytes
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxBodyChunkBytes() uint32 {
+	if x != nil {
+		return x.MaxBodyChunkBytes
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxRequestBodyBytes() uint32 {
+	if x != nil {
+		return x.MaxRequestBodyBytes
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxResponseBodyBytes() uint32 {
+	if x != nil {
+		return x.MaxResponseBodyBytes
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxHeaderCount() uint32 {
+	if x != nil {
+		return x.MaxHeaderCount
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxHeaderNameBytes() uint32 {
+	if x != nil {
+		return x.MaxHeaderNameBytes
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxHeaderValueBytes() uint32 {
+	if x != nil {
+		return x.MaxHeaderValueBytes
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxAggregateHeaderBytes() uint32 {
+	if x != nil {
+		return x.MaxAggregateHeaderBytes
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxCapabilityCount() uint32 {
+	if x != nil {
+		return x.MaxCapabilityCount
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxCapabilityNameBytes() uint32 {
+	if x != nil {
+		return x.MaxCapabilityNameBytes
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxInFlightRequestsPerConnection() uint32 {
+	if x != nil {
+		return x.MaxInFlightRequestsPerConnection
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxInFlightRequestsGlobal() uint32 {
+	if x != nil {
+		return x.MaxInFlightRequestsGlobal
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxQueuedChunksPerRequest() uint32 {
+	if x != nil {
+		return x.MaxQueuedChunksPerRequest
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxQueuedBytesPerRequest() uint32 {
+	if x != nil {
+		return x.MaxQueuedBytesPerRequest
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxQueuedBytesPerConnection() uint32 {
+	if x != nil {
+		return x.MaxQueuedBytesPerConnection
+	}
+	return 0
+}
+
+func (x *Limits) GetHandshakeTimeoutMillis() uint32 {
+	if x != nil {
+		return x.HandshakeTimeoutMillis
+	}
+	return 0
+}
+
+func (x *Limits) GetMaxRequestLifetimeMillis() uint32 {
+	if x != nil {
+		return x.MaxRequestLifetimeMillis
+	}
+	return 0
+}
+
+func (x *Limits) GetHeartbeatIntervalMillis() uint32 {
+	if x != nil {
+		return x.HeartbeatIntervalMillis
+	}
+	return 0
+}
+
+func (x *Limits) GetDisconnectTimeoutMillis() uint32 {
+	if x != nil {
+		return x.DisconnectTimeoutMillis
+	}
+	return 0
+}
 
 type RequestStart struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
@@ -373,7 +897,7 @@ type RequestStart struct {
 
 func (x *RequestStart) Reset() {
 	*x = RequestStart{}
-	mi := &file_relay_v1_proto_msgTypes[2]
+	mi := &file_relay_v1_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -385,7 +909,7 @@ func (x *RequestStart) String() string {
 func (*RequestStart) ProtoMessage() {}
 
 func (x *RequestStart) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_proto_msgTypes[2]
+	mi := &file_relay_v1_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -398,7 +922,7 @@ func (x *RequestStart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestStart.ProtoReflect.Descriptor instead.
 func (*RequestStart) Descriptor() ([]byte, []int) {
-	return file_relay_v1_proto_rawDescGZIP(), []int{2}
+	return file_relay_v1_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *RequestStart) GetMethod() string {
@@ -439,7 +963,7 @@ type ResponseStart struct {
 
 func (x *ResponseStart) Reset() {
 	*x = ResponseStart{}
-	mi := &file_relay_v1_proto_msgTypes[3]
+	mi := &file_relay_v1_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -451,7 +975,7 @@ func (x *ResponseStart) String() string {
 func (*ResponseStart) ProtoMessage() {}
 
 func (x *ResponseStart) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_proto_msgTypes[3]
+	mi := &file_relay_v1_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -464,7 +988,7 @@ func (x *ResponseStart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResponseStart.ProtoReflect.Descriptor instead.
 func (*ResponseStart) Descriptor() ([]byte, []int) {
-	return file_relay_v1_proto_rawDescGZIP(), []int{3}
+	return file_relay_v1_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ResponseStart) GetStatusCode() uint32 {
@@ -484,13 +1008,14 @@ func (x *ResponseStart) GetHeaders() map[string]string {
 type BodyChunk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	Sequence      uint64                 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BodyChunk) Reset() {
 	*x = BodyChunk{}
-	mi := &file_relay_v1_proto_msgTypes[4]
+	mi := &file_relay_v1_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -502,7 +1027,7 @@ func (x *BodyChunk) String() string {
 func (*BodyChunk) ProtoMessage() {}
 
 func (x *BodyChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_proto_msgTypes[4]
+	mi := &file_relay_v1_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -515,7 +1040,7 @@ func (x *BodyChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BodyChunk.ProtoReflect.Descriptor instead.
 func (*BodyChunk) Descriptor() ([]byte, []int) {
-	return file_relay_v1_proto_rawDescGZIP(), []int{4}
+	return file_relay_v1_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *BodyChunk) GetData() []byte {
@@ -523,6 +1048,13 @@ func (x *BodyChunk) GetData() []byte {
 		return x.Data
 	}
 	return nil
+}
+
+func (x *BodyChunk) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
 }
 
 type StreamEnd struct {
@@ -533,7 +1065,7 @@ type StreamEnd struct {
 
 func (x *StreamEnd) Reset() {
 	*x = StreamEnd{}
-	mi := &file_relay_v1_proto_msgTypes[5]
+	mi := &file_relay_v1_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -545,7 +1077,7 @@ func (x *StreamEnd) String() string {
 func (*StreamEnd) ProtoMessage() {}
 
 func (x *StreamEnd) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_proto_msgTypes[5]
+	mi := &file_relay_v1_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -558,19 +1090,21 @@ func (x *StreamEnd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamEnd.ProtoReflect.Descriptor instead.
 func (*StreamEnd) Descriptor() ([]byte, []int) {
-	return file_relay_v1_proto_rawDescGZIP(), []int{5}
+	return file_relay_v1_proto_rawDescGZIP(), []int{8}
 }
 
 type Cancelled struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deprecated: Marked as deprecated in relay-v1.proto.
+	Reason        string           `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	Code          CancellationCode `protobuf:"varint,2,opt,name=code,proto3,enum=scalevault.relay.v1.CancellationCode" json:"code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Cancelled) Reset() {
 	*x = Cancelled{}
-	mi := &file_relay_v1_proto_msgTypes[6]
+	mi := &file_relay_v1_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -582,7 +1116,7 @@ func (x *Cancelled) String() string {
 func (*Cancelled) ProtoMessage() {}
 
 func (x *Cancelled) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_proto_msgTypes[6]
+	mi := &file_relay_v1_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -595,9 +1129,10 @@ func (x *Cancelled) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cancelled.ProtoReflect.Descriptor instead.
 func (*Cancelled) Descriptor() ([]byte, []int) {
-	return file_relay_v1_proto_rawDescGZIP(), []int{6}
+	return file_relay_v1_proto_rawDescGZIP(), []int{9}
 }
 
+// Deprecated: Marked as deprecated in relay-v1.proto.
 func (x *Cancelled) GetReason() string {
 	if x != nil {
 		return x.Reason
@@ -605,17 +1140,27 @@ func (x *Cancelled) GetReason() string {
 	return ""
 }
 
+func (x *Cancelled) GetCode() CancellationCode {
+	if x != nil {
+		return x.Code
+	}
+	return CancellationCode_CANCELLATION_CODE_UNSPECIFIED
+}
+
 type RelayError struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ErrorCode     string                 `protobuf:"bytes,1,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
-	SafeMessage   string                 `protobuf:"bytes,2,opt,name=safe_message,json=safeMessage,proto3" json:"safe_message,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deprecated: Marked as deprecated in relay-v1.proto.
+	ErrorCode string `protobuf:"bytes,1,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	// Deprecated: Marked as deprecated in relay-v1.proto.
+	SafeMessage   string         `protobuf:"bytes,2,opt,name=safe_message,json=safeMessage,proto3" json:"safe_message,omitempty"`
+	Code          RelayErrorCode `protobuf:"varint,3,opt,name=code,proto3,enum=scalevault.relay.v1.RelayErrorCode" json:"code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RelayError) Reset() {
 	*x = RelayError{}
-	mi := &file_relay_v1_proto_msgTypes[7]
+	mi := &file_relay_v1_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -627,7 +1172,7 @@ func (x *RelayError) String() string {
 func (*RelayError) ProtoMessage() {}
 
 func (x *RelayError) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_proto_msgTypes[7]
+	mi := &file_relay_v1_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -640,9 +1185,10 @@ func (x *RelayError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelayError.ProtoReflect.Descriptor instead.
 func (*RelayError) Descriptor() ([]byte, []int) {
-	return file_relay_v1_proto_rawDescGZIP(), []int{7}
+	return file_relay_v1_proto_rawDescGZIP(), []int{10}
 }
 
+// Deprecated: Marked as deprecated in relay-v1.proto.
 func (x *RelayError) GetErrorCode() string {
 	if x != nil {
 		return x.ErrorCode
@@ -650,6 +1196,7 @@ func (x *RelayError) GetErrorCode() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in relay-v1.proto.
 func (x *RelayError) GetSafeMessage() string {
 	if x != nil {
 		return x.SafeMessage
@@ -657,17 +1204,27 @@ func (x *RelayError) GetSafeMessage() string {
 	return ""
 }
 
+func (x *RelayError) GetCode() RelayErrorCode {
+	if x != nil {
+		return x.Code
+	}
+	return RelayErrorCode_RELAY_ERROR_CODE_UNSPECIFIED
+}
+
 type Health struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	State         string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
-	Capabilities  []string               `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Deprecated: Marked as deprecated in relay-v1.proto.
+	State string `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	// Deprecated: Marked as deprecated in relay-v1.proto.
+	Capabilities  []string    `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	HealthState   HealthState `protobuf:"varint,3,opt,name=health_state,json=healthState,proto3,enum=scalevault.relay.v1.HealthState" json:"health_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Health) Reset() {
 	*x = Health{}
-	mi := &file_relay_v1_proto_msgTypes[8]
+	mi := &file_relay_v1_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -679,7 +1236,7 @@ func (x *Health) String() string {
 func (*Health) ProtoMessage() {}
 
 func (x *Health) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_proto_msgTypes[8]
+	mi := &file_relay_v1_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -692,9 +1249,10 @@ func (x *Health) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Health.ProtoReflect.Descriptor instead.
 func (*Health) Descriptor() ([]byte, []int) {
-	return file_relay_v1_proto_rawDescGZIP(), []int{8}
+	return file_relay_v1_proto_rawDescGZIP(), []int{11}
 }
 
+// Deprecated: Marked as deprecated in relay-v1.proto.
 func (x *Health) GetState() string {
 	if x != nil {
 		return x.State
@@ -702,6 +1260,7 @@ func (x *Health) GetState() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in relay-v1.proto.
 func (x *Health) GetCapabilities() []string {
 	if x != nil {
 		return x.Capabilities
@@ -709,11 +1268,18 @@ func (x *Health) GetCapabilities() []string {
 	return nil
 }
 
+func (x *Health) GetHealthState() HealthState {
+	if x != nil {
+		return x.HealthState
+	}
+	return HealthState_HEALTH_STATE_UNSPECIFIED
+}
+
 var File_relay_v1_proto protoreflect.FileDescriptor
 
 const file_relay_v1_proto_rawDesc = "" +
 	"\n" +
-	"\x0erelay-v1.proto\x12\x13scalevault.relay.v1\"\xcb\x04\n" +
+	"\x0erelay-v1.proto\x12\x13scalevault.relay.v1\"\x8c\x05\n" +
 	"\fNodeEnvelope\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\x12'\n" +
 	"\x0finstallation_id\x18\x02 \x01(\tR\x0einstallationId\x12#\n" +
@@ -729,8 +1295,10 @@ const file_relay_v1_proto_rawDesc = "" +
 	"stream_end\x18\f \x01(\v2\x1e.scalevault.relay.v1.StreamEndH\x00R\tstreamEnd\x12>\n" +
 	"\tcancelled\x18\r \x01(\v2\x1e.scalevault.relay.v1.CancelledH\x00R\tcancelled\x127\n" +
 	"\x05error\x18\x0e \x01(\v2\x1f.scalevault.relay.v1.RelayErrorH\x00R\x05error\x125\n" +
-	"\x06health\x18\x0f \x01(\v2\x1b.scalevault.relay.v1.HealthH\x00R\x06healthB\t\n" +
-	"\apayload\"\xd9\x03\n" +
+	"\x06health\x18\x0f \x01(\v2\x1b.scalevault.relay.v1.HealthH\x00R\x06health\x12?\n" +
+	"\n" +
+	"node_hello\x18\x10 \x01(\v2\x1e.scalevault.relay.v1.NodeHelloH\x00R\tnodeHelloB\t\n" +
+	"\apayload\"\x9d\x04\n" +
 	"\rRelayEnvelope\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\tR\x0fprotocolVersion\x12'\n" +
 	"\x0finstallation_id\x18\x02 \x01(\tR\x0einstallationId\x12#\n" +
@@ -744,8 +1312,38 @@ const file_relay_v1_proto_rawDesc = "" +
 	"body_chunk\x18\v \x01(\v2\x1e.scalevault.relay.v1.BodyChunkH\x00R\tbodyChunk\x12?\n" +
 	"\n" +
 	"stream_end\x18\f \x01(\v2\x1e.scalevault.relay.v1.StreamEndH\x00R\tstreamEnd\x12>\n" +
-	"\tcancelled\x18\r \x01(\v2\x1e.scalevault.relay.v1.CancelledH\x00R\tcancelledB\t\n" +
-	"\apayload\"\xf2\x01\n" +
+	"\tcancelled\x18\r \x01(\v2\x1e.scalevault.relay.v1.CancelledH\x00R\tcancelled\x12B\n" +
+	"\vrelay_hello\x18\x0e \x01(\v2\x1f.scalevault.relay.v1.RelayHelloH\x00R\n" +
+	"relayHelloB\t\n" +
+	"\apayload\"w\n" +
+	"\tNodeHello\x12\"\n" +
+	"\fcapabilities\x18\x01 \x03(\tR\fcapabilities\x12F\n" +
+	"\x10supported_limits\x18\x02 \x01(\v2\x1b.scalevault.relay.v1.LimitsR\x0fsupportedLimits\"x\n" +
+	"\n" +
+	"RelayHello\x12\"\n" +
+	"\fcapabilities\x18\x01 \x03(\tR\fcapabilities\x12F\n" +
+	"\x10effective_limits\x18\x02 \x01(\v2\x1b.scalevault.relay.v1.LimitsR\x0feffectiveLimits\"\xe8\b\n" +
+	"\x06Limits\x129\n" +
+	"\x19max_encoded_message_bytes\x18\x01 \x01(\rR\x16maxEncodedMessageBytes\x12/\n" +
+	"\x14max_body_chunk_bytes\x18\x02 \x01(\rR\x11maxBodyChunkBytes\x123\n" +
+	"\x16max_request_body_bytes\x18\x03 \x01(\rR\x13maxRequestBodyBytes\x125\n" +
+	"\x17max_response_body_bytes\x18\x04 \x01(\rR\x14maxResponseBodyBytes\x12(\n" +
+	"\x10max_header_count\x18\x05 \x01(\rR\x0emaxHeaderCount\x121\n" +
+	"\x15max_header_name_bytes\x18\x06 \x01(\rR\x12maxHeaderNameBytes\x123\n" +
+	"\x16max_header_value_bytes\x18\a \x01(\rR\x13maxHeaderValueBytes\x12;\n" +
+	"\x1amax_aggregate_header_bytes\x18\b \x01(\rR\x17maxAggregateHeaderBytes\x120\n" +
+	"\x14max_capability_count\x18\t \x01(\rR\x12maxCapabilityCount\x129\n" +
+	"\x19max_capability_name_bytes\x18\n" +
+	" \x01(\rR\x16maxCapabilityNameBytes\x12O\n" +
+	"%max_in_flight_requests_per_connection\x18\v \x01(\rR maxInFlightRequestsPerConnection\x12@\n" +
+	"\x1dmax_in_flight_requests_global\x18\f \x01(\rR\x19maxInFlightRequestsGlobal\x12@\n" +
+	"\x1dmax_queued_chunks_per_request\x18\r \x01(\rR\x19maxQueuedChunksPerRequest\x12>\n" +
+	"\x1cmax_queued_bytes_per_request\x18\x0e \x01(\rR\x18maxQueuedBytesPerRequest\x12D\n" +
+	"\x1fmax_queued_bytes_per_connection\x18\x0f \x01(\rR\x1bmaxQueuedBytesPerConnection\x128\n" +
+	"\x18handshake_timeout_millis\x18\x10 \x01(\rR\x16handshakeTimeoutMillis\x12=\n" +
+	"\x1bmax_request_lifetime_millis\x18\x11 \x01(\rR\x18maxRequestLifetimeMillis\x12:\n" +
+	"\x19heartbeat_interval_millis\x18\x12 \x01(\rR\x17heartbeatIntervalMillis\x12:\n" +
+	"\x19disconnect_timeout_millis\x18\x13 \x01(\rR\x17disconnectTimeoutMillis\"\xf2\x01\n" +
 	"\fRequestStart\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12H\n" +
@@ -760,20 +1358,52 @@ const file_relay_v1_proto_rawDesc = "" +
 	"\aheaders\x18\x02 \x03(\v2/.scalevault.relay.v1.ResponseStart.HeadersEntryR\aheaders\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x1f\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\";\n" +
 	"\tBodyChunk\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\"\v\n" +
-	"\tStreamEnd\"#\n" +
-	"\tCancelled\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"N\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x1a\n" +
+	"\bsequence\x18\x02 \x01(\x04R\bsequence\"\v\n" +
+	"\tStreamEnd\"b\n" +
+	"\tCancelled\x12\x1a\n" +
+	"\x06reason\x18\x01 \x01(\tB\x02\x18\x01R\x06reason\x129\n" +
+	"\x04code\x18\x02 \x01(\x0e2%.scalevault.relay.v1.CancellationCodeR\x04code\"\x8f\x01\n" +
 	"\n" +
-	"RelayError\x12\x1d\n" +
+	"RelayError\x12!\n" +
 	"\n" +
-	"error_code\x18\x01 \x01(\tR\terrorCode\x12!\n" +
-	"\fsafe_message\x18\x02 \x01(\tR\vsafeMessage\"B\n" +
-	"\x06Health\x12\x14\n" +
-	"\x05state\x18\x01 \x01(\tR\x05state\x12\"\n" +
-	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities2d\n" +
+	"error_code\x18\x01 \x01(\tB\x02\x18\x01R\terrorCode\x12%\n" +
+	"\fsafe_message\x18\x02 \x01(\tB\x02\x18\x01R\vsafeMessage\x127\n" +
+	"\x04code\x18\x03 \x01(\x0e2#.scalevault.relay.v1.RelayErrorCodeR\x04code\"\x8f\x01\n" +
+	"\x06Health\x12\x18\n" +
+	"\x05state\x18\x01 \x01(\tB\x02\x18\x01R\x05state\x12&\n" +
+	"\fcapabilities\x18\x02 \x03(\tB\x02\x18\x01R\fcapabilities\x12C\n" +
+	"\fhealth_state\x18\x03 \x01(\x0e2 .scalevault.relay.v1.HealthStateR\vhealthState*\xa3\x02\n" +
+	"\x10CancellationCode\x12!\n" +
+	"\x1dCANCELLATION_CODE_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fCANCELLATION_CODE_CLIENT_CLOSED\x10\x01\x12'\n" +
+	"#CANCELLATION_CODE_DEADLINE_EXCEEDED\x10\x02\x12%\n" +
+	"!CANCELLATION_CODE_QUEUE_EXHAUSTED\x10\x03\x12*\n" +
+	"&CANCELLATION_CODE_INSTALLATION_REVOKED\x10\x04\x12$\n" +
+	" CANCELLATION_CODE_RELAY_SHUTDOWN\x10\x05\x12%\n" +
+	"!CANCELLATION_CODE_CONNECTION_LOST\x10\x06*\x8c\x04\n" +
+	"\x0eRelayErrorCode\x12 \n" +
+	"\x1cRELAY_ERROR_CODE_UNSPECIFIED\x10\x00\x12%\n" +
+	"!RELAY_ERROR_CODE_INVALID_ENVELOPE\x10\x01\x12(\n" +
+	"$RELAY_ERROR_CODE_UNSUPPORTED_VERSION\x10\x02\x12*\n" +
+	"&RELAY_ERROR_CODE_INSTALLATION_MISMATCH\x10\x03\x12%\n" +
+	"!RELAY_ERROR_CODE_REQUEST_REJECTED\x10\x04\x12)\n" +
+	"%RELAY_ERROR_CODE_UPSTREAM_UNAVAILABLE\x10\x05\x12&\n" +
+	"\"RELAY_ERROR_CODE_UPSTREAM_PROTOCOL\x10\x06\x12#\n" +
+	"\x1fRELAY_ERROR_CODE_BODY_TOO_LARGE\x10\a\x12$\n" +
+	" RELAY_ERROR_CODE_HEADERS_INVALID\x10\b\x12&\n" +
+	"\"RELAY_ERROR_CODE_DEADLINE_EXCEEDED\x10\t\x12$\n" +
+	" RELAY_ERROR_CODE_QUEUE_EXHAUSTED\x10\n" +
+	"\x12)\n" +
+	"%RELAY_ERROR_CODE_INSTALLATION_REVOKED\x10\v\x12\x1d\n" +
+	"\x19RELAY_ERROR_CODE_INTERNAL\x10\f*y\n" +
+	"\vHealthState\x12\x1c\n" +
+	"\x18HEALTH_STATE_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12HEALTH_STATE_READY\x10\x01\x12\x19\n" +
+	"\x15HEALTH_STATE_DEGRADED\x10\x02\x12\x19\n" +
+	"\x15HEALTH_STATE_DRAINING\x10\x032d\n" +
 	"\fRelayService\x12T\n" +
 	"\aConnect\x12!.scalevault.relay.v1.NodeEnvelope\x1a\".scalevault.relay.v1.RelayEnvelope(\x010\x01B:Z8github.com/JTM-rootstorm/scalevault/gen/relay/v1;relayv1b\x06proto3"
 
@@ -789,40 +1419,54 @@ func file_relay_v1_proto_rawDescGZIP() []byte {
 	return file_relay_v1_proto_rawDescData
 }
 
-var file_relay_v1_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_relay_v1_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_relay_v1_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_relay_v1_proto_goTypes = []any{
-	(*NodeEnvelope)(nil),  // 0: scalevault.relay.v1.NodeEnvelope
-	(*RelayEnvelope)(nil), // 1: scalevault.relay.v1.RelayEnvelope
-	(*RequestStart)(nil),  // 2: scalevault.relay.v1.RequestStart
-	(*ResponseStart)(nil), // 3: scalevault.relay.v1.ResponseStart
-	(*BodyChunk)(nil),     // 4: scalevault.relay.v1.BodyChunk
-	(*StreamEnd)(nil),     // 5: scalevault.relay.v1.StreamEnd
-	(*Cancelled)(nil),     // 6: scalevault.relay.v1.Cancelled
-	(*RelayError)(nil),    // 7: scalevault.relay.v1.RelayError
-	(*Health)(nil),        // 8: scalevault.relay.v1.Health
-	nil,                   // 9: scalevault.relay.v1.RequestStart.HeadersEntry
-	nil,                   // 10: scalevault.relay.v1.ResponseStart.HeadersEntry
+	(CancellationCode)(0), // 0: scalevault.relay.v1.CancellationCode
+	(RelayErrorCode)(0),   // 1: scalevault.relay.v1.RelayErrorCode
+	(HealthState)(0),      // 2: scalevault.relay.v1.HealthState
+	(*NodeEnvelope)(nil),  // 3: scalevault.relay.v1.NodeEnvelope
+	(*RelayEnvelope)(nil), // 4: scalevault.relay.v1.RelayEnvelope
+	(*NodeHello)(nil),     // 5: scalevault.relay.v1.NodeHello
+	(*RelayHello)(nil),    // 6: scalevault.relay.v1.RelayHello
+	(*Limits)(nil),        // 7: scalevault.relay.v1.Limits
+	(*RequestStart)(nil),  // 8: scalevault.relay.v1.RequestStart
+	(*ResponseStart)(nil), // 9: scalevault.relay.v1.ResponseStart
+	(*BodyChunk)(nil),     // 10: scalevault.relay.v1.BodyChunk
+	(*StreamEnd)(nil),     // 11: scalevault.relay.v1.StreamEnd
+	(*Cancelled)(nil),     // 12: scalevault.relay.v1.Cancelled
+	(*RelayError)(nil),    // 13: scalevault.relay.v1.RelayError
+	(*Health)(nil),        // 14: scalevault.relay.v1.Health
+	nil,                   // 15: scalevault.relay.v1.RequestStart.HeadersEntry
+	nil,                   // 16: scalevault.relay.v1.ResponseStart.HeadersEntry
 }
 var file_relay_v1_proto_depIdxs = []int32{
-	3,  // 0: scalevault.relay.v1.NodeEnvelope.response_start:type_name -> scalevault.relay.v1.ResponseStart
-	4,  // 1: scalevault.relay.v1.NodeEnvelope.body_chunk:type_name -> scalevault.relay.v1.BodyChunk
-	5,  // 2: scalevault.relay.v1.NodeEnvelope.stream_end:type_name -> scalevault.relay.v1.StreamEnd
-	6,  // 3: scalevault.relay.v1.NodeEnvelope.cancelled:type_name -> scalevault.relay.v1.Cancelled
-	7,  // 4: scalevault.relay.v1.NodeEnvelope.error:type_name -> scalevault.relay.v1.RelayError
-	8,  // 5: scalevault.relay.v1.NodeEnvelope.health:type_name -> scalevault.relay.v1.Health
-	2,  // 6: scalevault.relay.v1.RelayEnvelope.request_start:type_name -> scalevault.relay.v1.RequestStart
-	4,  // 7: scalevault.relay.v1.RelayEnvelope.body_chunk:type_name -> scalevault.relay.v1.BodyChunk
-	5,  // 8: scalevault.relay.v1.RelayEnvelope.stream_end:type_name -> scalevault.relay.v1.StreamEnd
-	6,  // 9: scalevault.relay.v1.RelayEnvelope.cancelled:type_name -> scalevault.relay.v1.Cancelled
-	9,  // 10: scalevault.relay.v1.RequestStart.headers:type_name -> scalevault.relay.v1.RequestStart.HeadersEntry
-	10, // 11: scalevault.relay.v1.ResponseStart.headers:type_name -> scalevault.relay.v1.ResponseStart.HeadersEntry
-	0,  // 12: scalevault.relay.v1.RelayService.Connect:input_type -> scalevault.relay.v1.NodeEnvelope
-	1,  // 13: scalevault.relay.v1.RelayService.Connect:output_type -> scalevault.relay.v1.RelayEnvelope
-	13, // [13:14] is the sub-list for method output_type
-	12, // [12:13] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	9,  // 0: scalevault.relay.v1.NodeEnvelope.response_start:type_name -> scalevault.relay.v1.ResponseStart
+	10, // 1: scalevault.relay.v1.NodeEnvelope.body_chunk:type_name -> scalevault.relay.v1.BodyChunk
+	11, // 2: scalevault.relay.v1.NodeEnvelope.stream_end:type_name -> scalevault.relay.v1.StreamEnd
+	12, // 3: scalevault.relay.v1.NodeEnvelope.cancelled:type_name -> scalevault.relay.v1.Cancelled
+	13, // 4: scalevault.relay.v1.NodeEnvelope.error:type_name -> scalevault.relay.v1.RelayError
+	14, // 5: scalevault.relay.v1.NodeEnvelope.health:type_name -> scalevault.relay.v1.Health
+	5,  // 6: scalevault.relay.v1.NodeEnvelope.node_hello:type_name -> scalevault.relay.v1.NodeHello
+	8,  // 7: scalevault.relay.v1.RelayEnvelope.request_start:type_name -> scalevault.relay.v1.RequestStart
+	10, // 8: scalevault.relay.v1.RelayEnvelope.body_chunk:type_name -> scalevault.relay.v1.BodyChunk
+	11, // 9: scalevault.relay.v1.RelayEnvelope.stream_end:type_name -> scalevault.relay.v1.StreamEnd
+	12, // 10: scalevault.relay.v1.RelayEnvelope.cancelled:type_name -> scalevault.relay.v1.Cancelled
+	6,  // 11: scalevault.relay.v1.RelayEnvelope.relay_hello:type_name -> scalevault.relay.v1.RelayHello
+	7,  // 12: scalevault.relay.v1.NodeHello.supported_limits:type_name -> scalevault.relay.v1.Limits
+	7,  // 13: scalevault.relay.v1.RelayHello.effective_limits:type_name -> scalevault.relay.v1.Limits
+	15, // 14: scalevault.relay.v1.RequestStart.headers:type_name -> scalevault.relay.v1.RequestStart.HeadersEntry
+	16, // 15: scalevault.relay.v1.ResponseStart.headers:type_name -> scalevault.relay.v1.ResponseStart.HeadersEntry
+	0,  // 16: scalevault.relay.v1.Cancelled.code:type_name -> scalevault.relay.v1.CancellationCode
+	1,  // 17: scalevault.relay.v1.RelayError.code:type_name -> scalevault.relay.v1.RelayErrorCode
+	2,  // 18: scalevault.relay.v1.Health.health_state:type_name -> scalevault.relay.v1.HealthState
+	3,  // 19: scalevault.relay.v1.RelayService.Connect:input_type -> scalevault.relay.v1.NodeEnvelope
+	4,  // 20: scalevault.relay.v1.RelayService.Connect:output_type -> scalevault.relay.v1.RelayEnvelope
+	20, // [20:21] is the sub-list for method output_type
+	19, // [19:20] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_relay_v1_proto_init() }
@@ -837,25 +1481,28 @@ func file_relay_v1_proto_init() {
 		(*NodeEnvelope_Cancelled)(nil),
 		(*NodeEnvelope_Error)(nil),
 		(*NodeEnvelope_Health)(nil),
+		(*NodeEnvelope_NodeHello)(nil),
 	}
 	file_relay_v1_proto_msgTypes[1].OneofWrappers = []any{
 		(*RelayEnvelope_RequestStart)(nil),
 		(*RelayEnvelope_BodyChunk)(nil),
 		(*RelayEnvelope_StreamEnd)(nil),
 		(*RelayEnvelope_Cancelled)(nil),
+		(*RelayEnvelope_RelayHello)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_relay_v1_proto_rawDesc), len(file_relay_v1_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   11,
+			NumEnums:      3,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_relay_v1_proto_goTypes,
 		DependencyIndexes: file_relay_v1_proto_depIdxs,
+		EnumInfos:         file_relay_v1_proto_enumTypes,
 		MessageInfos:      file_relay_v1_proto_msgTypes,
 	}.Build()
 	File_relay_v1_proto = out.File

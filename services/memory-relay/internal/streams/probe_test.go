@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-const testInstallationID = "milestone-0-installation"
+const testInstallationID = "01890a5d-ac96-7b10-8000-000000000001"
 
 func TestProbeStreamsEchoResponse(t *testing.T) {
 	probe, err := streams.NewEchoProbe(testInstallationID, [][]byte{
@@ -50,7 +50,10 @@ func TestProbeStreamsEchoResponse(t *testing.T) {
 }
 
 func TestProbePropagatesCancellation(t *testing.T) {
-	probe, err := streams.NewCancellationProbe(testInstallationID, "caller cancelled")
+	probe, err := streams.NewCancellationProbe(
+		testInstallationID,
+		relayv1.CancellationCode_CANCELLATION_CODE_CLIENT_CLOSED,
+	)
 	if err != nil {
 		t.Fatalf("create cancellation probe: %v", err)
 	}
@@ -67,8 +70,8 @@ func TestProbePropagatesCancellation(t *testing.T) {
 	if !result.Cancelled {
 		t.Fatal("expected node agent to acknowledge cancellation")
 	}
-	if result.CancellationReason != "caller cancelled" {
-		t.Fatalf("unexpected cancellation reason %q", result.CancellationReason)
+	if result.CancellationCode != relayv1.CancellationCode_CANCELLATION_CODE_CLIENT_CLOSED {
+		t.Fatalf("unexpected cancellation code %q", result.CancellationCode)
 	}
 	if err := <-agentDone; err != nil {
 		t.Fatalf("node agent probe failed: %v", err)
