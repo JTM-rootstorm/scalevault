@@ -96,7 +96,7 @@ Milestone 9 acceptance.
   readiness was `ready`, and no protected acceptance scratch directories
   remained after all live probes.
 
-## Open activation gate
+## Open acceptance gates
 
 The separately managed reverse proxy reaches the HTTP backend. Its route guards,
 authenticated direct-private path, bounded SSE lifetime, revocation, observed
@@ -122,26 +122,33 @@ That inspection also found two activation blockers:
   `X-Real-IP` returned backend `401` and contacted the Memory Node. This is a
   confirmed Access List bypass.
 
+Both activation blockers were remediated and reverified. Block Common Exploits
+was disabled, and the host Advanced configuration replaced inherited TCP
+real-IP trust with `set_real_ip_from unix:;` plus
+`real_ip_recursive off;`. A fresh `nginx -T` passed and showed each directive
+exactly once, no `block-exploits.conf` include, the `/mcp` Custom Location, and
+the application-path catch-all. From the same unapproved source used to prove
+the original bypass, baseline and spoofed `Forwarded`, `X-Forwarded-For`, and
+`X-Real-IP` requests all returned edge `403`. A temporary non-blocking firewall
+counter recorded zero new backend connections during those probes and was
+removed automatically. From an approved source, exact HTTPS `/mcp` still
+reached the application's uniform `401`; invalid path, query, and client HTTP
+application requests returned fixed `404` with no redirect. The canonical API,
+Codex ingress, and Secure MCP Tunnel services remained active.
+
 Milestone acceptance remains open until:
 
-1. Block Common Exploits is disabled in the Proxy Host UI, the updated host
-   Advanced template is installed, and a fresh `nginx -T` confirms the server
-   contains `set_real_ip_from unix:;`, `real_ip_recursive off;`, and no
-   `block-exploits.conf` include.
-2. The unapproved-source baseline and spoofed `Forwarded`,
-   `X-Forwarded-For`, and `X-Real-IP` probes all remain at the edge with zero
-   backend packets after the fix. A genuinely external source repeats the same
-   gate.
-3. A fresh authenticated canary permits NPM logs to be searched for the exact
+1. A genuinely external source repeats the baseline and spoofed `Forwarded`,
+   `X-Forwarded-For`, and `X-Real-IP` gate with zero backend connections.
+2. A fresh authenticated canary permits NPM logs to be searched for the exact
    bearer before its protected artifact is destroyed. Existing NPM and LXC
    marker and payload scans have zero matches.
-4. An actual Codex client observes reconnect after the five-minute SSE
+3. An actual Codex client observes reconnect after the five-minute SSE
    lifetime. The completed raw transport probe proves a fresh authenticated GET
    succeeds, not client-specific automatic reconnect behavior.
-5. A live ChatGPT Web read through the unchanged Secure MCP Tunnel passes. This
+4. A live ChatGPT Web read through the unchanged Secure MCP Tunnel passes. This
    remains an account-side gate; repository and host evidence proves tunnel
    readiness and isolation but cannot substitute for that client observation.
 
-The live functional results remain valid, but the Proxy Host must not be treated
-as accepted while the confirmed Access List bypass and exploit-filter mismatch
-remain active.
+The private ingress activation blockers are closed. The remaining items are
+acceptance evidence rather than known configuration defects.
