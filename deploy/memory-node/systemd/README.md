@@ -38,12 +38,16 @@ group membership as an installation error; inspect and reconcile it rather than
 blindly replacing it. The application tree is root-owned and not writable by a
 service account.
 
-Create `memory-api.env`, `memory-worker.env`, `memory-lifecycle-worker.env`, and `tunnel.env` locally under
+Create `memory-api.env`, `memory-codex-ingress.env`, `memory-worker.env`,
+`memory-lifecycle-worker.env`, and `tunnel.env` locally under
 `/etc/kivra-memory`. Each file must be root-owned and mode `0600`, except the
-dedicated lifecycle-worker file described below. Never copy `.env` from a
-development checkout. Database passwords remain local deployment secrets and
-must not appear in this repository, shell history, or command output. Private
-keys and API keys must use systemd credentials rather than environment files.
+dedicated lifecycle-worker file described below. The Codex ingress environment
+remains unprovisioned and its service disabled until the separate
+private-ingress prerequisites are satisfied. Never copy `.env` from a
+development checkout. Database
+passwords remain local deployment secrets and must not appear in this
+repository, shell history, or command output. Private keys and API keys must
+use systemd credentials rather than environment files.
 
 The Milestone 6 services have separate Unix users and PostgreSQL roles. The
 exporter uses `kivra_memory_exporter`. GitHub discovery and validation use
@@ -385,18 +389,26 @@ stat -c '%U:%G %a %n' \
 
 ## Network boundary
 
-The accepted production profile binds the API to loopback. Production startup
-rejects a non-loopback `KIVRA_MEMORY_HOST`; keep the default value shown above.
-Secure MCP Tunnel reaches the API over loopback, and development clients use
-loopback or an explicit local forward.
+The canonical production profile binds the API to loopback. Production startup
+rejects a non-loopback canonical `KIVRA_MEMORY_HOST`; keep the default value
+shown above. Secure MCP Tunnel reaches that API over loopback, and development
+clients use loopback or an explicit local forward. Do not change the canonical
+API bind address merely to make remote access convenient.
 
-There is intentionally no Nginx unit or configuration in this LXC. Secure MCP
-Tunnel connects to the loopback API and requires no inbound public listener.
-[ADR 0022](../../../docs/adr/0022-private-single-owner-access-topology.md)
-assigns any future private-LAN HTTPS profile to the separately managed reverse
-proxy, but enabling that profile requires an explicit reviewed application
-configuration mode and exposure controls. Do not change the API bind address
-merely to make remote access convenient.
+The separately installed `codex_private_ingress` profile is a distinct,
+direct-only process. It requires an exact private IP literal, fixed port `8443`,
+an exact external hostname, one exact trusted NPM egress `/32` or `/128`, and
+backend TLS credentials in its own systemd credential directory. It exposes
+only `/mcp` and cannot construct the ChatGPT surface or operator endpoints. It
+neither requires nor routes through the tunnel service.
+
+There is intentionally no Nginx unit or general reverse-proxy configuration in
+this LXC. [ADR 0022](../../../docs/adr/0022-private-single-owner-access-topology.md)
+assigns client TLS, exact-path routing, and LAN/VPN source filtering to the
+separately managed Nginx Proxy Manager boundary. The backend hop is also HTTPS,
+with pinned CA and exact SNI/name verification. See
+[`../private-ingress/README.md`](../private-ingress/README.md) for the
+placeholder-only deployment policy and mandatory live exposure checks.
 
 ## Install and verify
 
@@ -406,6 +418,9 @@ Install the implemented units and the PostgreSQL mount drop-in:
 install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-api.service \
   /etc/systemd/system/kivra-memory-api.service
+install -D -o root -g root -m 0644 \
+  deploy/memory-node/systemd/kivra-memory-codex-ingress.service \
+  /etc/systemd/system/kivra-memory-codex-ingress.service
 install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-tunnel.service \
   /etc/systemd/system/kivra-memory-tunnel.service
@@ -434,6 +449,7 @@ systemctl daemon-reload
 systemd-analyze verify \
   postgresql@17-main.service \
   kivra-memory-api.service \
+  kivra-memory-codex-ingress.service \
   kivra-memory-worker.service \
   kivra-memory-lifecycle-worker.service \
   kivra-memory-archive-exporter.service \
@@ -474,6 +490,13 @@ association are available. It targets only the authenticated read-only
 `/chatgpt/mcp` route; it never forwards to the direct Codex `/mcp` route. Its
 MCP target and health UI are both loopback-only; see `../tunnel/README.md` for
 the credential boundary, minimum tunnel-client version, and activation checks.
+
+The Codex ingress unit remains disabled until its exact private bind, backend
+certificate and key, pinned NPM backend CA/SNI, pre-upstream LAN/VPN-only
+Access List rejection, exact NPM source `/32` or `/128`, LXC firewall rule,
+header normalization, bounded `/mcp` route, distinct per-device bearers, and
+external no-backend-route evidence have passed the private-ingress runbook.
+Its availability is independent of the tunnel and canonical loopback listener.
 
 The sealed-content drop-in and purge unit remain uninstalled and disabled when
 sealed content is not explicitly enabled. Before activation, provision the

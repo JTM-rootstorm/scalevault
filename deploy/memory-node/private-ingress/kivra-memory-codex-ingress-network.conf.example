@@ -1,0 +1,5 @@
+# Replace the placeholder with NPM's one stable egress address and use a /32
+# for IPv4 or /128 for IPv6. Install this file as:
+# /etc/systemd/system/kivra-memory-codex-ingress.service.d/10-network-policy.conf
+[Service]
+IPAddressAllow=REPLACE_WITH_EXACT_NPM_EGRESS_CIDR
