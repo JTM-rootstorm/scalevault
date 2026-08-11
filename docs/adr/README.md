@@ -28,6 +28,7 @@ documentation and do not change these decisions implicitly.
 | [0020](0020-relay-enrollment-and-transport.md) | Superseded | Bind one-use node enrollment, mTLS connection identity, and bounded relay transport without granting memory authority. |
 | [0021](0021-relay-oauth-and-forwarded-identity.md) | Superseded | Bind public OAuth subjects to installations and canonical relay identities through body-bound, replay-safe signed assertions. |
 | [0022](0022-private-single-owner-access-topology.md) | Accepted | Use Secure MCP Tunnel for ChatGPT Web and per-device direct-private identities over the owner's VPN; do not deploy a public relay. |
+| [0023](0023-bounded-loopback-mcp-http-boundary.md) | Accepted | Pin loopback MCP transport security, request bounds, and forwarding-header rejection without weakening the tunnel boundary. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries

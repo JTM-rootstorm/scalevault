@@ -18,22 +18,20 @@ ScaleVault has one canonical private Memory Node. It is the only semantic
 authority for durable memory operations, regardless of the transport used to
 request them.
 
-The canonical LXC is not exposed directly to the public internet. Public plugin
-traffic terminates at the generic relay and reaches the Memory Node through the
-outbound node-agent path. The relay remains a transport and does not become a
-second Memory Node.
-
-ADR 0022 removes public plugin traffic and the generic relay from the active v1
-deployment. Its private ChatGPT tunnel and VPN-reachable direct Codex paths
-preserve this ADR's canonical-node boundary.
+The canonical LXC is not exposed directly to the public internet. This ADR
+originally routed public plugin traffic through a generic relay and outbound
+node agent, with the relay remaining transport-only. ADR 0022 supersedes that
+clause: the active v1 deployment uses a private ChatGPT tunnel and
+VPN-reachable direct Codex paths while preserving this ADR's canonical-node
+boundary.
 
 ## Consequences
 
 - All transports must converge on the canonical Memory Node's policy and domain
   command handling.
-- Public endpoints can be operated without publishing the LXC's address or
-  accepting public inbound connections on it.
+- Private transports operate without accepting public inbound connections on
+  the LXC.
 - Loss of the canonical Memory Node makes semantic operations unavailable;
   transports cannot promote cached or queued data into authoritative state.
-- The relay must remain incapable of independently interpreting or mutating
-  memory state.
+- Any future transport must remain incapable of independently interpreting or
+  mutating memory state.
