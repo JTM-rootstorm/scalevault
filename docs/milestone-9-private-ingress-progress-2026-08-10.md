@@ -9,7 +9,7 @@ Milestone 9 acceptance.
 
 - The dedicated direct-only ingress, process-profile separation, hard request
   lifetimes, deployment profile, and private topology ADR are committed through
-  `48a6e4f`.
+  `ab68907`.
 - The ingress exposes only exact `/mcp`, accepts only Streamable HTTP `GET`,
   `POST`, and `DELETE`, and retains ADR 0018 bearer authentication on every
   request.
@@ -47,31 +47,34 @@ Milestone 9 acceptance.
 - After the NPM upstream changed to HTTP, credential-free HTTPS requests to
   exact `/mcp` returned the expected application `401`, proving the approved
   NPM route reaches the private HTTP listener without forwarding credentials.
+- NPM now owns one `/mcp` Custom Location so its existing source-CIDR Access
+  List remains the single source of truth. A non-conflicting regex catch-all
+  rejects every other path.
+- Client HTTP `/mcp`, operator paths, trailing slashes, query strings, and
+  unsupported methods returned fixed `404` or `405` responses without
+  redirects. The backend firewall counter remained unchanged across those
+  probes, then increased only for exact HTTPS `/mcp` as it returned `401`.
+- The canonical API, ChatGPT tunnel, and private ingress remained active, and
+  tunnel readiness remained `ready`, after the edge changes.
 
 ## Open activation gate
 
-The separately managed reverse proxy now reaches the HTTP backend. It still
-redirects plaintext HTTP, and invalid paths, query strings, and methods still
-reach the application and return its generic rejection instead of being
-rejected before an upstream connection. No bearer was sent while those edge
-gates remained open.
+The separately managed reverse proxy now reaches the HTTP backend and its
+credential-free route guards pass. No bearer was sent before those edge gates
+closed.
 
 Milestone acceptance remains open until the proxy administrator:
 
-1. keeps Let's Encrypt TLS and its private key only at NPM;
-2. disables client plaintext redirects in favor of a fixed content-free
-   rejection;
-3. routes exact raw `/mcp` only and rejects queries, aliases, and other paths
-   before opening an upstream connection;
-4. proves NPM-generated forwarding fields are bounded and discarded before
+1. verifies the generated Custom Location contains the source-CIDR-only Access
+   List, no Basic-auth integration or Authorization clearing, exactly one
+   private backend `proxy_pass`, and the reviewed buffering, timeout, logging,
+   retry, and compression controls;
+2. proves NPM-generated forwarding fields are bounded and discarded before
    application authentication, and never become canonical authority;
-5. preserves the LAN/VPN access-list rejection before upstream selection;
-6. disables upstream retry, response buffering, compression, access logging,
-   and request-body spooling; and
-7. inspects complete `nginx -T` real-IP and Access List ordering, then proves
+3. inspects complete `nginx -T` real-IP and Access List ordering, then proves
    spoofed forwarding headers cannot turn an external source into a LAN/VPN
    source; and
-8. passes live authenticated initialize/read/mutation, revocation, SSE
+4. passes live authenticated initialize/read/mutation, revocation, SSE
    reconnect, no-retry, log-canary, and external-source probes.
 
 The generated proxy configuration must be inspected after the UI saves it.

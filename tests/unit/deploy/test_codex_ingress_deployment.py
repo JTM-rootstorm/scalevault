@@ -10,7 +10,8 @@ UNIT = ROOT / "deploy/memory-node/systemd/kivra-memory-codex-ingress.service"
 DEPLOY_ROOT = ROOT / "deploy/memory-node/private-ingress"
 ENV_EXAMPLE = DEPLOY_ROOT / "memory-codex-ingress.env.example"
 NETWORK_EXAMPLE = DEPLOY_ROOT / "kivra-memory-codex-ingress-network.conf.example"
-NPM_EXAMPLE = DEPLOY_ROOT / "npm-location.conf.example"
+NPM_HOST_ADVANCED = DEPLOY_ROOT / "npm-host-advanced.conf.example"
+NPM_MCP_ADVANCED = DEPLOY_ROOT / "npm-mcp-custom-location-advanced.conf.example"
 README = DEPLOY_ROOT / "README.md"
 SEALED_DROP_IN = (
     ROOT / "deploy/memory-node/systemd/sealed-content/"
@@ -79,47 +80,45 @@ def test_environment_template_freezes_profile_port_and_exact_placeholders() -> N
 
 
 def test_npm_template_is_exact_verified_bounded_and_never_retries() -> None:
-    template = NPM_EXAMPLE.read_text(encoding="utf-8")
-    template_prose = " ".join(template.split())
+    host = NPM_HOST_ADVANCED.read_text(encoding="utf-8")
+    location = NPM_MCP_ADVANCED.read_text(encoding="utf-8")
 
-    pre_location, locations = template.split("location = /mcp", maxsplit=1)
-    exact_location, catch_all = locations.split("location /", maxsplit=1)
-    assert "Remove every NPM Custom Location" in template_prose
-    assert "Proxy Host's Advanced field after" in template_prose
+    pre_location, _ = host.split("location ~ ^/(?!mcp$) {", maxsplit=1)
+    assert "location ~ ^/(?!mcp$) {" in host
+    assert "location / {" not in host
     assert "access_log off;" not in pre_location
-    assert "access_log off;" in exact_location
-    assert "access_log off;" in catch_all
-    assert "location = /mcp" in template
-    assert "location /" in template
-    assert "return 404" in template
-    assert "allow REPLACE_WITH_APPROVED_LAN_OR_VPN_CIDR" in template
-    assert "deny all" in template
-    assert "if ($scheme != https) { return 404; }" in template
-    assert "if ($request_uri != /mcp) { return 404; }" in template
-    assert "proxy_pass http://REPLACE_WITH_EXACT_BACKEND_PRIVATE_IP:8443/mcp" in template
-    assert "proxy_ssl_" not in template
-    assert "PINNED_BACKEND_CA" not in template
-    assert "proxy_pass_request_headers off" in template
-    assert "proxy_next_upstream off" in template
-    assert "proxy_redirect off" in template
-    assert "client_max_body_size 1m" in template
-    assert "client_body_buffer_size 1m" in template
-    assert "proxy_connect_timeout 5s" in template
-    assert "proxy_send_timeout 30s" in template
-    assert "proxy_read_timeout 310s" in template
-    assert "proxy_request_buffering on" in template
-    assert "proxy_buffering off" in template
-    assert "gzip off" in template
-    assert "access_log off" in template
-    assert "proxy_cache off" in template
+    assert "access_log off;" in host
+    assert "return 404" in host
+    assert "proxy_pass" not in host
+    assert "location " not in location
+    assert "proxy_pass " not in location
+    assert "allow " not in location
+    assert "deny " not in location
+    assert "if ($scheme != https) { return 404; }" in location
+    assert "if ($request_method !~ ^(GET|POST|DELETE)$) { return 405; }" in location
+    assert "if ($request_uri != /mcp) { return 404; }" in location
+    assert "proxy_ssl_" not in location
+    assert "PINNED_BACKEND_CA" not in location
+    assert "proxy_pass_request_headers off" in location
+    assert "proxy_next_upstream off" in location
+    assert "proxy_redirect off" in location
+    assert "client_max_body_size 1m" in location
+    assert "client_body_buffer_size 1m" in location
+    assert "proxy_connect_timeout 5s" in location
+    assert "proxy_send_timeout 30s" in location
+    assert "proxy_read_timeout 310s" in location
+    assert "proxy_request_buffering on" in location
+    assert "proxy_buffering off" in location
+    assert "gzip off" in location
+    assert "access_log off" in location
+    assert "proxy_cache off" in location
 
 
 def test_npm_template_reconstructs_only_allowlisted_nonforwarding_headers() -> None:
-    template = NPM_EXAMPLE.read_text(encoding="utf-8")
+    template = NPM_MCP_ADVANCED.read_text(encoding="utf-8")
     reconstructed = re.findall(r"^\s*proxy_set_header\s+([^ ]+)", template, re.MULTILINE)
 
     assert set(reconstructed) == {
-        "Host",
         "Authorization",
         "Origin",
         "Accept",
@@ -160,19 +159,25 @@ def test_runbook_requires_live_private_and_no_payload_log_evidence() -> None:
     assert "spoofed LAN values" in readme
     assert "`Forwarded`, `X-Forwarded-For`, and `X-Real-IP`" in readme
     assert "shared or public edge listener is acceptable only" in readme
-    assert "paste the entire template into the Proxy Host's" in prose
-    assert "remove every NPM Custom Location" in prose
-    assert "does not inject the UI Access List" in prose
+    assert "exactly one NPM Custom Location" in prose
+    assert "source CIDRs only" in prose
+    assert "Block Common Exploits" in readme
+    assert "renders the attached UI Access List" in prose
+    assert "loopback TCP port proven closed" in prose
     assert "scheme `http`" in readme
-    assert "exactly the template's `location = /mcp`" in prose
-    assert "no generated proxy catch-all" in prose
+    assert "exactly one NPM-rendered `location /mcp`" in prose
+    assert "deny-only Advanced regex location" in prose
+    assert "verified-closed loopback target" in prose
     assert "must not include NPM's Force SSL configuration" in prose
+    assert "or `block-exploits.conf`" in prose
     assert "access logging is disabled inside both owned locations" in prose
     assert "before selecting or connecting" in readme
     assert "hard 30-second" in readme
     assert "hard five-minute GET/SSE" in readme
     assert "multi-process atomicity test" in readme
     assert "backend connection or firewall counter must remain at zero" in prose
+    assert "unapproved LAN/VPN source" in prose
+    assert "status codes need not match" in prose
     assert "never spooled to a temporary file" in prose
 
 
@@ -193,7 +198,15 @@ def test_optional_sealed_drop_in_uses_ingress_credential_namespace() -> None:
 
 
 def test_private_ingress_artifacts_contain_no_completed_external_coordinates() -> None:
-    artifacts = [UNIT, ENV_EXAMPLE, NETWORK_EXAMPLE, NPM_EXAMPLE, README, SEALED_DROP_IN]
+    artifacts = [
+        UNIT,
+        ENV_EXAMPLE,
+        NETWORK_EXAMPLE,
+        NPM_HOST_ADVANCED,
+        NPM_MCP_ADVANCED,
+        README,
+        SEALED_DROP_IN,
+    ]
     text = "\n".join(path.read_text(encoding="utf-8") for path in artifacts)
 
     assert "REPLACE_WITH_EXACT_PRIVATE_LISTENER_IP" in text

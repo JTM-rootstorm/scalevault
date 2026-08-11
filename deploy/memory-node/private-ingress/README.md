@@ -107,19 +107,34 @@ redirected, because a client might otherwise send its bearer before receiving
 the redirect. Route only exact HTTPS `/mcp`; every other path must return a
 fixed non-redirecting rejection. Never rewrite or forward an upstream redirect.
 
-In the Proxy Host UI, select scheme `http`, the exact private backend IP, and
-port `8443`. Keep the existing Let's Encrypt certificate, disable Force SSL,
-keep the reviewed Access List attached, and remove every NPM Custom Location.
-Then replace every placeholder in `npm-location.conf.example` and paste the
-entire template into the Proxy Host's Advanced field. Repeat its `allow`
-directive for every reviewed LAN/VPN source CIDR. NPM does not inject the UI
-Access List into Advanced-owned locations, so these explicit entries must
-exactly reproduce its source CIDRs. The literal catch-all `location /`
-prevents NPM from generating its normal forward-everything default location.
-The template's important properties are contractual:
+In the Proxy Host UI, keep the existing Let's Encrypt certificate, disable
+Force SSL, Asset Caching, Websocket Support, and Block Common Exploits, and
+attach one reviewed Access List containing source CIDRs only. Do not add
+username/password entries because NPM's Basic-auth integration can consume or
+clear ScaleVault's Authorization bearer. Retain `Satisfy All` as the fail-closed
+Access List mode.
 
-- upstream scheme is `http` and the destination is an exact private IP at port
-  `8443`, with no backend DNS resolution or custom CA handoff;
+The Proxy Host's default upstream is deliberately unused. Point it at an NPM
+loopback TCP port proven closed from inside the NPM container, so a future
+generator regression fails closed instead of exposing the Memory Node.
+
+Configure exactly one NPM Custom Location:
+
+- location: `/mcp`;
+- scheme: `http`;
+- forward host: the exact private Memory Node IP;
+- forward port: `8443`; and
+- Advanced field: the entire contents of
+  `npm-mcp-custom-location-advanced.conf.example`.
+
+Paste the entire `npm-host-advanced.conf.example` into the Proxy Host's main
+Advanced field. Its regex location rejects every path except exact `/mcp`
+without colliding with NPM's generated `location /` block. NPM renders the
+attached UI Access List inside the `/mcp` Custom Location, so its CIDRs remain
+defined in one place. The two templates' important properties are contractual:
+
+- the Custom Location's generated upstream uses scheme `http`, an exact private
+  IP, and port `8443`, with no backend DNS resolution or custom CA handoff;
 - `proxy_pass_request_headers off` reconstructs only the explicit request
   header allowlist in this fragment. NPM-generated `Forwarded`, `Via`,
   `X-Real-IP`, or `X-Forwarded-*` fields may still be added by the installed
@@ -140,20 +155,23 @@ The template's important properties are contractual:
   client reconnects; and
 - access logging is disabled inside both owned locations, so rejected paths and
   query strings are not logged. Caching and body capture are also disabled. Do
-  not enable debug
-  logging or any log format containing Authorization, request bodies, MCP
-  payloads, query strings, or response bodies.
+  not enable debug logging or any log format containing Authorization, request
+  bodies, MCP payloads, query strings, or response bodies.
 
 Inspect NPM's generated configuration after every creation, edit, or upgrade.
 If NPM cannot preserve the exact location, Access List ordering, exact private
 HTTP upstream, bounded forwarding metadata, strict header reconstruction, and
 no-retry behavior, do not activate the Proxy Host.
 
-The generated Proxy Host must contain exactly the template's `location = /mcp`
-and deny-only `location /` blocks, with no generated proxy catch-all. It must
-not include NPM's Force SSL configuration. A `301` client-HTTP response proves
+The generated Proxy Host must contain exactly one NPM-rendered `location /mcp`,
+the deny-only Advanced regex location, and NPM's generated default location
+pointing only to the verified-closed loopback target. The `/mcp` location must
+contain the rendered source-CIDR Access List after the custom Advanced
+directives, exactly one private backend `proxy_pass`, no `auth_basic`, and no
+directive that clears Authorization. It must not include NPM's Force SSL
+configuration or `block-exploits.conf`. A `301` client-HTTP response proves
 Force SSL is still active; a backend-generated rejection for an invalid path,
-query, or method proves an unintended proxy location remains active.
+query, or method proves the regex catch-all is missing or ineffective.
 
 Inspect the complete `nginx -T` output, not only this Proxy Host's location.
 Global `real_ip_header`, `set_real_ip_from`, `real_ip_recursive`,
@@ -199,16 +217,20 @@ Record sanitized evidence for all of these checks:
 8. Stopping the tunnel does not affect private Codex access, and stopping the
    private ingress does not affect the tunnel.
 9. From a non-VPN external network, every candidate public IP either has no
-   route or returns the same fixed content-free pre-upstream rejection for
-   client HTTP and HTTPS requests using the configured hostname as explicit SNI
-   and Host. Client HTTP must never redirect. An independent backend connection
-   or firewall counter must remain at zero throughout those probes. Also inspect
-   edge firewall, NAT, UPnP, NPM container port publication, and wildcard Proxy
-   Hosts. Private DNS absence alone is not proof.
+   route or returns a fixed content-free pre-upstream rejection for client HTTP
+   and HTTPS requests using the configured hostname as explicit SNI and Host.
+   Their status codes need not match because scheme and ACL rejections occur in
+   different Nginx phases. Client HTTP must never redirect. An independent
+   backend connection or firewall counter must remain at zero throughout those
+   probes. Also inspect edge firewall, NAT, UPnP, NPM container port publication,
+   and wildcard Proxy Hosts. Private DNS absence alone is not proof.
 10. Repeat the external HTTPS `/mcp` rejection with spoofed LAN values in
     `Forwarded`, `X-Forwarded-For`, and `X-Real-IP`. The response and backend
     connection/firewall counters must be identical to the unspoofed rejection,
     proving NPM did not rewrite Access List authority from caller headers.
+11. Repeat the same spoof probes from an unapproved LAN/VPN source. Inherited
+    private-network real-IP trust must not turn spoofed allowed-source values
+    into Access List authority, and backend counters must remain at zero.
 
 Repository tests cannot establish firewall, NPM, DNS, client certificate, NAT, or
 internet reachability state. Keep a dated, sanitized live acceptance record;
