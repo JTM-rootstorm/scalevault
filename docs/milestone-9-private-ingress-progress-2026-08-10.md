@@ -102,28 +102,46 @@ The separately managed reverse proxy reaches the HTTP backend. Its route guards,
 authenticated direct-private path, bounded SSE lifetime, revocation, observed
 connect-failure behavior, and LXC-side payload-log canaries pass.
 
-Milestone acceptance remains open on evidence that cannot be collected from the
-current NPM UI or approved client vantage:
+Subsequent SSH access to the NPM LXC made generated configuration inspection
+possible. `nginx -T` passed and the protected temporary dump was deleted after
+review. The running container reports NPM 2.12.6, OpenResty 1.27.1.2, and image
+ID `sha256:405c49a2d38c1c10fb4a99317d1a2b873b11732b62ad05079ce31566f0f553a1`.
+The generated host has the exact private backend, source-only Access List,
+`satisfy all`, bounded request and response behavior, disabled retry and
+redirect handling, static-only ACME locations, and zero canary matches in its
+access log, error log, and container output.
 
-1. The operator cannot currently obtain a shell or complete `nginx -T` output
-   from the containerized NPM deployment. Generated Custom Location ordering,
-   source ACL rendering, real-IP configuration, static-only ACME handling, and
-   the installed NPM/Nginx versions and image digest therefore remain
-   unverified.
-2. A genuinely external source and an unapproved LAN/VPN source must repeat the
-   baseline and spoofed `Forwarded`, `X-Forwarded-For`, and `X-Real-IP` probes
-   while the backend counter remains unchanged. The approved LAN workstation
-   cannot prove that the edge ACL resists an allowed-address spoof.
-3. NPM access, error, and container logs must be scanned for the same canaries.
-   The completed zero-match scan covers only the Memory API and ingress
-   journals.
-4. An actual Codex client should observe reconnect after the five-minute SSE
+That inspection also found two activation blockers:
+
+- Block Common Exploits remains enabled at both server and `/mcp` scope, so
+  server rewrite responses can bypass the owned fixed-rejection and logging
+  behavior.
+- NPM globally trusts `X-Real-IP` from all RFC1918 networks with recursive
+  rewriting. A credential-free request from an unapproved source returned edge
+  `403` with no backend packets, while the same source supplying an allowed
+  `X-Real-IP` returned backend `401` and contacted the Memory Node. This is a
+  confirmed Access List bypass.
+
+Milestone acceptance remains open until:
+
+1. Block Common Exploits is disabled in the Proxy Host UI, the updated host
+   Advanced template is installed, and a fresh `nginx -T` confirms the server
+   contains `set_real_ip_from unix:;`, `real_ip_recursive off;`, and no
+   `block-exploits.conf` include.
+2. The unapproved-source baseline and spoofed `Forwarded`,
+   `X-Forwarded-For`, and `X-Real-IP` probes all remain at the edge with zero
+   backend packets after the fix. A genuinely external source repeats the same
+   gate.
+3. A fresh authenticated canary permits NPM logs to be searched for the exact
+   bearer before its protected artifact is destroyed. Existing NPM and LXC
+   marker and payload scans have zero matches.
+4. An actual Codex client observes reconnect after the five-minute SSE
    lifetime. The completed raw transport probe proves a fresh authenticated GET
    succeeds, not client-specific automatic reconnect behavior.
-5. A live ChatGPT Web read through the unchanged Secure MCP Tunnel remains an
-   account-side gate. Repository and host evidence proves tunnel readiness and
-   isolation but cannot substitute for that client observation.
+5. A live ChatGPT Web read through the unchanged Secure MCP Tunnel passes. This
+   remains an account-side gate; repository and host evidence proves tunnel
+   readiness and isolation but cannot substitute for that client observation.
 
-The unavailable generated proxy configuration remains a documented evidence
-gap rather than an inferred pass. The live results above establish current
-behavior only; they do not prove future NPM regeneration preserves it.
+The live functional results remain valid, but the Proxy Host must not be treated
+as accepted while the confirmed Access List bypass and exploit-filter mismatch
+remain active.

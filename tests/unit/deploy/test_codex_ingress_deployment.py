@@ -91,6 +91,13 @@ def test_npm_template_is_exact_verified_bounded_and_never_retries() -> None:
     pre_location, _ = host.split("location ~ ^/(?!mcp$) {", maxsplit=1)
     assert "location ~ ^/(?!mcp$) {" in host
     assert "location / {" not in host
+    assert host.count("set_real_ip_from unix:;") == 1
+    assert host.count("real_ip_recursive off;") == 1
+    assert "set_real_ip_from unix:;" in pre_location
+    assert "real_ip_recursive off;" in pre_location
+    assert "10.0.0.0/8" not in host
+    assert "172.16.0.0/12" not in host
+    assert "192.168.0.0/16" not in host
     assert "access_log off;" not in pre_location
     assert "access_log off;" in host
     assert "return 404" in host
@@ -162,6 +169,10 @@ def test_runbook_requires_live_private_and_no_payload_log_evidence() -> None:
     assert "Client HTTP application requests must never redirect" in prose
     assert "complete `nginx -T` output" in readme
     assert "Global `real_ip_header`, `set_real_ip_from`, `real_ip_recursive`" in readme
+    assert "`set_real_ip_from unix:;` and `real_ip_recursive off;`" in prose
+    assert "replaces NPM's inherited broad RFC1918 trust" in prose
+    assert "must also contain exactly one `set_real_ip_from unix:;`" in prose
+    assert "changes from edge `403` to backend `401`" in prose
     assert "spoofed LAN values" in readme
     assert "`Forwarded`, `X-Forwarded-For`, and `X-Real-IP`" in readme
     assert "shared or public edge listener is acceptable only" in readme

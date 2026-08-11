@@ -138,6 +138,10 @@ the attached UI Access List inside the `/mcp` Custom Location, so its CIDRs
 remain defined in one place. The two templates' important properties are
 contractual:
 
+- the host Advanced field defines `set_real_ip_from unix:;` and
+  `real_ip_recursive off;`. Defining a server-level source list replaces NPM's
+  inherited broad RFC1918 trust; because this Proxy Host accepts TCP, no caller
+  can make `X-Real-IP` replace the kernel peer address used by `allow`/`deny`;
 - the Custom Location's generated upstream uses scheme `http`, an exact private
   IP, and port `8443`, with no backend DNS resolution or custom CA handoff;
 - `proxy_pass_request_headers off` reconstructs only the explicit request
@@ -177,6 +181,14 @@ directive that clears Authorization. It must not include NPM's Force SSL
 configuration or `block-exploits.conf`. A `301` client-HTTP response proves
 Force SSL is still active; a backend-generated rejection for an invalid path,
 query, or method proves the regex catch-all is missing or ineffective.
+
+The generated server must also contain exactly one `set_real_ip_from unix:;`
+and `real_ip_recursive off;` before its locations. If `nginx -T` shows only the
+NPM-global RFC1918 `set_real_ip_from` entries, the UI Access List is bypassable:
+an unapproved private-network source can supply an allowed `X-Real-IP` value and
+change `$remote_addr` before `allow`/`deny`. Treat any credential-free probe that
+changes from edge `403` to backend `401` after adding `X-Real-IP` as a confirmed
+activation blocker.
 
 NPM's generated Let's Encrypt handler must contain both
 `location ^~ /.well-known/acme-challenge/`, which uses only its dedicated
