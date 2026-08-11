@@ -1,8 +1,9 @@
 # ADR 0020: Relay enrollment and bounded transport
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-08-10
 - Supersedes: None
+- Superseded by: ADR 0022
 - Extends: ADR 0001, ADR 0006, ADR 0008, ADR 0010, ADR 0017, and ADR 0018
 
 ## Context

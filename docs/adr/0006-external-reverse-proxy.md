@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-03
+- Amended by: ADR 0022
 
 ## Context
 
@@ -21,6 +22,10 @@ ScaleVault does not install or manage Nginx inside the canonical Memory Node
 LXC. Application and operator listeners default to loopback. The OpenAI tunnel
 client connects to the Memory API over loopback, while public plugin traffic
 continues to terminate at the separate generic relay defined by ADR 0001.
+
+ADR 0022 removes that public plugin path from the active deployment. The only
+planned reverse-proxy use is private HTTPS ingress for authenticated Codex
+devices after they join the owner-controlled VPN or private LAN.
 
 If a future private-LAN HTTPS profile is enabled, the external Nginx Proxy
 Manager instance owns TLS termination, request limits, and routing. That profile

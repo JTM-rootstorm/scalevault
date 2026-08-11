@@ -6,7 +6,7 @@ documentation and do not change these decisions implicitly.
 
 | ADR | Status | Decision |
 |---|---|---|
-| [0001](0001-canonical-private-memory-node.md) | Accepted | Keep one canonical private Memory Node and terminate public traffic at the generic relay. |
+| [0001](0001-canonical-private-memory-node.md) | Accepted | Keep one canonical private Memory Node as the sole semantic authority; ADR 0022 removes the former public-relay path. |
 | [0002](0002-postgresql-events-and-projections.md) | Accepted | Use PostgreSQL as the semantic source of truth with an event log and rebuildable projections; do not add Redis in v1. |
 | [0003](0003-forgejo-single-writer-archive.md) | Accepted | Allow only the Forgejo archive exporter to write the archive. |
 | [0004](0004-github-append-only-ingress.md) | Accepted | Treat GitHub.com ingress as an append-only transport, not an authority or archive. |
@@ -25,8 +25,9 @@ documentation and do not change these decisions implicitly.
 | [0017](0017-sealed-canonical-memory-content.md) | Accepted | Store protected content only in versioned authenticated envelopes backed by external per-memory keys. |
 | [0018](0018-request-scoped-bearer-authentication.md) | Accepted | Authenticate direct-private clients with request-scoped bearer credentials and database-derived identity. |
 | [0019](0019-chatgpt-secure-tunnel-read-access.md) | Accepted | Expose a query-only ChatGPT MCP surface through a pinned, single-workspace secure-tunnel bearer identity. |
-| [0020](0020-relay-enrollment-and-transport.md) | Accepted | Bind one-use node enrollment, mTLS connection identity, and bounded relay transport without granting memory authority. |
-| [0021](0021-relay-oauth-and-forwarded-identity.md) | Accepted | Bind public OAuth subjects to installations and canonical relay identities through body-bound, replay-safe signed assertions. |
+| [0020](0020-relay-enrollment-and-transport.md) | Superseded | Bind one-use node enrollment, mTLS connection identity, and bounded relay transport without granting memory authority. |
+| [0021](0021-relay-oauth-and-forwarded-identity.md) | Superseded | Bind public OAuth subjects to installations and canonical relay identities through body-bound, replay-safe signed assertions. |
+| [0022](0022-private-single-owner-access-topology.md) | Accepted | Use Secure MCP Tunnel for ChatGPT Web and per-device direct-private identities over the owner's VPN; do not deploy a public relay. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries

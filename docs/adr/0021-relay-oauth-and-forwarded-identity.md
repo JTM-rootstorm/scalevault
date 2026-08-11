@@ -1,8 +1,9 @@
 # ADR 0021: Relay OAuth and forwarded request identity
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-08-10
 - Supersedes: None
+- Superseded by: ADR 0022
 - Extends: ADR 0001, ADR 0008, ADR 0010, ADR 0011, ADR 0017, ADR 0018, ADR 0019, and ADR 0020
 
 ## Context

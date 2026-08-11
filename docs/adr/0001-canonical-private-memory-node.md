@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-03
+- Amended by: ADR 0022
 
 ## Context
 
@@ -21,6 +22,10 @@ The canonical LXC is not exposed directly to the public internet. Public plugin
 traffic terminates at the generic relay and reaches the Memory Node through the
 outbound node-agent path. The relay remains a transport and does not become a
 second Memory Node.
+
+ADR 0022 removes public plugin traffic and the generic relay from the active v1
+deployment. Its private ChatGPT tunnel and VPN-reachable direct Codex paths
+preserve this ADR's canonical-node boundary.
 
 ## Consequences
 
