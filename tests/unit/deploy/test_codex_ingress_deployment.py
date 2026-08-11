@@ -80,7 +80,15 @@ def test_environment_template_freezes_profile_port_and_exact_placeholders() -> N
 
 def test_npm_template_is_exact_verified_bounded_and_never_retries() -> None:
     template = NPM_EXAMPLE.read_text(encoding="utf-8")
+    template_prose = " ".join(template.split())
 
+    pre_location, locations = template.split("location = /mcp", maxsplit=1)
+    exact_location, catch_all = locations.split("location /", maxsplit=1)
+    assert "Remove every NPM Custom Location" in template_prose
+    assert "Proxy Host's Advanced field after" in template_prose
+    assert "access_log off;" not in pre_location
+    assert "access_log off;" in exact_location
+    assert "access_log off;" in catch_all
     assert "location = /mcp" in template
     assert "location /" in template
     assert "return 404" in template
@@ -152,6 +160,14 @@ def test_runbook_requires_live_private_and_no_payload_log_evidence() -> None:
     assert "spoofed LAN values" in readme
     assert "`Forwarded`, `X-Forwarded-For`, and `X-Real-IP`" in readme
     assert "shared or public edge listener is acceptable only" in readme
+    assert "paste the entire template into the Proxy Host's" in prose
+    assert "remove every NPM Custom Location" in prose
+    assert "does not inject the UI Access List" in prose
+    assert "scheme `http`" in readme
+    assert "exactly the template's `location = /mcp`" in prose
+    assert "no generated proxy catch-all" in prose
+    assert "must not include NPM's Force SSL configuration" in prose
+    assert "access logging is disabled inside both owned locations" in prose
     assert "before selecting or connecting" in readme
     assert "hard 30-second" in readme
     assert "hard five-minute GET/SSE" in readme

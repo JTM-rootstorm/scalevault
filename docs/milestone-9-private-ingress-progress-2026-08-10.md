@@ -44,34 +44,34 @@ Milestone 9 acceptance.
   credentials remain only in protected live configuration.
 - The canonical API, ChatGPT tunnel, and private ingress were all active after
   the isolated ingress restart.
+- After the NPM upstream changed to HTTP, credential-free HTTPS requests to
+  exact `/mcp` returned the expected application `401`, proving the approved
+  NPM route reaches the private HTTP listener without forwarding credentials.
 
 ## Open activation gate
 
-The separately managed reverse proxy has the new backend port, but it still
-initiates TLS to the now-HTTP backend. The ingress recorded that attempt as an
-invalid HTTP request. Current credential-free probes therefore return `502`
-over HTTPS, redirect plaintext HTTP, and do not enforce the exact path at the
-edge.
+The separately managed reverse proxy now reaches the HTTP backend. It still
+redirects plaintext HTTP, and invalid paths, query strings, and methods still
+reach the application and return its generic rejection instead of being
+rejected before an upstream connection. No bearer was sent while those edge
+gates remained open.
 
 Milestone acceptance remains open until the proxy administrator:
 
-1. switches the NPM upstream scheme to HTTP for the exact private address and
-   port while retaining the already-active HTTP ingress, exact NPM `/32`, and
-   LXC firewall gate;
-2. keeps Let's Encrypt TLS and its private key only at NPM;
-3. disables client plaintext redirects in favor of a fixed content-free
+1. keeps Let's Encrypt TLS and its private key only at NPM;
+2. disables client plaintext redirects in favor of a fixed content-free
    rejection;
-4. routes exact raw `/mcp` only and rejects queries, aliases, and other paths
+3. routes exact raw `/mcp` only and rejects queries, aliases, and other paths
    before opening an upstream connection;
-5. proves NPM-generated forwarding fields are bounded and discarded before
+4. proves NPM-generated forwarding fields are bounded and discarded before
    application authentication, and never become canonical authority;
-6. preserves the LAN/VPN access-list rejection before upstream selection;
-7. disables upstream retry, response buffering, compression, access logging,
+5. preserves the LAN/VPN access-list rejection before upstream selection;
+6. disables upstream retry, response buffering, compression, access logging,
    and request-body spooling; and
-8. inspects complete `nginx -T` real-IP and Access List ordering, then proves
+7. inspects complete `nginx -T` real-IP and Access List ordering, then proves
    spoofed forwarding headers cannot turn an external source into a LAN/VPN
    source; and
-9. passes live authenticated initialize/read/mutation, revocation, SSE
+8. passes live authenticated initialize/read/mutation, revocation, SSE
    reconnect, no-retry, log-canary, and external-source probes.
 
 The generated proxy configuration must be inspected after the UI saves it.

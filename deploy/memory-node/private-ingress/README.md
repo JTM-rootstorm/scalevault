@@ -107,8 +107,16 @@ redirected, because a client might otherwise send its bearer before receiving
 the redirect. Route only exact HTTPS `/mcp`; every other path must return a
 fixed non-redirecting rejection. Never rewrite or forward an upstream redirect.
 
-Adapt `npm-location.conf.example` for the installed NPM version. Its important
-properties are contractual:
+In the Proxy Host UI, select scheme `http`, the exact private backend IP, and
+port `8443`. Keep the existing Let's Encrypt certificate, disable Force SSL,
+keep the reviewed Access List attached, and remove every NPM Custom Location.
+Then replace every placeholder in `npm-location.conf.example` and paste the
+entire template into the Proxy Host's Advanced field. Repeat its `allow`
+directive for every reviewed LAN/VPN source CIDR. NPM does not inject the UI
+Access List into Advanced-owned locations, so these explicit entries must
+exactly reproduce its source CIDRs. The literal catch-all `location /`
+prevents NPM from generating its normal forward-everything default location.
+The template's important properties are contractual:
 
 - upstream scheme is `http` and the destination is an exact private IP at port
   `8443`, with no backend DNS resolution or custom CA handoff;
@@ -130,7 +138,9 @@ properties are contractual:
   explicitly bounded; the application independently enforces a hard 30-second
   POST/DELETE lifetime and a hard five-minute GET/SSE lifetime, after which the
   client reconnects; and
-- access logging, caching, and body capture are disabled. Do not enable debug
+- access logging is disabled inside both owned locations, so rejected paths and
+  query strings are not logged. Caching and body capture are also disabled. Do
+  not enable debug
   logging or any log format containing Authorization, request bodies, MCP
   payloads, query strings, or response bodies.
 
@@ -138,6 +148,12 @@ Inspect NPM's generated configuration after every creation, edit, or upgrade.
 If NPM cannot preserve the exact location, Access List ordering, exact private
 HTTP upstream, bounded forwarding metadata, strict header reconstruction, and
 no-retry behavior, do not activate the Proxy Host.
+
+The generated Proxy Host must contain exactly the template's `location = /mcp`
+and deny-only `location /` blocks, with no generated proxy catch-all. It must
+not include NPM's Force SSL configuration. A `301` client-HTTP response proves
+Force SSL is still active; a backend-generated rejection for an invalid path,
+query, or method proves an unintended proxy location remains active.
 
 Inspect the complete `nginx -T` output, not only this Proxy Host's location.
 Global `real_ip_header`, `set_real_ip_from`, `real_ip_recursive`,

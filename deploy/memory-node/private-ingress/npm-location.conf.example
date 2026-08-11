@@ -1,8 +1,12 @@
-# Policy template only. Adapt it through the installed Nginx Proxy Manager
-# version and inspect the generated configuration before activation.
+# Remove every NPM Custom Location, then paste this entire template into the
+# Proxy Host's Advanced field after replacing every placeholder. Repeat the
+# allow directive for each reviewed LAN/VPN source CIDR. Inspect the generated
+# configuration before activation.
 # The Proxy Host must use the exact TLS hostname, have Force SSL redirects
 # disabled, and have an NPM Access List that rejects non-LAN/VPN clients before
 # upstream selection. A shared edge listener is allowed only with that ordering.
+# The literal catch-all location suppresses NPM's generated default proxy
+# location. The two locations below are the only permitted locations.
 
 location = /mcp {
     allow REPLACE_WITH_APPROVED_LAN_OR_VPN_CIDR;
@@ -45,5 +49,6 @@ location = /mcp {
 }
 
 location / {
+    access_log off;
     return 404;
 }
