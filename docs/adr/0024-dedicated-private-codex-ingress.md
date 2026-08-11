@@ -4,6 +4,7 @@
 - Date: 2026-08-10
 - Extends: ADR 0006, ADR 0018, ADR 0022, and ADR 0023
 - Amends: ADR 0022
+- Amended by: ADR 0025
 
 ## Context
 
@@ -54,8 +55,6 @@ The production process requires the explicit profile
   query, fragment, wildcard, or user information;
 - one or more private trusted-proxy host routes (`/32` or `/128`) containing
   only an immediate proxy socket peer;
-- a backend TLS certificate and private key loaded through the ingress
-  service's systemd credential namespace;
 - metrics and ChatGPT tunnel support disabled; and
 - the client-token pepper loaded only through the ingress service's systemd
   credential path.
@@ -80,10 +79,13 @@ Before credential lookup, the private boundary requires:
 - exactly one external `Host`;
 - zero or one `Origin`, which when present is exactly the HTTPS origin for that
   host; and
-- no `Forwarded`, `Via`, `X-Real-IP`, or `X-Forwarded-*` field.
+- no trusted `Forwarded`, `Via`, `X-Real-IP`, or `X-Forwarded-*` field. ADR
+  0025 permits the exact proxy peer's bounded automatically generated fields
+  only when the ingress discards them before authentication and dispatch.
 
-Duplicate singleton headers, ambiguous encodings, redirects, CORS preflights,
-and forwarding fields fail closed. Header count, header bytes, and the 1 MiB
+Duplicate singleton headers, ambiguous encodings, redirects, and CORS
+preflights fail closed. Forwarding fields fail closed unless ADR 0025's exact
+discard-only boundary applies. Header count, header bytes, and the 1 MiB
 request ceiling remain bounded by ADR 0023. The validated external `Host` and
 `Origin` are normalized to the loopback MCP contract before the request reaches
 the direct bearer middleware. No network field enters the canonical tenant,
@@ -106,20 +108,20 @@ The external proxy:
   ScaleVault upstream;
 - routes exact `/mcp` only and returns a non-redirecting rejection for every
   other path;
-- strips every forwarding and real-IP header before the upstream request;
+- does not rely on forwarding or real-IP headers for authority; ADR 0025
+  permits NPM's generated fields only because the exact-peer ingress discards
+  them before authentication and dispatch;
 - preserves the single `Authorization` field and required MCP headers;
 - performs no upstream retry or failover for POST requests;
 - caps and buffers request bodies, disables response buffering for SSE, and
   never spools or logs MCP bodies or authorization values; and
-- forwards with HTTPS to the exact private backend address and port, verifies a
-  pinned private CA and exact backend certificate identity, and has no public
-  DNS or NAT exposure.
+- forwards with HTTP to the exact private backend address and port and has no
+  public DNS or NAT exposure.
 
-Client TLS terminates at the separately managed proxy and the proxy establishes
-a separately authenticated TLS connection to the LXC. Backend certificate
-verification may not be disabled merely because the hop is confined to the
-operator-controlled private network. The proxy remains a live
-bearer-and-payload-processing trust boundary.
+Client TLS terminates at the separately managed proxy. ADR 0025 replaces the
+independently authenticated backend-TLS requirement with an explicitly trusted
+private HTTP hop from one exact proxy peer. The proxy and private network remain
+live bearer-and-payload-processing trust boundaries.
 
 ## Consequences
 

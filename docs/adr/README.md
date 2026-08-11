@@ -30,6 +30,7 @@ documentation and do not change these decisions implicitly.
 | [0022](0022-private-single-owner-access-topology.md) | Accepted | Use Secure MCP Tunnel for ChatGPT Web and per-device direct-private identities over the owner's VPN; do not deploy a public relay. |
 | [0023](0023-bounded-loopback-mcp-http-boundary.md) | Accepted | Pin loopback MCP transport security, request bounds, and forwarding-header rejection without weakening the tunnel boundary. |
 | [0024](0024-dedicated-private-codex-ingress.md) | Accepted | Run a separate direct-only private listener behind the LAN/VPN HTTPS proxy while keeping ChatGPT and operator routes on loopback. |
+| [0025](0025-proxy-terminated-tls-for-private-ingress.md) | Accepted | Terminate Let's Encrypt TLS at Nginx Proxy Manager and use an exact-source private HTTP hop to the Codex ingress. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries
