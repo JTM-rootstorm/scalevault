@@ -39,12 +39,6 @@ def codex_ingress_settings(**overrides: object) -> dict[str, object]:
         "codex_ingress_port": 8443,
         "codex_ingress_external_hostname": "memory.example.test",
         "codex_ingress_trusted_proxy_cidrs": (ip_network("10.0.0.10/32"),),
-        "codex_ingress_tls_certificate": Path(
-            "/run/credentials/kivra-memory-codex-ingress.service/backend-tls-cert"
-        ),
-        "codex_ingress_tls_private_key": Path(
-            "/run/credentials/kivra-memory-codex-ingress.service/backend-tls-key"
-        ),
         **CODEX_INGRESS_AUTH,
     }
     values.update(overrides)
@@ -95,8 +89,6 @@ def test_codex_private_ingress_is_an_explicit_narrow_production_profile() -> Non
             "CIDRs must be exact hosts",
         ),
         ("metrics_enabled", True, "metrics must be disabled"),
-        ("codex_ingress_tls_certificate", Path("/tmp/cert"), "TLS certificate"),
-        ("codex_ingress_tls_private_key", Path("/tmp/key"), "TLS private key"),
     ],
 )
 def test_codex_private_ingress_rejects_unsafe_configuration(

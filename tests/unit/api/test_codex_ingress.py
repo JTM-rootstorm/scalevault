@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 from ipaddress import ip_address, ip_network
-from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
@@ -127,7 +126,7 @@ def scope(
     path: str = "/mcp",
     raw_path: bytes = b"/mcp",
     query: bytes = b"",
-    scheme: str = "https",
+    scheme: str = "http",
     client: tuple[str, int] = ("10.0.0.10", 41234),
     headers: Iterable[tuple[bytes, bytes]] | None = None,
 ) -> Scope:
@@ -292,7 +291,7 @@ async def test_boundary_accepts_bodyless_mcp_methods(method: str) -> None:
         scope(path="/mcp/", raw_path=b"/mcp/"),
         scope(path="/chatgpt/mcp", raw_path=b"/chatgpt/mcp"),
         scope(query=b"x=1"),
-        scope(scheme="http"),
+        scope(scheme="https"),
     ],
 )
 async def test_boundary_rejects_non_exact_route_scheme_or_method(request_scope: Scope) -> None:
@@ -336,6 +335,10 @@ async def test_boundary_rejects_wrong_or_ambiguous_authority(
         b"transfer-encoding",
         b"mcp-protocol-version",
         b"mcp-session-id",
+        b"forwarded",
+        b"via",
+        b"x-real-ip",
+        b"x-forwarded-for",
     ],
 )
 async def test_boundary_rejects_security_sensitive_duplicate_headers(
@@ -348,6 +351,10 @@ async def test_boundary_rejects_security_sensitive_duplicate_headers(
         b"transfer-encoding": b"chunked",
         b"mcp-protocol-version": b"2025-06-18",
         b"mcp-session-id": b"synthetic-session",
+        b"forwarded": b"for=203.0.113.1",
+        b"via": b"1.1 synthetic-proxy",
+        b"x-real-ip": b"203.0.113.1",
+        b"x-forwarded-for": b"203.0.113.1",
     }
     headers = [(b"host", b"memory.example.test"), (b"content-length", b"0")]
     if duplicated_header == b"content-length":
@@ -377,9 +384,18 @@ async def test_boundary_rejects_content_length_with_transfer_encoding() -> None:
 
 @pytest.mark.parametrize(
     "forwarding_header",
-    [b"forwarded", b"via", b"x-real-ip", b"x-forwarded-for", b"x-forwarded-proto"],
+    [
+        b"forwarded",
+        b"via",
+        b"x-real-ip",
+        b"x-forwarded-for",
+        b"x-forwarded-proto",
+        b"x-forwarded-synthetic",
+    ],
 )
-async def test_boundary_rejects_every_forwarding_header(forwarding_header: bytes) -> None:
+async def test_boundary_discards_forwarding_headers_without_granting_authority(
+    forwarding_header: bytes,
+) -> None:
     reached, messages = await call(
         scope(
             headers=[
@@ -390,12 +406,28 @@ async def test_boundary_rejects_every_forwarding_header(forwarding_header: bytes
         )
     )
 
-    assert reached is None
-    assert messages[0]["status"] == 400
+    assert reached is not None
+    assert reached["client"] == ("127.0.0.1", 0)
+    assert not any(
+        name.lower() in {b"forwarded", b"via", b"x-real-ip"}
+        or name.lower().startswith(b"x-forwarded-")
+        for name, _value in reached["headers"]
+    )
+    assert messages[0]["status"] == 204
+    assert_safe_http_rejection(messages)
 
 
 async def test_boundary_rejects_peer_outside_exact_proxy_allowlist() -> None:
-    reached, messages = await call(scope(client=("10.0.0.11", 41234)))
+    reached, messages = await call(
+        scope(
+            client=("10.0.0.11", 41234),
+            headers=[
+                (b"host", b"memory.example.test"),
+                (b"content-length", b"0"),
+                (b"x-forwarded-for", b"10.0.0.10"),
+            ],
+        )
+    )
 
     assert reached is None
     assert messages[0]["status"] == 403
@@ -408,6 +440,18 @@ async def test_boundary_preserves_header_and_body_bounds() -> None:
                 (b"host", b"memory.example.test"),
                 (b"x-large", b"a" * MAX_MCP_HEADER_BYTES),
                 (b"content-length", b"0"),
+            ]
+        )
+    )
+    assert reached is None
+    assert messages[0]["status"] == 431
+
+    reached, messages = await call(
+        scope(
+            headers=[
+                (b"host", b"memory.example.test"),
+                (b"content-length", b"0"),
+                (b"x-forwarded-for", b"a" * MAX_MCP_HEADER_BYTES),
             ]
         )
     )
@@ -448,7 +492,7 @@ async def test_composed_ingress_authenticates_all_sdk_methods() -> None:
         app.router.lifespan_context(app),
         AsyncClient(
             transport=transport,
-            base_url="https://memory.example.test",
+            base_url="http://memory.example.test",
         ) as client,
     ):
         initialized = await client.post("/mcp", json=initialize, headers=authenticated)
@@ -632,7 +676,7 @@ async def test_post_requires_one_canonical_content_length(
     assert messages[0]["status"] == 400
 
 
-def test_main_runs_only_the_exact_bounded_tls_listener(
+def test_main_runs_only_the_exact_bounded_http_listener(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_settings = Settings.model_construct(
@@ -640,12 +684,6 @@ def test_main_runs_only_the_exact_bounded_tls_listener(
         codex_ingress_host=ip_address("10.0.0.78"),
         codex_ingress_port=8443,
         codex_ingress_max_concurrency=4,
-        codex_ingress_tls_certificate=Path(
-            "/run/credentials/kivra-memory-codex-ingress.service/backend-tls-cert"
-        ),
-        codex_ingress_tls_private_key=Path(
-            "/run/credentials/kivra-memory-codex-ingress.service/backend-tls-key"
-        ),
         log_level="INFO",
     )
     runtime = object()
@@ -686,8 +724,6 @@ def test_main_runs_only_the_exact_bounded_tls_listener(
         "access_log": False,
         "limit_concurrency": 4,
         "timeout_keep_alive": 5,
-        "ssl_certfile": ("/run/credentials/kivra-memory-codex-ingress.service/backend-tls-cert"),
-        "ssl_keyfile": "/run/credentials/kivra-memory-codex-ingress.service/backend-tls-key",
     }
 
 

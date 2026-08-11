@@ -55,8 +55,6 @@ class Settings(BaseSettings):
     codex_ingress_port: int = Field(default=8443, ge=1, le=65535)
     codex_ingress_external_hostname: str | None = None
     codex_ingress_trusted_proxy_cidrs: tuple[IPNetwork, ...] = ()
-    codex_ingress_tls_certificate: Path | None = None
-    codex_ingress_tls_private_key: Path | None = None
     codex_ingress_max_concurrency: int = Field(default=4, ge=1, le=32)
     database_url: PostgresDsn | None = None
     database_connect_timeout_seconds: int = Field(default=3, ge=1, le=30)
@@ -106,14 +104,6 @@ class Settings(BaseSettings):
                 for network in self.codex_ingress_trusted_proxy_cidrs
             ):
                 raise ValueError("Codex ingress trusted proxy CIDRs must be exact hosts")
-            if self.codex_ingress_tls_certificate != Path(
-                "/run/credentials/kivra-memory-codex-ingress.service/backend-tls-cert"
-            ):
-                raise ValueError("Codex ingress TLS certificate must use the production boundary")
-            if self.codex_ingress_tls_private_key != Path(
-                "/run/credentials/kivra-memory-codex-ingress.service/backend-tls-key"
-            ):
-                raise ValueError("Codex ingress TLS private key must use the production boundary")
             if self.chatgpt_secure_tunnel_enabled:
                 raise ValueError("ChatGPT secure tunnel is unavailable on Codex ingress")
             if self.metrics_enabled:
@@ -122,8 +112,6 @@ class Settings(BaseSettings):
             self.codex_ingress_host is not None
             or self.codex_ingress_external_hostname is not None
             or self.codex_ingress_trusted_proxy_cidrs
-            or self.codex_ingress_tls_certificate is not None
-            or self.codex_ingress_tls_private_key is not None
         ):
             raise ValueError("Codex ingress settings require the Codex ingress server profile")
         if (self.client_token_pepper_credential is None) != (

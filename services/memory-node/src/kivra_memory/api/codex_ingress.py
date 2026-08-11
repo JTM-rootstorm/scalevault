@@ -7,7 +7,6 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from ipaddress import ip_address
-from pathlib import Path
 
 import uvicorn
 from pydantic import ValidationError
@@ -46,12 +45,11 @@ _INGRESS_SINGLETON_HEADERS = frozenset(
         b"mcp-session-id",
     }
 )
-_DISALLOWED_FORWARDING_HEADERS = frozenset({b"forwarded", b"via", b"x-real-ip"})
-_STRIPPED_EXTERNAL_HEADERS = frozenset({b"origin"})
+_FORWARDING_HEADERS = frozenset({b"forwarded", b"via", b"x-real-ip"})
 
 
 class CodexPrivateIngressBoundaryMiddleware:
-    """Validate one trusted TLS proxy hop and normalize into the loopback contract."""
+    """Validate one trusted reverse-proxy hop and normalize into the loopback contract."""
 
     def __init__(self, app: ASGIApp, *, settings: Settings) -> None:
         self._app = app
@@ -87,7 +85,7 @@ class CodexPrivateIngressBoundaryMiddleware:
             if raw_name.lower() == b"host"
             else (raw_name, raw_value)
             for raw_name, raw_value in scope["headers"]
-            if raw_name.lower() not in _STRIPPED_EXTERNAL_HEADERS
+            if raw_name.lower() != b"origin" and not _is_forwarding_header(raw_name.lower())
         ]
         response_started = False
         response_complete = False
@@ -119,7 +117,7 @@ class CodexPrivateIngressBoundaryMiddleware:
         method = scope.get("method")
         if (
             method not in {"GET", "POST", "DELETE"}
-            or scope.get("scheme") != "https"
+            or scope.get("scheme") != "http"
             or scope.get("path") != "/mcp"
             or scope.get("raw_path") != b"/mcp"
             or scope.get("query_string") != b""
@@ -146,10 +144,8 @@ class CodexPrivateIngressBoundaryMiddleware:
                 return 431
             counts[name] = counts.get(name, 0) + 1
             values[name] = raw_value
-            if (
-                name in _DISALLOWED_FORWARDING_HEADERS
-                or name.startswith(b"x-forwarded-")
-                or (name in _INGRESS_SINGLETON_HEADERS and counts[name] > 1)
+            if (name in _INGRESS_SINGLETON_HEADERS and counts[name] > 1) or (
+                _is_forwarding_header(name) and counts[name] > 1
             ):
                 return 400
 
@@ -194,6 +190,10 @@ def _parse_content_length(value: bytes) -> int | None:
     if not value or not value.isdigit() or (value.startswith(b"0") and value != b"0"):
         return None
     return int(value)
+
+
+def _is_forwarding_header(name: bytes) -> bool:
+    return name in _FORWARDING_HEADERS or name.startswith(b"x-forwarded-")
 
 
 async def _reject(send: Send, *, status: int) -> None:
@@ -265,8 +265,6 @@ def main() -> None:
             raise RuntimeError("invalid_codex_ingress_configuration")
         sealed_runtime = SealedRuntime.from_settings(settings)
         runtime = MemoryNodeRuntime.from_settings(settings, sealed_runtime=sealed_runtime)
-        certificate = _required_path(settings.codex_ingress_tls_certificate)
-        private_key = _required_path(settings.codex_ingress_tls_private_key)
         host = settings.codex_ingress_host
         if host is None:
             raise RuntimeError("invalid_codex_ingress_configuration")
@@ -285,15 +283,7 @@ def main() -> None:
         access_log=False,
         limit_concurrency=settings.codex_ingress_max_concurrency,
         timeout_keep_alive=5,
-        ssl_certfile=str(certificate),
-        ssl_keyfile=str(private_key),
     )
-
-
-def _required_path(value: Path | None) -> Path:
-    if value is None:
-        raise RuntimeError("invalid_codex_ingress_configuration")
-    return value
 
 
 __all__ = [
