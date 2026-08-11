@@ -1,6 +1,7 @@
 # Paste this entire template into the Proxy Host's Advanced field.
 # Keep exactly one NPM Custom Location for /mcp. This regex catch-all rejects
-# every other path without colliding with NPM's generated location / block.
+# every other application path without colliding with NPM's generated location
+# / block. NPM's higher-priority static ACME challenge handler remains separate.
 
 location ~ ^/(?!mcp$) {
     access_log off;

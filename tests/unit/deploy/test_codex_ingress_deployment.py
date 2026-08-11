@@ -13,6 +13,11 @@ NETWORK_EXAMPLE = DEPLOY_ROOT / "kivra-memory-codex-ingress-network.conf.example
 NPM_HOST_ADVANCED = DEPLOY_ROOT / "npm-host-advanced.conf.example"
 NPM_MCP_ADVANCED = DEPLOY_ROOT / "npm-mcp-custom-location-advanced.conf.example"
 README = DEPLOY_ROOT / "README.md"
+ADR_INDEX = ROOT / "docs/adr/README.md"
+ADR_0022 = ROOT / "docs/adr/0022-private-single-owner-access-topology.md"
+ADR_0024 = ROOT / "docs/adr/0024-dedicated-private-codex-ingress.md"
+ADR_0025 = ROOT / "docs/adr/0025-proxy-terminated-tls-for-private-ingress.md"
+ADR_0026 = ROOT / "docs/adr/0026-npm-static-acme-renewal-exception.md"
 SEALED_DROP_IN = (
     ROOT / "deploy/memory-node/systemd/sealed-content/"
     "kivra-memory-codex-ingress.service.d/20-sealed-content.conf"
@@ -153,7 +158,8 @@ def test_runbook_requires_live_private_and_no_payload_log_evidence() -> None:
     assert "never uses them as" in readme
     assert "custom CA handoff" in readme
     assert "Disable Force SSL redirects" in readme
-    assert "Client HTTP must never redirect" in readme
+    assert "ScaleVault client HTTP must receive" in prose
+    assert "Client HTTP application requests must never redirect" in prose
     assert "complete `nginx -T` output" in readme
     assert "Global `real_ip_header`, `set_real_ip_from`, `real_ip_recursive`" in readme
     assert "spoofed LAN values" in readme
@@ -168,6 +174,18 @@ def test_runbook_requires_live_private_and_no_payload_log_evidence() -> None:
     assert "exactly one NPM-rendered `location /mcp`" in prose
     assert "deny-only Advanced regex location" in prose
     assert "verified-closed loopback target" in prose
+    assert "generated Let's Encrypt handler" in prose
+    assert "non-LAN/VPN ScaleVault application request" in prose
+    assert "static ACME prefix is tested separately" in prose
+    assert "exact installed NPM and Nginx versions" in prose
+    assert "immutable NPM container image digest" in prose
+    assert "location ^~ /.well-known/acme-challenge/" in prose
+    assert "location = /.well-known/acme-challenge/" in prose
+    assert "A valid provisioned token may return `200`" in prose
+    assert "Generated configuration must show the distinct" in prose
+    assert "static-only and has no upstream" in prose
+    assert "ScaleVault application probe" in prose
+    assert "excluded from this application-route assertion" in prose
     assert "must not include NPM's Force SSL configuration" in prose
     assert "or `block-exploits.conf`" in prose
     assert "access logging is disabled inside both owned locations" in prose
@@ -177,8 +195,32 @@ def test_runbook_requires_live_private_and_no_payload_log_evidence() -> None:
     assert "multi-process atomicity test" in readme
     assert "backend connection or firewall counter must remain at zero" in prose
     assert "unapproved LAN/VPN source" in prose
-    assert "status codes need not match" in prose
+    assert "Status codes need not match" in prose
     assert "never spooled to a temporary file" in prose
+
+
+def test_acme_exception_is_accepted_precise_and_amends_prior_contracts() -> None:
+    index = ADR_INDEX.read_text(encoding="utf-8")
+    adr_0022 = ADR_0022.read_text(encoding="utf-8")
+    adr_0024 = ADR_0024.read_text(encoding="utf-8")
+    adr_0025 = ADR_0025.read_text(encoding="utf-8")
+    adr_0026 = ADR_0026.read_text(encoding="utf-8")
+
+    assert "[0026](0026-npm-static-acme-renewal-exception.md) | Accepted" in index
+    assert "Amended by: ADR 0024, ADR 0025, and ADR 0026" in adr_0022
+    assert "Amended by: ADR 0025 and ADR 0026" in adr_0024
+    assert "Amended by: ADR 0026" in adr_0025
+    assert "- Status: Accepted" in adr_0026
+    assert "Amends: ADR 0022, ADR 0024, and ADR 0025" in adr_0026
+    assert "location ^~ /.well-known/acme-challenge/" in adr_0026
+    assert "location = /.well-known/acme-challenge/" in adr_0026
+    assert "dedicated static ACME webroot" in adr_0026
+    assert "authentication disabled and `allow all`" in adr_0026
+    assert "neither location contains `proxy_pass`" in adr_0026.lower()
+    assert "valid provisioned challenge token may return `200`" in adr_0026
+    assert "generated configuration proves the prefix is static-only" in adr_0026
+    assert "exact installed NPM and Nginx versions" in adr_0026
+    assert "immutable NPM container image digest" in adr_0026
 
 
 def test_optional_sealed_drop_in_uses_ingress_credential_namespace() -> None:

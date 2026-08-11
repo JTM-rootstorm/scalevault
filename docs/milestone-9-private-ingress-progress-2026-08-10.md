@@ -49,13 +49,18 @@ Milestone 9 acceptance.
   NPM route reaches the private HTTP listener without forwarding credentials.
 - NPM now owns one `/mcp` Custom Location so its existing source-CIDR Access
   List remains the single source of truth. A non-conflicting regex catch-all
-  rejects every other path.
+  rejects every other application path. The configured higher-priority static
+  ACME renewal prefix is the intended non-application exception; complete
+  generated-config verification remains open below.
 - Client HTTP `/mcp`, operator paths, trailing slashes, query strings, and
   unsupported methods returned fixed `404` or `405` responses without
   redirects. The backend firewall counter remained unchanged across those
   probes, then increased only for exact HTTPS `/mcp` as it returned `401`.
 - The canonical API, ChatGPT tunnel, and private ingress remained active, and
   tunnel readiness remained `ready`, after the edge changes.
+- HTTP and HTTPS probes for the ACME directory and a nonexistent challenge
+  token returned `404` without redirects, and the Memory backend counter stayed
+  unchanged, confirming those probes did not contact the Memory backend.
 
 ## Open activation gate
 
@@ -73,7 +78,8 @@ Milestone acceptance remains open until the proxy administrator:
    application authentication, and never become canonical authority;
 3. inspects complete `nginx -T` real-IP and Access List ordering, then proves
    spoofed forwarding headers cannot turn an external source into a LAN/VPN
-   source; and
+   source, records the exact installed NPM and Nginx versions and immutable
+   container image digest, and verifies the ACME exception is static-only; and
 4. passes live authenticated initialize/read/mutation, revocation, SSE
    reconnect, no-retry, log-canary, and external-source probes.
 

@@ -32,9 +32,10 @@ loopback for the exact `/chatgpt/mcp` tunnel target.
 Before activation, confirm all of the following:
 
 - The NPM Access List contains only the reviewed LAN/VPN source CIDRs.
-- NPM rejects every non-LAN/VPN request before selecting or connecting to the
-  ScaleVault upstream. A shared or public edge listener is acceptable only
-  when this pre-upstream, content-free rejection ordering is verified.
+- Except for ADR 0026's static ACME renewal prefix, NPM rejects every
+  non-LAN/VPN ScaleVault application request before selecting or connecting to
+  the upstream. A shared or public edge listener is acceptable only when this
+  pre-upstream, content-free rejection ordering is verified.
 - No public route, NAT rule, UPnP mapping, or HTTP request can reach the
   backend or elicit an MCP, authentication, operator, or backend response.
 - NPM has one stable egress IP. Pin it as exactly `/32` for IPv4 or `/128` for
@@ -101,11 +102,13 @@ credential paths in `memory-codex-ingress.env`.
 
 Create one Proxy Host with the exact hostname and Let's Encrypt certificate. A
 shared edge is permitted, but the LAN-only/VPN-only NPM Access List must reject
-other sources before upstream selection. Disable Force SSL redirects: client
-HTTP must receive a fixed content-free rejection and must never be proxied or
-redirected, because a client might otherwise send its bearer before receiving
-the redirect. Route only exact HTTPS `/mcp`; every other path must return a
-fixed non-redirecting rejection. Never rewrite or forward an upstream redirect.
+other sources before upstream selection. Disable Force SSL redirects:
+ScaleVault client HTTP must receive a fixed content-free rejection and must
+never be proxied or redirected, because a client might otherwise send its bearer
+before receiving the redirect. Route only exact HTTPS `/mcp`; every other path
+must return a fixed non-redirecting rejection except NPM's static, non-proxied
+`/.well-known/acme-challenge/` renewal prefix. Never rewrite or forward an
+upstream redirect.
 
 In the Proxy Host UI, keep the existing Let's Encrypt certificate, disable
 Force SSL, Asset Caching, Websocket Support, and Block Common Exploits, and
@@ -129,9 +132,11 @@ Configure exactly one NPM Custom Location:
 
 Paste the entire `npm-host-advanced.conf.example` into the Proxy Host's main
 Advanced field. Its regex location rejects every path except exact `/mcp`
-without colliding with NPM's generated `location /` block. NPM renders the
-attached UI Access List inside the `/mcp` Custom Location, so its CIDRs remain
-defined in one place. The two templates' important properties are contractual:
+without colliding with NPM's generated `location /` block; NPM's
+higher-priority static ACME renewal location is the only exception. NPM renders
+the attached UI Access List inside the `/mcp` Custom Location, so its CIDRs
+remain defined in one place. The two templates' important properties are
+contractual:
 
 - the Custom Location's generated upstream uses scheme `http`, an exact private
   IP, and port `8443`, with no backend DNS resolution or custom CA handoff;
@@ -173,6 +178,18 @@ configuration or `block-exploits.conf`. A `301` client-HTTP response proves
 Force SSL is still active; a backend-generated rejection for an invalid path,
 query, or method proves the regex catch-all is missing or ineffective.
 
+NPM's generated Let's Encrypt handler must contain both
+`location ^~ /.well-known/acme-challenge/`, which uses only its dedicated
+static webroot with authentication disabled and `allow all`, and
+`location = /.well-known/acme-challenge/`, which returns `404`. Neither may
+contain `proxy_pass`, an application rewrite, dynamic execution, or a directory
+listing. A valid provisioned token may return `200`; the directory path and a
+nonexistent token must return `404` without changing the Memory backend
+counter. The generated configuration, not that counter, proves the handler is
+static-only and has no upstream. Record the exact installed NPM and Nginx
+versions and, where available, the immutable NPM container image digest with
+this evidence so an upgrade cannot silently change the ordering assumptions.
+
 Inspect the complete `nginx -T` output, not only this Proxy Host's location.
 Global `real_ip_header`, `set_real_ip_from`, `real_ip_recursive`,
 `proxy_protocol`, `geo`, `map`, and included Access List directives can rewrite
@@ -204,9 +221,10 @@ Record sanitized evidence for all of these checks:
    bounded timeouts.
 4. Normal Let's Encrypt validation succeeds on the client HTTPS hop. Wrong
    client TLS hostname, wrong Host, wrong Origin, query strings, trailing
-   slashes, and every non-`/mcp` HTTPS path fail without an application
-   redirect. Forwarding headers from the pinned NPM peer do not change the
-   request's canonical identity or authority.
+   slashes, and every non-`/mcp` HTTPS application path fail without an
+   application redirect. ADR 0026's static ACME prefix is tested separately.
+   Forwarding headers from the pinned NPM peer do not change the request's
+   canonical identity or authority.
 5. A valid per-device bearer can initialize, read, and mutate. No bearer and a
    revoked bearer fail. Revoking one device blocks its next request without
    affecting another device or ChatGPT.
@@ -216,14 +234,16 @@ Record sanitized evidence for all of these checks:
    memory payload, query string, or response body.
 8. Stopping the tunnel does not affect private Codex access, and stopping the
    private ingress does not affect the tunnel.
-9. From a non-VPN external network, every candidate public IP either has no
-   route or returns a fixed content-free pre-upstream rejection for client HTTP
-   and HTTPS requests using the configured hostname as explicit SNI and Host.
-   Their status codes need not match because scheme and ACL rejections occur in
-   different Nginx phases. Client HTTP must never redirect. An independent
-   backend connection or firewall counter must remain at zero throughout those
-   probes. Also inspect edge firewall, NAT, UPnP, NPM container port publication,
-   and wildcard Proxy Hosts. Private DNS absence alone is not proof.
+9. From a non-VPN external network, every ScaleVault application probe to each
+   candidate public IP either has no route or returns a fixed content-free
+   pre-upstream rejection for client HTTP and HTTPS requests using the
+   configured hostname as explicit SNI and Host. ADR 0026's static ACME prefix
+   is excluded from this application-route assertion. Status codes need not
+   match because scheme and ACL rejections occur in different Nginx phases.
+   Client HTTP application requests must never redirect. An independent backend
+   connection or firewall counter must remain at zero throughout those probes.
+   Also inspect edge firewall, NAT, UPnP, NPM container port publication, and
+   wildcard Proxy Hosts. Private DNS absence alone is not proof.
 10. Repeat the external HTTPS `/mcp` rejection with spoofed LAN values in
     `Forwarded`, `X-Forwarded-For`, and `X-Real-IP`. The response and backend
     connection/firewall counters must be identical to the unspoofed rejection,
@@ -231,6 +251,11 @@ Record sanitized evidence for all of these checks:
 11. Repeat the same spoof probes from an unapproved LAN/VPN source. Inherited
     private-network real-IP trust must not turn spoofed allowed-source values
     into Access List authority, and backend counters must remain at zero.
+12. Probe the static ACME prefix with the directory path and a nonexistent
+    token over HTTP and HTTPS. Each returns `404` without redirecting or changing
+    the Memory backend counter. Generated configuration must show the distinct
+    `^~` static-token location and exact-directory `404` location and proves
+    both contain no upstream or application rewrite.
 
 Repository tests cannot establish firewall, NPM, DNS, client certificate, NAT, or
 internet reachability state. Keep a dated, sanitized live acceptance record;

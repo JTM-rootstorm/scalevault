@@ -31,6 +31,7 @@ documentation and do not change these decisions implicitly.
 | [0023](0023-bounded-loopback-mcp-http-boundary.md) | Accepted | Pin loopback MCP transport security, request bounds, and forwarding-header rejection without weakening the tunnel boundary. |
 | [0024](0024-dedicated-private-codex-ingress.md) | Accepted | Run a separate direct-only private listener behind the LAN/VPN HTTPS proxy while keeping ChatGPT and operator routes on loopback. |
 | [0025](0025-proxy-terminated-tls-for-private-ingress.md) | Accepted | Terminate Let's Encrypt TLS at Nginx Proxy Manager and use an exact-source private HTTP hop to the Codex ingress. |
+| [0026](0026-npm-static-acme-renewal-exception.md) | Accepted | Permit NPM's static, non-proxied ACME challenge prefix while keeping every ScaleVault application route private. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries
