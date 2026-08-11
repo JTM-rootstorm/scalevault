@@ -9,7 +9,7 @@ Milestone 9 acceptance.
 
 - The dedicated direct-only ingress, process-profile separation, hard request
   lifetimes, deployment profile, and private topology ADR are committed through
-  `b03be89`.
+  `48a6e4f`.
 - The ingress exposes only exact `/mcp`, accepts only Streamable HTTP `GET`,
   `POST`, and `DELETE`, and retains ADR 0018 bearer authentication on every
   request.
@@ -20,7 +20,7 @@ Milestone 9 acceptance.
 - Spawned-process key-provider tests cover provision/provision,
   provision/destroy, get/destroy, and interrupted-publication races without
   material resurrection or temporary-file residue.
-- `make verify` passed on the development host: 1,203 Python tests passed and
+- `make verify` passed on the development host: 1,206 Python tests passed and
   172 PostgreSQL tests were skipped because that host lacks the required
   `vector` extension. Ruff, mypy, Go vet/tests/build determinism, protobuf
   determinism, JSON schemas, and plugin checks also passed.
@@ -29,36 +29,35 @@ Milestone 9 acceptance.
 
 ## Sanitized live evidence
 
-- A new immutable release was installed without deleting the prior release.
+- Immutable release `48a6e4f` was installed without deleting the prior release.
 - The canonical Memory API remained loopback-only and the Secure MCP Tunnel
   remained active throughout deployment.
-- The initial ingress staging listener used TLS on one exact private address
-  and port 8443 with no wildcard listener. ADR 0025 subsequently selected
-  centralized Let's Encrypt termination at NPM and an exact-source private
-  HTTP backend; that live listener replacement is pending this checkpoint.
+- The ingress now serves HTTP on one exact private address and port 8443 with
+  no wildcard listener. Client-facing Let's Encrypt termination remains at NPM.
 - The service is pinned to one exact proxy host route in both systemd IP policy
   and the application configuration.
 - An independent persistent firewall permits port 8443 from that proxy route
   and drops other sources. A direct LAN probe incremented only the drop
   counter, while a proxy-originated probe incremented only the allow counter.
-- The temporary backend certificate and operator CA are staging artifacts, not
-  the accepted topology. They remain protected until the HTTP replacement is
-  active and then must be removed. Application credentials remain only in
-  protected live configuration.
+- The five temporary backend certificate and operator-CA artifacts were
+  permanently removed after the HTTP listener became active. Application
+  credentials remain only in protected live configuration.
 - The canonical API, ChatGPT tunnel, and private ingress were all active after
   the isolated ingress restart.
 
 ## Open activation gate
 
-The separately managed reverse proxy has the new backend port, but the live
-backend still uses the superseded staging protocol. Current credential-free
-probes return `502` over HTTPS, redirect plaintext HTTP, and do not enforce the
-exact path at the edge.
+The separately managed reverse proxy has the new backend port, but it still
+initiates TLS to the now-HTTP backend. The ingress recorded that attempt as an
+invalid HTTP request. Current credential-free probes therefore return `502`
+over HTTPS, redirect plaintext HTTP, and do not enforce the exact path at the
+edge.
 
 Milestone acceptance remains open until the proxy administrator:
 
-1. switches the ingress and NPM backend to HTTP on the exact private address
-   and port while retaining the exact NPM `/32` and LXC firewall gate;
+1. switches the NPM upstream scheme to HTTP for the exact private address and
+   port while retaining the already-active HTTP ingress, exact NPM `/32`, and
+   LXC firewall gate;
 2. keeps Let's Encrypt TLS and its private key only at NPM;
 3. disables client plaintext redirects in favor of a fixed content-free
    rejection;
