@@ -2,8 +2,9 @@
 
 ScaleVault is a private, auditable continuity store for a shared assistant
 persona. The canonical Memory Node is designed around PostgreSQL-backed events
-and projections, with separate Go services for relay access and an outbound
-node agent.
+and projections. ChatGPT Web uses outbound Secure MCP Tunnel, while
+owner-controlled Codex devices use direct-private identities over the owner's
+VPN or private LAN.
 
 This repository contains the project foundation plus the canonical PostgreSQL
 schema, immutable event engine, deterministic projection rebuild, and
@@ -13,8 +14,8 @@ production mutation workers are implemented incrementally in later milestones.
 ## Components
 
 - `services/memory-node`: Python API and worker package.
-- `services/memory-relay`: public, installation-aware Go relay.
-- `services/memory-node-agent`: constrained outbound Go bridge.
+- `services/memory-relay`: dormant superseded relay implementation history.
+- `services/memory-node-agent`: dormant superseded relay-agent implementation history.
 - `proto`: versioned relay protocol definitions.
 - `schemas`: JSON contracts shared across transports.
 - `plugins/continuity-archive`: reusable ChatGPT plugin and skill package.
@@ -89,10 +90,10 @@ mutation engine provides SERIALIZABLE retries, idempotent receipts, expected
 revisions, advisory locking, atomic live projections, conflict transitions, and
 transactional outbox staging.
 
-Production mutation authentication and request-scoped principal resolution are
-deliberately fail-closed until Milestone 7. Read tools and retrieval, production
-GitHub proposal conversion, relay forwarding, enrollment, and OAuth are not
-represented as complete.
+Direct-private mutation authentication, request-scoped principal resolution,
+read tools, and the query-only ChatGPT tunnel route are implemented. Public
+relay forwarding, relay OAuth, and public plugin submission are superseded by
+the private single-owner topology and are not production capabilities.
 
 Milestone status is tracked in the
 [dated Milestone 3 acceptance checklist](docs/milestone-3-acceptance-2026-08-08.md).

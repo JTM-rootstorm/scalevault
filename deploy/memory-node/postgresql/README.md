@@ -156,8 +156,7 @@ run the guarded injected-connection Alembic deployment, and reapply the
 bootstrap so every newly created object receives reviewed grants:
 
 ```sh
-systemctl stop kivra-memory-tunnel.service kivra-memory-node-agent.service \
-  kivra-memory-api.service
+systemctl stop kivra-memory-tunnel.service kivra-memory-api.service
 runuser -u postgres -- psql --dbname=kivra_memory --no-psqlrc \
   --set=expected_database=kivra_memory \
   --file=deploy/memory-node/postgresql/bootstrap_roles.sql
@@ -179,7 +178,7 @@ runuser -u postgres -- psql --dbname=kivra_memory --no-psqlrc \
   --command="SELECT DISTINCT pg_get_userbyid(relowner) FROM pg_class JOIN pg_namespace ON pg_namespace.oid = relnamespace WHERE nspname = 'public' AND relkind IN ('r','p','S') ORDER BY 1" \
   --command="SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class JOIN pg_namespace ON pg_namespace.oid = relnamespace WHERE nspname = 'public' AND relrowsecurity ORDER BY relname"
 systemctl start kivra-memory-api.service
-systemctl start kivra-memory-node-agent.service kivra-memory-tunnel.service
+systemctl start kivra-memory-tunnel.service
 ```
 
 If migration or verification fails, keep writers stopped. Restore the verified

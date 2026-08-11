@@ -2,7 +2,7 @@
 
 These units target the canonical Debian 13 LXC. Install the application under
 `/opt/kivra-memory/app`, place service environment files under
-`/etc/kivra-memory`, and keep persistent database and node-agent state below
+`/etc/kivra-memory`, and keep persistent state below
 `/mnt/memory/kivra-memory`. The units refuse to start without that mount.
 
 ## Accounts and directories
@@ -13,8 +13,6 @@ Create only the accounts needed by the units that exist today:
 groupadd --system kivra-memory
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-api
-useradd --system --no-create-home --home-dir /nonexistent \
-  --shell /usr/sbin/nologin --gid kivra-memory memory-node
 useradd --system --user-group --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin memory-tunnel
 useradd --system --no-create-home --home-dir /nonexistent \
@@ -31,8 +29,6 @@ install -d -o root -g kivra-memory -m 0750 /etc/kivra-memory
 install -d -o root -g root -m 0755 /mnt/memory/kivra-memory
 install -d -o root -g kivra-memory -m 2750 \
   /mnt/memory/kivra-memory/models
-install -d -o memory-node -g kivra-memory -m 0700 \
-  /mnt/memory/kivra-memory/node-agent
 install -d -o memory-exporter -g kivra-memory -m 0700 \
   /mnt/memory/kivra-memory/archive
 ```
@@ -42,7 +38,7 @@ group membership as an installation error; inspect and reconcile it rather than
 blindly replacing it. The application tree is root-owned and not writable by a
 service account.
 
-Create `memory-api.env`, `memory-worker.env`, `memory-lifecycle-worker.env`, `node-agent.env`, and `tunnel.env` locally under
+Create `memory-api.env`, `memory-worker.env`, `memory-lifecycle-worker.env`, and `tunnel.env` locally under
 `/etc/kivra-memory`. Each file must be root-owned and mode `0600`, except the
 dedicated lifecycle-worker file described below. Never copy `.env` from a
 development checkout. Database passwords remain local deployment secrets and
@@ -371,8 +367,7 @@ tool and version; do not substitute illustrative values.
 
 Use `install -o root -g root -m 0600` when placing each completed environment
 file, except use `install -o root -g memory-lifecycle -m 0640` for
-`memory-lifecycle-worker.env`. The node-agent file is optional at this
-milestone because the service remains disabled. The API file is required before
+`memory-lifecycle-worker.env`. The API file is required before
 starting the API; the tunnel file is required only when the separately gated
 tunnel is started.
 
@@ -385,20 +380,19 @@ stat -c '%U:%G %a %n' \
   /etc/kivra-memory/memory-api.env \
   /etc/kivra-memory/memory-worker.env \
   /etc/kivra-memory/memory-lifecycle-worker.env \
-  /mnt/memory/kivra-memory/models \
-  /mnt/memory/kivra-memory/node-agent
+  /mnt/memory/kivra-memory/models
 ```
 
 ## Network boundary
 
 The accepted production profile binds the API to loopback. Production startup
 rejects a non-loopback `KIVRA_MEMORY_HOST`; keep the default value shown above.
-Secure MCP Tunnel and node-agent traffic reaches the API over loopback, and
-development clients use loopback or an explicit local forward.
+Secure MCP Tunnel reaches the API over loopback, and development clients use
+loopback or an explicit local forward.
 
-There is intentionally no Nginx unit or configuration in this LXC. The Secure
-MCP Tunnel and node-agent connect to the loopback API and require no inbound
-public listener. [ADR 0006](../../../docs/adr/0006-external-reverse-proxy.md)
+There is intentionally no Nginx unit or configuration in this LXC. Secure MCP
+Tunnel connects to the loopback API and requires no inbound public listener.
+[ADR 0022](../../../docs/adr/0022-private-single-owner-access-topology.md)
 assigns any future private-LAN HTTPS profile to the separately managed reverse
 proxy, but enabling that profile requires an explicit reviewed application
 configuration mode and exposure controls. Do not change the API bind address
@@ -412,9 +406,6 @@ Install the implemented units and the PostgreSQL mount drop-in:
 install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-api.service \
   /etc/systemd/system/kivra-memory-api.service
-install -D -o root -g root -m 0644 \
-  deploy/memory-node/systemd/kivra-memory-node-agent.service \
-  /etc/systemd/system/kivra-memory-node-agent.service
 install -D -o root -g root -m 0644 \
   deploy/memory-node/systemd/kivra-memory-tunnel.service \
   /etc/systemd/system/kivra-memory-tunnel.service
@@ -443,7 +434,6 @@ systemctl daemon-reload
 systemd-analyze verify \
   postgresql@17-main.service \
   kivra-memory-api.service \
-  kivra-memory-node-agent.service \
   kivra-memory-worker.service \
   kivra-memory-lifecycle-worker.service \
   kivra-memory-archive-exporter.service \
@@ -459,19 +449,17 @@ systemctl enable --now postgresql@17-main.service
 systemctl enable --now kivra-memory-api.service
 curl --fail --silent --show-error http://127.0.0.1:8080/healthz
 curl --fail --silent --show-error http://127.0.0.1:8080/readyz
-systemctl is-enabled kivra-memory-node-agent.service
 systemctl is-enabled kivra-memory-tunnel.service
 ```
 
 The readiness request must succeed only after the configured database is
-reachable. The last two commands should report `disabled` until their separate
-enrollment and workspace prerequisites are satisfied.
+reachable. The final command should report `disabled` until its workspace and
+tunnel prerequisites are satisfied.
 
 ## Deferred services
 
-The API unit starts the Debian PostgreSQL 17 cluster dependency. The node-agent
-unit is installed but should remain disabled until relay enrollment is
-implemented. The ingress and exporter units remain disabled until their pinned
+The API unit starts the Debian PostgreSQL 17 cluster dependency. The ingress
+and exporter units remain disabled until their pinned
 identities, credentials, clean worktree, database roles, and remote identities
 have passed a synthetic acceptance run. The worker
 unit remains disabled until its pinned bundle, registry row, tenant

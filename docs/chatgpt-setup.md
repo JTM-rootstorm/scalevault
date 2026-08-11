@@ -1,8 +1,9 @@
 # ChatGPT setup
 
-ChatGPT integration is capability-gated. Private read access, direct writes,
-relay access, and GitHub proposal fallback are separate profiles. The client
-must probe actual tools and never infer write permission from plugin presence.
+ChatGPT integration is capability-gated. The selected production MCP profile is
+private read access through Secure MCP Tunnel. The optional GitHub proposal
+fallback is a separate disabled-by-default transport. No relay or public plugin
+profile is packaged.
 
 The private Milestone 8 profile publishes only the existing read and status MCP
 tools. Mutation and nomination tools are absent from its tool registry, not
@@ -35,6 +36,11 @@ Secure MCP Tunnel runs inside the Memory Node trust boundary and connects
 outbound to OpenAI. It forwards to the dedicated authenticated read-only MCP
 route and requires no public inbound listener. It is for private connections
 and developer-mode testing, not public plugin submission or distribution.
+
+This remains the required ChatGPT Web path under ADR 0022. Codex VPN access does
+not replace, proxy, or broaden this route. The tunnel continues to use its own
+control-plane credential plus a separately provisioned ScaleVault bearer, and
+the selected app remains bound to one intended workspace association.
 
 The GitHub proposal fallback is a separately gated transport. No current
 capability record in this repository establishes a supported create-file action

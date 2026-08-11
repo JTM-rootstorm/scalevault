@@ -20,15 +20,20 @@ to all trusted workspaces on the host. Use `.codex/config.toml` only inside a
 trusted project and do not commit a private endpoint or identity-specific
 configuration.
 
-Copy one template and replace its placeholder URL:
+Copy the private-direct template and replace its placeholder URL:
 
 - [`deploy/codex/private-direct.config.toml.example`](../deploy/codex/private-direct.config.toml.example)
-- [`deploy/codex/relay.config.toml.example`](../deploy/codex/relay.config.toml.example)
 
-The direct template is the supported private-node route. The relay template is
-disabled by default and is an activation example only; keep it disabled until
-relay authentication, installation binding, and end-to-end acceptance have
-passed.
+The direct template is the only supported Codex route. Each device or
+environment must receive a distinct ADR 0018 identity and bearer. Connect the
+device to the owner-controlled VPN before using the private endpoint, but do not
+treat VPN membership or source address as ScaleVault authentication.
+
+The production API is currently loopback-only. Until the reviewed ADR 0022
+private HTTPS ingress is implemented and accepted, use an authenticated local
+forward across the VPN rather than binding the API to a private interface or
+`0.0.0.0`. Never publish the private endpoint through public DNS, NAT, UPnP, or
+a public reverse-proxy route.
 
 `bearer_token_env_var` names an environment variable. It does not contain the
 credential itself. Supply that variable to the process that launches Codex, the
@@ -84,8 +89,8 @@ do not invent them. The default run verifies:
 
 1. authenticated MCP initialization and exact ScaleVault server identity;
 2. discovery of the required public tools;
-3. the coarse `memory_transport_status` identity (`direct_private`,
-   `secure_tunnel`, or `relay`) and compatible installation state; and
+3. the coarse `memory_transport_status` identity (`direct_private`) and
+   compatible installation state; and
 4. read authorization by requesting a generated nonexistent memory UUID and
    requiring a payload-free `not_found` result.
 
@@ -115,9 +120,6 @@ an anomalous durable result contains a valid synthetic memory ID and revision,
 the JSON adds `recovery_required`; give that reference to an authorized operator
 for explicit logical-forget recovery. The diagnostic does not issue another
 mutation automatically after an unexpected policy result.
-
-For a future relay route, use `--expected-transport relay` only after enabling
-the relay template and completing its activation gates.
 
 ## Interpret failures
 

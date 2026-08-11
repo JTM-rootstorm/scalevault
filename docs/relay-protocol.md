@@ -1,5 +1,10 @@
 # Relay protocol v1
 
+> **Superseded deployment path:** ADR 0022 removed the public relay and node
+> agent from the active v1 topology. This document preserves the reviewed wire
+> contract as dormant implementation history; no selected production service
+> may expose or connect it.
+
 The canonical wire definition is [`proto/relay-v1.proto`](../proto/relay-v1.proto).
 It carries bounded, numbered HTTP request and response streams over one outbound,
 mTLS-authenticated node-agent connection. The relay may persist only the routing,
