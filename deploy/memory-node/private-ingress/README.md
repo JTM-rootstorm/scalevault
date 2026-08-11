@@ -3,13 +3,12 @@
 This profile gives owner-controlled Codex devices one private HTTPS `/mcp`
 route without changing the canonical loopback API or the outbound ChatGPT
 tunnel. Nginx Proxy Manager (NPM) terminates client TLS and applies the LAN/VPN
-access list. It then uses a separately verified HTTPS connection to the
-dedicated Memory Node listener on port `8443`.
+access list. It then uses private HTTP to the dedicated Memory Node listener on
+port `8443`; the exact NPM peer pin and LXC firewall isolate that backend hop.
 
 Repository files intentionally contain placeholders only. Keep the external
 hostname, listener address, NPM egress address, approved client ranges,
-certificate material, and bearer credentials in operator-controlled live
-configuration.
+and bearer credentials in operator-controlled live configuration.
 
 ## Frozen topology
 
@@ -17,7 +16,7 @@ configuration.
 Codex device on approved LAN/VPN
   -> exact private HTTPS hostname and exact /mcp
   -> NPM edge rejection and LAN-only access list
-  -> verified backend HTTPS, exact certificate name, pinned CA
+  -> private HTTP from one exact NPM egress address
   -> exact private Memory Node address:8443/mcp
   -> kivra-memory-codex-ingress.service
 ```
@@ -41,14 +40,12 @@ Before activation, confirm all of the following:
 - NPM has one stable egress IP. Pin it as exactly `/32` for IPv4 or `/128` for
   IPv6 in both the application environment and the systemd network drop-in.
 - The LXC firewall permits port `8443` only from that exact NPM egress IP.
-- NPM can validate the backend certificate with a pinned private CA and exact
-  backend certificate name/SNI. `proxy_ssl_verify off` is forbidden.
 - One independently revocable ADR 0018 bearer identity has been provisioned
   for each Codex host or environment. VPN membership is not authorization.
 
 Stop if any one of these cannot be proven. An Access List applied after
-upstream selection, plaintext NPM-to-node HTTP, a broad trusted-proxy subnet,
-or a shared device bearer is not this profile.
+upstream selection, an externally reachable backend, a broad trusted-proxy
+subnet, or a shared device bearer is not this profile.
 
 ## Memory Node installation
 
@@ -63,13 +60,7 @@ Create these files locally and never add their completed values to Git:
    `/etc/kivra-memory/client-token-pepper`, `root:root` mode `0600`. The unit
    exposes it only at
    `/run/credentials/kivra-memory-codex-ingress.service/client-token-pepper`.
-3. Provision a backend certificate whose SAN contains the exact private
-   backend TLS name used by NPM. Install its certificate and private key as
-   `/etc/kivra-memory/codex-ingress-backend-tls-cert` and
-   `/etc/kivra-memory/codex-ingress-backend-tls-key`, both `root:root` mode
-   `0600`. The unit exposes them only through its own systemd credential
-   directory.
-4. Copy `kivra-memory-codex-ingress-network.conf.example` to
+3. Copy `kivra-memory-codex-ingress-network.conf.example` to
    `/etc/systemd/system/kivra-memory-codex-ingress.service.d/10-network-policy.conf`,
    replace its placeholder with the same exact NPM `/32` or `/128`, and keep
    the base unit's fail-closed `IPAddressDeny=any` policy.
@@ -108,23 +99,26 @@ credential paths in `memory-codex-ingress.env`.
 
 ## NPM policy
 
-Create one Proxy Host with the exact hostname and certificate. A shared edge is
-permitted, but the LAN-only/VPN-only NPM Access List must reject other sources
-before upstream selection. Disable Force SSL redirects: plaintext HTTP must
-receive the same fixed content-free rejection and must never be proxied. Route
-only exact `/mcp`; every other path must return a fixed non-redirecting
-rejection.
+Create one Proxy Host with the exact hostname and Let's Encrypt certificate. A
+shared edge is permitted, but the LAN-only/VPN-only NPM Access List must reject
+other sources before upstream selection. Disable Force SSL redirects: client
+HTTP must receive a fixed content-free rejection and must never be proxied or
+redirected, because a client might otherwise send its bearer before receiving
+the redirect. Route only exact HTTPS `/mcp`; every other path must return a
+fixed non-redirecting rejection. Never rewrite or forward an upstream redirect.
 
 Adapt `npm-location.conf.example` for the installed NPM version. Its important
 properties are contractual:
 
-- upstream scheme is `https`, destination is an exact private IP at port
-  `8443` with no DNS resolution, backend SNI and certificate name are separate
-  exact pins, and verification uses the pinned CA;
-- `proxy_pass_request_headers off` removes every caller-supplied `Forwarded`,
-  `Via`, `X-Real-IP`, and `X-Forwarded-*` field; only the explicit MCP header
-  allowlist is reconstructed, and the application independently rejects any
-  forwarding metadata that survives;
+- upstream scheme is `http` and the destination is an exact private IP at port
+  `8443`, with no backend DNS resolution or custom CA handoff;
+- `proxy_pass_request_headers off` reconstructs only the explicit request
+  header allowlist in this fragment. NPM-generated `Forwarded`, `Via`,
+  `X-Real-IP`, or `X-Forwarded-*` fields may still be added by the installed
+  version; the application accepts them only from the exact pinned NPM peer,
+  bounds and discards them before authentication, and never uses them as
+  identity, authorization, source policy, tenant, actor, client, scope, or
+  audit authority;
 - the external `Host` is normalized to the one configured hostname and a
   supplied `Origin` is preserved for the application's exact validation;
 - the 1 MiB request buffer matches the body cap so accepted MCP bodies remain
@@ -141,9 +135,17 @@ properties are contractual:
   payloads, query strings, or response bodies.
 
 Inspect NPM's generated configuration after every creation, edit, or upgrade.
-If NPM cannot preserve the exact location, private listener, strict header
-reconstruction, no-retry behavior, and verified backend TLS, do not activate
-the Proxy Host.
+If NPM cannot preserve the exact location, Access List ordering, exact private
+HTTP upstream, bounded forwarding metadata, strict header reconstruction, and
+no-retry behavior, do not activate the Proxy Host.
+
+Inspect the complete `nginx -T` output, not only this Proxy Host's location.
+Global `real_ip_header`, `set_real_ip_from`, `real_ip_recursive`,
+`proxy_protocol`, `geo`, `map`, and included Access List directives can rewrite
+the address used by `allow`/`deny` before location processing. The LAN/VPN gate
+must remain based on an authenticated immediate edge peer or the kernel source
+address; caller-supplied `Forwarded`, `X-Forwarded-For`, or `X-Real-IP` must not
+turn an unapproved source into an approved one.
 
 ## Activation and live acceptance
 
@@ -164,12 +166,13 @@ Record sanitized evidence for all of these checks:
    `/32` or `/128`. Direct attempts from another LAN/VPN host fail.
 3. NPM's generated configuration has the exact host and `/mcp` location,
    pre-upstream LAN/VPN Access List rejection, strict header reconstruction,
-   exact private backend IP, pinned backend CA/SNI, no upstream retry, no
-   redirect, and bounded timeouts.
-4. Correct TLS validation succeeds on both client and backend hops. Wrong CA,
-   wrong SNI/hostname, plaintext, wrong Host, wrong Origin, query strings,
-   trailing slashes, forwarding headers, and every non-`/mcp` path fail without
-   redirecting.
+   exact private HTTP backend IP, no upstream retry, no upstream redirect, and
+   bounded timeouts.
+4. Normal Let's Encrypt validation succeeds on the client HTTPS hop. Wrong
+   client TLS hostname, wrong Host, wrong Origin, query strings, trailing
+   slashes, and every non-`/mcp` HTTPS path fail without an application
+   redirect. Forwarding headers from the pinned NPM peer do not change the
+   request's canonical identity or authority.
 5. A valid per-device bearer can initialize, read, and mutate. No bearer and a
    revoked bearer fail. Revoking one device blocks its next request without
    affecting another device or ChatGPT.
@@ -180,13 +183,17 @@ Record sanitized evidence for all of these checks:
 8. Stopping the tunnel does not affect private Codex access, and stopping the
    private ingress does not affect the tunnel.
 9. From a non-VPN external network, every candidate public IP either has no
-   route or returns the same fixed content-free pre-upstream rejection for HTTP
-   and HTTPS requests using the configured hostname as explicit SNI and Host.
-   An independent backend connection or firewall counter must remain at zero
-   throughout those probes. Also inspect edge firewall, NAT, UPnP, NPM
-   container port publication, and wildcard Proxy Hosts. Private DNS absence
-   alone is not proof.
+   route or returns the same fixed content-free pre-upstream rejection for
+   client HTTP and HTTPS requests using the configured hostname as explicit SNI
+   and Host. Client HTTP must never redirect. An independent backend connection
+   or firewall counter must remain at zero throughout those probes. Also inspect
+   edge firewall, NAT, UPnP, NPM container port publication, and wildcard Proxy
+   Hosts. Private DNS absence alone is not proof.
+10. Repeat the external HTTPS `/mcp` rejection with spoofed LAN values in
+    `Forwarded`, `X-Forwarded-For`, and `X-Real-IP`. The response and backend
+    connection/firewall counters must be identical to the unspoofed rejection,
+    proving NPM did not rewrite Access List authority from caller headers.
 
-Repository tests cannot establish firewall, NPM, DNS, certificate, NAT, or
+Repository tests cannot establish firewall, NPM, DNS, client certificate, NAT, or
 internet reachability state. Keep a dated, sanitized live acceptance record;
 external coordinates remain live configuration rather than repository data.

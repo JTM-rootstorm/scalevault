@@ -14,12 +14,8 @@ WorkingDirectory=/opt/kivra-memory/app
 Environment=KIVRA_MEMORY_ENVIRONMENT=production
 Environment=KIVRA_MEMORY_CLIENT_TOKEN_PEPPER_CREDENTIAL=/run/credentials/kivra-memory-codex-ingress.service/client-token-pepper
 Environment=KIVRA_MEMORY_CLIENT_TOKEN_PEPPER_KEY_ID=codex-primary-v1
-Environment=KIVRA_MEMORY_CODEX_INGRESS_TLS_CERTIFICATE=/run/credentials/kivra-memory-codex-ingress.service/backend-tls-cert
-Environment=KIVRA_MEMORY_CODEX_INGRESS_TLS_PRIVATE_KEY=/run/credentials/kivra-memory-codex-ingress.service/backend-tls-key
 EnvironmentFile=/etc/kivra-memory/memory-codex-ingress.env
 LoadCredential=client-token-pepper:/etc/kivra-memory/client-token-pepper
-LoadCredential=backend-tls-cert:/etc/kivra-memory/codex-ingress-backend-tls-cert
-LoadCredential=backend-tls-key:/etc/kivra-memory/codex-ingress-backend-tls-key
 UnsetEnvironment=KIVRA_MEMORY_CHATGPT_SECURE_TUNNEL_ENABLED KIVRA_MEMORY_CHATGPT_SECURE_TUNNEL_INSTALLATION_ID
 UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
 ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-codex-ingress

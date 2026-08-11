@@ -398,15 +398,16 @@ API bind address merely to make remote access convenient.
 The separately installed `codex_private_ingress` profile is a distinct,
 direct-only process. It requires an exact private IP literal, fixed port `8443`,
 an exact external hostname, one exact trusted NPM egress `/32` or `/128`, and
-backend TLS credentials in its own systemd credential directory. It exposes
-only `/mcp` and cannot construct the ChatGPT surface or operator endpoints. It
-neither requires nor routes through the tunnel service.
+the ingress-scoped bearer-pepper credential. It exposes only `/mcp` and cannot
+construct the ChatGPT surface or operator endpoints. It neither requires nor
+routes through the tunnel service.
 
 There is intentionally no Nginx unit or general reverse-proxy configuration in
 this LXC. [ADR 0022](../../../docs/adr/0022-private-single-owner-access-topology.md)
 assigns client TLS, exact-path routing, and LAN/VPN source filtering to the
-separately managed Nginx Proxy Manager boundary. The backend hop is also HTTPS,
-with pinned CA and exact SNI/name verification. See
+separately managed Nginx Proxy Manager boundary. NPM reaches the exact private
+ingress address over HTTP on fixed port `8443`; the exact-peer pin and LXC
+firewall isolate that backend hop. See
 [`../private-ingress/README.md`](../private-ingress/README.md) for the
 placeholder-only deployment policy and mandatory live exposure checks.
 
@@ -491,12 +492,12 @@ association are available. It targets only the authenticated read-only
 MCP target and health UI are both loopback-only; see `../tunnel/README.md` for
 the credential boundary, minimum tunnel-client version, and activation checks.
 
-The Codex ingress unit remains disabled until its exact private bind, backend
-certificate and key, pinned NPM backend CA/SNI, pre-upstream LAN/VPN-only
-Access List rejection, exact NPM source `/32` or `/128`, LXC firewall rule,
-header normalization, bounded `/mcp` route, distinct per-device bearers, and
-external no-backend-route evidence have passed the private-ingress runbook.
-Its availability is independent of the tunnel and canonical loopback listener.
+The Codex ingress unit remains disabled until its exact private bind,
+pre-upstream LAN/VPN-only Access List rejection, exact NPM source `/32` or
+`/128`, LXC firewall rule, bounded forwarding-header disposal, bounded `/mcp`
+route, distinct per-device bearers, and external no-backend-route evidence have
+passed the private-ingress runbook. Its availability is independent of the
+tunnel and canonical loopback listener.
 
 The sealed-content drop-in and purge unit remain uninstalled and disabled when
 sealed content is not explicitly enabled. Before activation, provision the

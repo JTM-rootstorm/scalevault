@@ -33,11 +33,9 @@ def test_unit_is_independent_direct_only_and_credential_scoped() -> None:
 
     credential_root = "/run/credentials/kivra-memory-codex-ingress.service/"
     assert f"{credential_root}client-token-pepper" in unit
-    assert f"{credential_root}backend-tls-cert" in unit
-    assert f"{credential_root}backend-tls-key" in unit
     assert unit.count("LoadCredential=client-token-pepper:") == 1
-    assert unit.count("LoadCredential=backend-tls-cert:") == 1
-    assert unit.count("LoadCredential=backend-tls-key:") == 1
+    assert "CODEX_INGRESS_TLS" not in unit
+    assert "backend-tls" not in unit
 
 
 def test_unit_fails_closed_until_exact_network_override_is_installed() -> None:
@@ -56,7 +54,7 @@ def test_unit_fails_closed_until_exact_network_override_is_installed() -> None:
     assert "/128" in override
 
 
-def test_environment_template_freezes_profile_port_tls_and_exact_placeholders() -> None:
+def test_environment_template_freezes_profile_port_and_exact_placeholders() -> None:
     example = ENV_EXAMPLE.read_text(encoding="utf-8")
     settings = {
         line.split("=", 1)[0]: line.split("=", 1)[1]
@@ -90,11 +88,9 @@ def test_npm_template_is_exact_verified_bounded_and_never_retries() -> None:
     assert "deny all" in template
     assert "if ($scheme != https) { return 404; }" in template
     assert "if ($request_uri != /mcp) { return 404; }" in template
-    assert "proxy_pass https://REPLACE_WITH_EXACT_BACKEND_PRIVATE_IP:8443/mcp" in template
-    assert "proxy_ssl_name REPLACE_WITH_BACKEND_TLS_NAME" in template
-    assert "proxy_ssl_trusted_certificate REPLACE_WITH_PINNED_BACKEND_CA_FILE" in template
-    assert "proxy_ssl_verify on" in template
-    assert "proxy_ssl_verify off" not in template
+    assert "proxy_pass http://REPLACE_WITH_EXACT_BACKEND_PRIVATE_IP:8443/mcp" in template
+    assert "proxy_ssl_" not in template
+    assert "PINNED_BACKEND_CA" not in template
     assert "proxy_pass_request_headers off" in template
     assert "proxy_next_upstream off" in template
     assert "proxy_redirect off" in template
@@ -144,15 +140,23 @@ def test_runbook_requires_live_private_and_no_payload_log_evidence() -> None:
     assert "no Authorization value, MCP body" in readme
     assert "non-VPN external network" in readme
     assert "Private DNS absence alone is not proof" in prose
-    assert "`proxy_ssl_verify off` is forbidden" in readme
-    assert "every caller-supplied `Forwarded`" in readme
-    assert "`Via`, `X-Real-IP`, and `X-Forwarded-*`" in readme
+    assert "exact private HTTP upstream" in prose
+    assert "NPM-generated `Forwarded`, `Via`" in readme
+    assert "`X-Real-IP`, or `X-Forwarded-*`" in readme
+    assert "never uses them as" in readme
+    assert "custom CA handoff" in readme
+    assert "Disable Force SSL redirects" in readme
+    assert "Client HTTP must never redirect" in readme
+    assert "complete `nginx -T` output" in readme
+    assert "Global `real_ip_header`, `set_real_ip_from`, `real_ip_recursive`" in readme
+    assert "spoofed LAN values" in readme
+    assert "`Forwarded`, `X-Forwarded-For`, and `X-Real-IP`" in readme
     assert "shared or public edge listener is acceptable only" in readme
     assert "before selecting or connecting" in readme
     assert "hard 30-second" in readme
     assert "hard five-minute GET/SSE" in readme
     assert "multi-process atomicity test" in readme
-    assert "backend connection or firewall counter must remain at zero" in readme
+    assert "backend connection or firewall counter must remain at zero" in prose
     assert "never spooled to a temporary file" in prose
 
 
