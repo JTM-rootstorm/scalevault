@@ -1,3 +1,4 @@
+from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import TypedDict
 from uuid import UUID
@@ -20,6 +21,35 @@ PRODUCTION_AUTH: _ProductionAuth = {
     "client_token_pepper_key_id": "codex-primary-v1",
 }
 
+CODEX_INGRESS_AUTH: _ProductionAuth = {
+    "client_token_pepper_credential": Path(
+        "/run/credentials/kivra-memory-codex-ingress.service/client-token-pepper"
+    ),
+    "client_token_pepper_key_id": "codex-primary-v1",
+}
+
+
+def codex_ingress_settings(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "environment": "production",
+        "server_profile": "codex_private_ingress",
+        "database_url": PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory"),
+        "metrics_enabled": False,
+        "codex_ingress_host": "10.0.0.78",
+        "codex_ingress_port": 8443,
+        "codex_ingress_external_hostname": "memory.example.test",
+        "codex_ingress_trusted_proxy_cidrs": (ip_network("10.0.0.10/32"),),
+        "codex_ingress_tls_certificate": Path(
+            "/run/credentials/kivra-memory-codex-ingress.service/backend-tls-cert"
+        ),
+        "codex_ingress_tls_private_key": Path(
+            "/run/credentials/kivra-memory-codex-ingress.service/backend-tls-key"
+        ),
+        **CODEX_INGRESS_AUTH,
+    }
+    values.update(overrides)
+    return values
+
 
 def uid(value: int) -> UUID:
     return new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=value)
@@ -38,6 +68,71 @@ def test_settings_use_loopback_defaults() -> None:
     assert settings.sealed_content_enabled is False
     assert settings.sealed_key_provider_root is None
     assert settings.sealed_digest_binding_credential is None
+
+
+def test_codex_private_ingress_is_an_explicit_narrow_production_profile() -> None:
+    settings = Settings(**codex_ingress_settings())  # type: ignore[arg-type]
+
+    assert settings.host == "127.0.0.1"
+    assert str(settings.codex_ingress_host) == "10.0.0.78"
+    assert settings.codex_ingress_port == 8443
+    assert settings.codex_ingress_external_hostname == "memory.example.test"
+    assert settings.metrics_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("environment", "test", "production-only"),
+        ("codex_ingress_host", "0.0.0.0", "exact private address"),
+        ("codex_ingress_host", "127.0.0.1", "exact private address"),
+        ("codex_ingress_port", 8080, "port must be 8443"),
+        ("codex_ingress_external_hostname", "MEMORY.example.test", "hostname is invalid"),
+        ("codex_ingress_trusted_proxy_cidrs", (), "proxy CIDRs are invalid"),
+        (
+            "codex_ingress_trusted_proxy_cidrs",
+            (ip_network("10.0.0.0/24"),),
+            "CIDRs must be exact hosts",
+        ),
+        ("metrics_enabled", True, "metrics must be disabled"),
+        ("codex_ingress_tls_certificate", Path("/tmp/cert"), "TLS certificate"),
+        ("codex_ingress_tls_private_key", Path("/tmp/key"), "TLS private key"),
+    ],
+)
+def test_codex_private_ingress_rejects_unsafe_configuration(
+    field: str, value: object, message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Settings(**codex_ingress_settings(**{field: value}))  # type: ignore[arg-type]
+
+
+def test_canonical_profile_rejects_codex_ingress_settings() -> None:
+    with pytest.raises(ValidationError, match="require the Codex ingress server profile"):
+        Settings(codex_ingress_host=ip_address("10.0.0.78"))
+
+
+def test_codex_private_ingress_uses_its_own_sealed_digest_boundary() -> None:
+    with pytest.raises(ValidationError, match="systemd credential boundary"):
+        Settings(
+            **codex_ingress_settings(
+                sealed_content_enabled=True,
+                sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
+                sealed_digest_binding_credential=Path(
+                    "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
+                ),
+            )  # type: ignore[arg-type]
+        )
+
+    settings = Settings(
+        **codex_ingress_settings(
+            sealed_content_enabled=True,
+            sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
+            sealed_digest_binding_credential=Path(
+                "/run/credentials/kivra-memory-codex-ingress.service/sealed-digest-binding"
+            ),
+        )  # type: ignore[arg-type]
+    )
+    assert settings.sealed_content_enabled is True
 
 
 def test_sealed_content_requires_an_explicit_absolute_provider_root() -> None:

@@ -199,6 +199,8 @@ def main() -> None:
 
     try:
         settings = get_settings()
+        if settings.server_profile != "canonical":
+            raise RuntimeError("invalid_canonical_server_profile")
         sealed_runtime = SealedRuntime.from_settings(settings)
         runtime = MemoryNodeRuntime.from_settings(settings, sealed_runtime=sealed_runtime)
         chatgpt_runtime = (
