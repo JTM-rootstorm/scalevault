@@ -23,6 +23,10 @@ from pydantic import (
     model_validator,
 )
 
+from kivra_memory.api.http_transport import (
+    MAX_MCP_REQUEST_BODY_BYTES,
+    loopback_transport_security,
+)
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.sealed_content import SealedContentRequest
 from kivra_memory.application.selection import (
@@ -1195,6 +1199,8 @@ def create_mutation_mcp(
         streamable_http_path="/mcp",
         json_response=True,
         stateless_http=True,
+        max_request_body_size=MAX_MCP_REQUEST_BODY_BYTES,
+        transport_security=loopback_transport_security(),
     )
     server.register_validation_error_payload(
         [tool.name for tool in tools],
@@ -1298,6 +1304,8 @@ def create_chatgpt_read_mcp(
         streamable_http_path="/mcp",
         json_response=True,
         stateless_http=True,
+        max_request_body_size=MAX_MCP_REQUEST_BODY_BYTES,
+        transport_security=loopback_transport_security(),
     )
     _register_read_dispatches(
         server,
@@ -1348,6 +1356,8 @@ def create_mcp(
         streamable_http_path="/mcp",
         json_response=True,
         stateless_http=True,
+        max_request_body_size=MAX_MCP_REQUEST_BODY_BYTES,
+        transport_security=loopback_transport_security(),
     )
 
     _register_read_dispatches(

@@ -346,3 +346,28 @@ def test_startup_configuration_error_is_sanitized(
     assert captured.err == "ScaleVault configuration is invalid\n"
     assert sentinel not in captured.err
     get_settings.cache_clear()
+
+
+def test_uvicorn_does_not_trust_proxy_headers_or_advertise_its_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings()
+    runtime = configured_runtime()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("kivra_memory.api.app.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "kivra_memory.api.app.MemoryNodeRuntime.from_settings",
+        MagicMock(return_value=runtime),
+    )
+
+    def run(_application: object, **kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("kivra_memory.api.app.uvicorn.run", run)
+
+    main()
+
+    assert captured["host"] == "127.0.0.1"
+    assert captured["proxy_headers"] is False
+    assert captured["server_header"] is False

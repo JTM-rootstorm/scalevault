@@ -13,6 +13,7 @@ from pydantic_settings import SettingsError
 from starlette.types import ASGIApp
 
 from kivra_memory import __version__
+from kivra_memory.api.http_transport import MCPHTTPBoundaryMiddleware
 from kivra_memory.api.mcp import (
     AuthenticatedMutationExecutor,
     MutationPrincipalResolver,
@@ -86,6 +87,7 @@ def create_app(
         ),
     )
     mcp_application: ASGIApp = mcp_server.streamable_http_app()
+    mcp_application = MCPHTTPBoundaryMiddleware(mcp_application)
     if runtime is not None:
         mcp_application = runtime.authenticate_mcp(mcp_application)
     chatgpt_server = None
@@ -95,7 +97,9 @@ def create_app(
             read_principal_resolver=current_secure_tunnel_query_principal,
             read_executor=chatgpt_runtime.execute_read,
         )
-        chatgpt_application = chatgpt_runtime.authenticate_mcp(chatgpt_server.streamable_http_app())
+        chatgpt_application = chatgpt_runtime.authenticate_mcp(
+            MCPHTTPBoundaryMiddleware(chatgpt_server.streamable_http_app())
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -215,4 +219,6 @@ def main() -> None:
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level.lower(),
+        proxy_headers=False,
+        server_header=False,
     )
