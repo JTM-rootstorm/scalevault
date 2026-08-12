@@ -154,7 +154,11 @@ async def load_projection_state_for_update(
                 )
                 .order_by(MemoryEvidence.evidence_id)
             )
-            if not creates_memory:
+            # Candidate-lifecycle payload evidence is an after-image of newly
+            # allocated immutable rows. Lock the existing memory projection,
+            # but do not require UPDATE privilege on memory_evidence merely to
+            # prove that those new evidence UUIDs are absent.
+            if not creates_memory and not isinstance(typed_payload, CandidateLifecyclePayload):
                 evidence_query = evidence_query.with_for_update()
             result = await session.execute(evidence_query)
             evidence = list(cast(Sequence[MemoryEvidence], result.scalars().all()))
