@@ -7,6 +7,7 @@ import pytest
 from kivra_memory.api.http_transport import (
     MAX_MCP_HEADER_BYTES,
     MAX_MCP_HEADER_COUNT,
+    MCP_HTTP_BOUNDARY_REJECTIONS,
     MCPHTTPBoundaryMiddleware,
 )
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -119,3 +120,17 @@ async def test_boundary_rejects_excessive_aggregate_header_bytes() -> None:
     assert reached is False
     assert messages[0]["status"] == 431
     assert messages[1]["body"] == b'{"error":"invalid_request"}'
+
+
+async def test_boundary_rejection_metric_uses_fixed_payload_silent_reason() -> None:
+    metric = MCP_HTTP_BOUNDARY_REJECTIONS.labels(reason="forwarded_header")
+    before = metric._value.get()
+
+    reached, messages = await _call(
+        [(b"host", b"127.0.0.1:8080"), (b"x-forwarded-for", b"SENTINEL")]
+    )
+
+    assert reached is False
+    assert messages[0]["status"] == 400
+    assert messages[1]["body"] == b'{"error":"invalid_request"}'
+    assert metric._value.get() == before + 1

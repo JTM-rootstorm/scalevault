@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from mcp.server.transport_security import TransportSecuritySettings
+from prometheus_client import Counter
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MAX_MCP_REQUEST_BODY_BYTES = 1024 * 1024
 MAX_MCP_HEADER_COUNT = 64
 MAX_MCP_HEADER_BYTES = 16 * 1024
+
+MCP_HTTP_BOUNDARY_REJECTIONS = Counter(
+    "kivra_memory_mcp_http_boundary_rejections_total",
+    "MCP requests rejected before protocol parsing.",
+    labelnames=("reason",),
+)
 
 _SINGLETON_HEADERS = frozenset(
     {
@@ -50,40 +57,40 @@ class MCPHTTPBoundaryMiddleware:
 
         headers = scope.get("headers", ())
         if len(headers) > MAX_MCP_HEADER_COUNT:
-            await _reject(send, status=431)
+            await _reject(send, status=431, reason="header_count")
             return
 
         counts: dict[bytes, int] = {}
         total_bytes = 0
         for raw_name, raw_value in headers:
             if not isinstance(raw_name, bytes) or not isinstance(raw_value, bytes):
-                await _reject(send, status=400)
+                await _reject(send, status=400, reason="header_encoding")
                 return
             name = raw_name.lower()
             total_bytes += len(raw_name) + len(raw_value)
             if total_bytes > MAX_MCP_HEADER_BYTES:
-                await _reject(send, status=431)
+                await _reject(send, status=431, reason="header_bytes")
                 return
             counts[name] = counts.get(name, 0) + 1
-            if (
-                name in _FORWARDED_HEADERS
-                or name.startswith(b"x-forwarded-")
-                or (name in _SINGLETON_HEADERS and counts[name] > 1)
-            ):
-                await _reject(send, status=400)
+            if name in _FORWARDED_HEADERS or name.startswith(b"x-forwarded-"):
+                await _reject(send, status=400, reason="forwarded_header")
+                return
+            if name in _SINGLETON_HEADERS and counts[name] > 1:
+                await _reject(send, status=400, reason="duplicate_singleton")
                 return
 
         if counts.get(b"host") != 1:
-            await _reject(send, status=400)
+            await _reject(send, status=400, reason="host_count")
             return
         if counts.get(b"content-length", 0) and counts.get(b"transfer-encoding", 0):
-            await _reject(send, status=400)
+            await _reject(send, status=400, reason="ambiguous_body_framing")
             return
 
         await self._app(scope, receive, send)
 
 
-async def _reject(send: Send, *, status: int) -> None:
+async def _reject(send: Send, *, status: int, reason: str) -> None:
+    MCP_HTTP_BOUNDARY_REJECTIONS.labels(reason=reason).inc()
     body = b'{"error":"invalid_request"}'
     start: Message = {
         "type": "http.response.start",
@@ -102,6 +109,7 @@ __all__ = [
     "MAX_MCP_HEADER_BYTES",
     "MAX_MCP_HEADER_COUNT",
     "MAX_MCP_REQUEST_BODY_BYTES",
+    "MCP_HTTP_BOUNDARY_REJECTIONS",
     "MCPHTTPBoundaryMiddleware",
     "loopback_transport_security",
 ]
