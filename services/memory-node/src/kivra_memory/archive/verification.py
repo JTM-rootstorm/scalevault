@@ -9,12 +9,12 @@ import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from jsonschema import Draft202012Validator, SchemaError  # type: ignore[import-untyped]
 
 from kivra_memory.archive.codec import SnapshotCodec, SnapshotData, SnapshotLimits
 from kivra_memory.archive.git import (
-    GitCommitSigner,
     GitSigningError,
     VerifiedGitCommit,
     archive_commit_message,
@@ -35,6 +35,38 @@ from kivra_memory.domain.events import MemoryEvent
 
 class ArchiveVerificationError(ValueError):
     """Raised when untrusted archive bytes fail closed verification."""
+
+
+class ArchiveCommitVerifier(Protocol):
+    """Public-key-only commit verification seam used by restore readers."""
+
+    def verify_archive_commit(
+        self,
+        commit_sha: str,
+        *,
+        expected_parent_sha: str | None,
+        expected_message: str,
+        expected_timestamp: str,
+        expected_files: Mapping[str, bytes],
+    ) -> VerifiedGitCommit: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveSignerEpoch:
+    """Externally supplied event-range trust policy for one signer epoch."""
+
+    first_event_sequence: int
+    last_event_sequence: int | None
+    verifier: ArchiveCommitVerifier
+
+    def __post_init__(self) -> None:
+        if isinstance(self.first_event_sequence, bool) or self.first_event_sequence < 1:
+            raise ValueError("signer epoch first sequence must be positive")
+        if self.last_event_sequence is not None and (
+            isinstance(self.last_event_sequence, bool)
+            or self.last_event_sequence < self.first_event_sequence
+        ):
+            raise ValueError("signer epoch last sequence is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,7 +299,7 @@ def verify_manifest_chain(
 
 def verify_signed_archive(
     commits: Sequence[ArchiveCommitBatch],
-    signer: GitCommitSigner,
+    signer: ArchiveCommitVerifier,
     *,
     snapshot_limits: SnapshotLimits | None = None,
 ) -> VerifiedArchive:
@@ -296,6 +328,74 @@ def verify_signed_archive(
                     verified_batch.manifest.last_event_sequence,
                 ),
                 expected_timestamp=verified_batch.manifest.exported_at,
+                expected_files=expected_files,
+            )
+            verified_commits.append(VerifiedArchiveCommit(git=verified_git, batch=verified_batch))
+            expected_parent_sha = verified_git.commit_sha
+    except GitSigningError:
+        raise ArchiveVerificationError("archive Git chain failed verification") from None
+
+    verified_batches = tuple(commit.batch for commit in verified_commits)
+    verify_manifest_chain(verified_batches)
+    return VerifiedArchive(commits=tuple(verified_commits))
+
+
+def verify_signed_archive_epochs(
+    commits: Sequence[ArchiveCommitBatch],
+    epochs: Sequence[ArchiveSignerEpoch],
+    *,
+    snapshot_limits: SnapshotLimits | None = None,
+) -> VerifiedArchive:
+    """Verify history against an explicit, gap-free external signer epoch map."""
+
+    candidates = tuple(commits)
+    policy = tuple(epochs)
+    if not candidates or not policy:
+        raise ArchiveVerificationError("archive chain or signer epoch map is empty")
+    expected_epoch_start = 1
+    for index, epoch in enumerate(policy):
+        if epoch.first_event_sequence != expected_epoch_start:
+            raise ArchiveVerificationError("archive signer epoch map is gapped")
+        if epoch.last_event_sequence is None:
+            if index != len(policy) - 1:
+                raise ArchiveVerificationError("only the final signer epoch may be open-ended")
+        else:
+            expected_epoch_start = epoch.last_event_sequence + 1
+
+    verified_commits: list[VerifiedArchiveCommit] = []
+    expected_parent_sha: str | None = None
+    try:
+        for candidate in candidates:
+            verified_batch = verify_archive_batch(
+                candidate.batch,
+                snapshot_limits=snapshot_limits,
+            )
+            manifest = verified_batch.manifest
+            matching = tuple(
+                epoch
+                for epoch in policy
+                if epoch.first_event_sequence <= manifest.first_event_sequence
+                and (
+                    epoch.last_event_sequence is None
+                    or manifest.last_event_sequence <= epoch.last_event_sequence
+                )
+            )
+            if len(matching) != 1:
+                raise ArchiveVerificationError(
+                    "archive batch crosses or misses an external signer epoch"
+                )
+            expected_files = {
+                MANIFEST_PATH: verified_batch.manifest_bytes,
+                **verified_batch.files,
+            }
+            verified_git = matching[0].verifier.verify_archive_commit(
+                candidate.commit_sha,
+                expected_parent_sha=expected_parent_sha,
+                expected_message=archive_commit_message(
+                    manifest.first_event_sequence,
+                    manifest.last_event_sequence,
+                ),
+                expected_timestamp=manifest.exported_at,
                 expected_files=expected_files,
             )
             verified_commits.append(VerifiedArchiveCommit(git=verified_git, batch=verified_batch))

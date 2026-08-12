@@ -11,8 +11,10 @@ from kivra_memory.archive.codec import (
 )
 from kivra_memory.archive.git import (
     GitCommitSigner,
+    GitCommitVerifier,
     GitSigningConfig,
     GitSigningError,
+    GitVerificationConfig,
     ProcessResult,
     ProcessRunner,
     VerifiedGitCommit,
@@ -31,6 +33,12 @@ from kivra_memory.archive.models import (
     media_type_for_path,
     validate_archive_path,
 )
+from kivra_memory.archive.recovery import (
+    ArchiveRecoveryError,
+    GitRecoveryLimits,
+    GitRecoverySource,
+    ReadOnlyGitArchive,
+)
 from kivra_memory.archive.restore import (
     RestoreDestinationState,
     RestorePlan,
@@ -42,6 +50,7 @@ from kivra_memory.archive.verification import (
     ArchiveBatch,
     ArchiveCommitBatch,
     ArchiveReadLimits,
+    ArchiveSignerEpoch,
     ArchiveVerificationError,
     VerifiedArchive,
     VerifiedArchiveBatch,
@@ -51,6 +60,7 @@ from kivra_memory.archive.verification import (
     verify_archive_batch,
     verify_manifest_chain,
     verify_signed_archive,
+    verify_signed_archive_epochs,
 )
 
 __all__ = [
@@ -61,13 +71,20 @@ __all__ = [
     "ArchiveFile",
     "ArchiveManifest",
     "ArchiveReadLimits",
+    "ArchiveRecoveryError",
+    "ArchiveSignerEpoch",
     "ArchiveValidationError",
     "ArchiveVerificationError",
     "GitCommitSigner",
+    "GitCommitVerifier",
+    "GitRecoveryLimits",
+    "GitRecoverySource",
     "GitSigningConfig",
     "GitSigningError",
+    "GitVerificationConfig",
     "ProcessResult",
     "ProcessRunner",
+    "ReadOnlyGitArchive",
     "RestoreDestinationState",
     "RestorePlan",
     "RestorePreflightError",
@@ -96,4 +113,5 @@ __all__ = [
     "verify_archive_batch",
     "verify_manifest_chain",
     "verify_signed_archive",
+    "verify_signed_archive_epochs",
 ]

@@ -7,11 +7,14 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.archive.restore import RestorePlan as CoreRestorePlan
 from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.storage.archive import RestorePlan, restore_archive_rows
+from kivra_memory.storage.models import Memory
+from kivra_memory.storage.outbox import enqueue_outbox_job
 from kivra_memory.storage.projector import rebuild_semantic_projections
 
 
@@ -21,6 +24,7 @@ class ArchiveRestoreResult:
 
     tenant_id: UUID
     final_high_water_sequence: int
+    embedding_jobs_queued: int = 0
 
 
 class ValidatedRestoreDecoder[VerifiedPlanT](Protocol):
@@ -103,6 +107,7 @@ async def restore_validated_archive[VerifiedPlanT](
     verified_plan: VerifiedPlanT,
     decoder: ValidatedRestoreDecoder[VerifiedPlanT],
     verifier: RestoredStateVerifier,
+    requeue_embeddings: bool = False,
 ) -> ArchiveRestoreResult:
     """Decode before mutation, restore once, then verify in the same transaction.
 
@@ -115,7 +120,47 @@ async def restore_validated_archive[VerifiedPlanT](
     await restore_archive_rows(session, plan)
     await rebuild_semantic_projections(session, tenant_id=plan.tenant_id)
     await verifier.verify(session, plan)
+    queued = (
+        await requeue_restored_embeddings(session, tenant_id=plan.tenant_id)
+        if requeue_embeddings
+        else 0
+    )
     return ArchiveRestoreResult(
         tenant_id=plan.tenant_id,
         final_high_water_sequence=plan.final_high_water_sequence,
+        embedding_jobs_queued=queued,
     )
+
+
+async def requeue_restored_embeddings(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+) -> int:
+    """Queue one idempotent content-free embedding rebuild job per restored memory."""
+
+    if not session.in_transaction():
+        raise ValueError("embedding recovery requires an active transaction")
+    memories = tuple(
+        (
+            await session.execute(
+                select(Memory).where(Memory.tenant_id == tenant_id).order_by(Memory.memory_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for memory in memories:
+        await enqueue_outbox_job(
+            session,
+            tenant_id=tenant_id,
+            job_type="embed_memory",
+            aggregate_type="memory",
+            aggregate_id=memory.memory_id,
+            references={
+                "memory_id": memory.memory_id,
+                "memory_version": memory.revision,
+                "event_id": memory.last_event_id,
+            },
+        )
+    return len(memories)

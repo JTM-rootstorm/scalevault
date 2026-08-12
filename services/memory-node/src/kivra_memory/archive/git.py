@@ -111,14 +111,153 @@ class GitSigningConfig:
         ):
             if not path.is_absolute():
                 raise ValueError("Git archive paths must be absolute")
-        if _IDENTITY.fullmatch(self.signer_principal) is None:
-            raise ValueError("signer principal is invalid")
-        if not self.author_name or "\n" in self.author_name or "\r" in self.author_name:
-            raise ValueError("Git author name is invalid")
-        if _EMAIL.fullmatch(self.author_email) is None:
-            raise ValueError("Git author email is invalid")
+        _validate_identity_fields(
+            self.signer_principal,
+            self.author_name,
+            self.author_email,
+        )
         if isinstance(self.timeout_seconds, bool) or not 1 <= self.timeout_seconds <= 120:
             raise ValueError("Git timeout is outside the accepted range")
+
+
+@dataclass(frozen=True, slots=True)
+class GitVerificationConfig:
+    """Verification-only Git configuration with no signing-key field."""
+
+    repository: Path
+    allowed_signers_file: Path
+    signer_principal: str
+    author_name: str
+    author_email: str
+    git_executable: Path = Path("/usr/bin/git")
+    ssh_keygen_executable: Path = Path("/usr/bin/ssh-keygen")
+    timeout_seconds: int = 30
+
+    def __post_init__(self) -> None:
+        for path in (
+            self.repository,
+            self.allowed_signers_file,
+            self.git_executable,
+            self.ssh_keygen_executable,
+        ):
+            if not path.is_absolute():
+                raise ValueError("Git archive paths must be absolute")
+        _validate_identity_fields(
+            self.signer_principal,
+            self.author_name,
+            self.author_email,
+        )
+        if isinstance(self.timeout_seconds, bool) or not 1 <= self.timeout_seconds <= 120:
+            raise ValueError("Git timeout is outside the accepted range")
+
+
+class GitCommitVerifier:
+    """Verify archive commits using public trust material only."""
+
+    def __init__(
+        self,
+        config: GitVerificationConfig,
+        runner: ProcessRunner | None = None,
+    ) -> None:
+        self._config = config
+        self._runner = runner or SubprocessRunner()
+
+    def verify_commit(self, commit_sha: str) -> None:
+        """Verify a commit against only the externally pinned allowed-signers file."""
+
+        _require_object_id(commit_sha, "commit")
+        result = self._run_git(("verify-commit", "--raw", commit_sha))
+        principals = {
+            match.group(1).decode("ascii")
+            for line in (*result.stderr.splitlines(), *result.stdout.splitlines())
+            if (match := _SIGNATURE_STATUS.fullmatch(line)) is not None
+        }
+        if principals != {self._config.signer_principal}:
+            raise GitSigningError("Git commit signer identity did not match the trust anchor")
+
+    def verify_archive_commit(
+        self,
+        commit_sha: str,
+        *,
+        expected_parent_sha: str | None,
+        expected_message: str,
+        expected_timestamp: str,
+        expected_files: Mapping[str, bytes],
+    ) -> VerifiedGitCommit:
+        """Verify one signed commit's parent, metadata, changed paths, and exact blobs."""
+
+        _require_object_id(commit_sha, "commit")
+        if expected_parent_sha is not None:
+            _require_object_id(expected_parent_sha, "parent")
+        _validate_message(expected_message)
+        normalized_timestamp = _validate_timestamp(expected_timestamp)
+        if not expected_files:
+            raise GitSigningError("archive commit expected file set is empty")
+        self.verify_commit(commit_sha)
+
+        commit_result = self._run_git(("cat-file", "commit", commit_sha))
+        tree_sha, parent_sha, author, committer, message = _parse_commit_object(
+            commit_result.stdout
+        )
+        if parent_sha != expected_parent_sha:
+            raise GitSigningError("Git archive first-parent chain is invalid")
+        if message != expected_message.encode("utf-8"):
+            raise GitSigningError("Git archive commit message does not match its batch")
+        expected_identity = _expected_identity_line(self._config, normalized_timestamp)
+        if author != expected_identity or committer != expected_identity:
+            raise GitSigningError("Git archive commit identity does not match its batch")
+
+        expected_tree: dict[str, str] = {}
+        for path, content in expected_files.items():
+            _validate_git_path(path)
+            expected_tree[path] = _git_object_id(b"blob", content, len(commit_sha))
+        tree_result = self._run_git(("ls-tree", "-r", "-z", "--full-tree", commit_sha))
+        actual_tree = _parse_tree_entries(tree_result.stdout, max_entries=len(expected_tree))
+        if actual_tree != expected_tree:
+            raise GitSigningError("Git archive tree does not exactly match its batch bytes")
+
+        return VerifiedGitCommit(
+            commit_sha=commit_sha,
+            tree_sha=tree_sha,
+            parent_sha=parent_sha,
+        )
+
+    def _run_git(self, arguments: tuple[str, ...]) -> ProcessResult:
+        result = self._runner.run(
+            (*self._git_prefix(), *arguments),
+            stdin=b"",
+            environment=self._environment(),
+            timeout_seconds=self._config.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise GitSigningError("Git archive object verification failed")
+        return result
+
+    def _git_prefix(self) -> tuple[str, ...]:
+        return (
+            str(self._config.git_executable),
+            "--no-pager",
+            "--literal-pathspecs",
+            "-C",
+            str(self._config.repository),
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "gpg.format=ssh",
+            "-c",
+            f"gpg.ssh.program={self._config.ssh_keygen_executable}",
+            "-c",
+            f"gpg.ssh.allowedSignersFile={self._config.allowed_signers_file}",
+        )
+
+    def _environment(self) -> dict[str, str]:
+        return {
+            "LC_ALL": "C",
+            "LANG": "C",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
 
 
 class GitCommitSigner:
@@ -375,7 +514,19 @@ def _parse_commit_object(document: bytes) -> tuple[str, str | None, bytes, bytes
     return tree_sha, parent_sha, author_values[0], committer_values[0], message
 
 
-def _expected_identity_line(config: GitSigningConfig, timestamp: str) -> bytes:
+def _validate_identity_fields(principal: str, author_name: str, author_email: str) -> None:
+    if _IDENTITY.fullmatch(principal) is None:
+        raise ValueError("signer principal is invalid")
+    if not author_name or "\n" in author_name or "\r" in author_name:
+        raise ValueError("Git author name is invalid")
+    if _EMAIL.fullmatch(author_email) is None:
+        raise ValueError("Git author email is invalid")
+
+
+def _expected_identity_line(
+    config: GitSigningConfig | GitVerificationConfig,
+    timestamp: str,
+) -> bytes:
     parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     epoch_seconds = int(parsed.timestamp())
     return f"{config.author_name} <{config.author_email}> {epoch_seconds} +0000".encode()

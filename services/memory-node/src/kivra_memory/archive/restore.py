@@ -6,9 +6,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from kivra_memory.archive.codec import SnapshotData, SnapshotLimits, SnapshotTable
-from kivra_memory.archive.git import GitCommitSigner
 from kivra_memory.archive.verification import (
     ArchiveCommitBatch,
+    ArchiveCommitVerifier,
     ArchiveVerificationError,
     VerifiedArchive,
     verify_manifest_chain,
@@ -81,7 +81,7 @@ def preflight_restore(
     commits: Sequence[ArchiveCommitBatch],
     destination: RestoreDestinationState,
     *,
-    signer: GitCommitSigner,
+    signer: ArchiveCommitVerifier,
     snapshot_limits: SnapshotLimits | None = None,
 ) -> RestorePlan:
     """Verify signed Git history, all bytes, and destination before a transaction."""
