@@ -32,6 +32,12 @@ documentation and do not change these decisions implicitly.
 | [0024](0024-dedicated-private-codex-ingress.md) | Accepted | Run a separate direct-only private listener behind the LAN/VPN HTTPS proxy while keeping ChatGPT and operator routes on loopback. |
 | [0025](0025-proxy-terminated-tls-for-private-ingress.md) | Accepted | Terminate Let's Encrypt TLS at Nginx Proxy Manager and use an exact-source private HTTP hop to the Codex ingress. |
 | [0026](0026-npm-static-acme-renewal-exception.md) | Accepted | Permit NPM's static, non-proxied ACME challenge prefix while keeping every ScaleVault application route private. |
+| [0027](0027-encrypted-postgresql-pitr-and-recovery-sets.md) | Accepted | Use continuous encrypted PostgreSQL PITR with daily verified base backups, independently held recovery identities, and protected recovery chains. |
+| [0028](0028-monotonic-sealed-key-destruction.md) | Accepted | Make a separately rooted and externally anchored monotonic destruction ledger dominate every restored sealed-key backup. |
+| [0029](0029-archive-recovery-continuation-and-signer-epochs.md) | Accepted | Recover through anchored signed history, bounded signer epochs, new-target continuation by default, and an encrypted full-history secondary bundle. |
+| [0030](0030-credential-lifecycle-and-revocation.md) | Accepted | Give every credential an explicit rotation, revocation, compromise, and recovery contract, including no post-revocation GitHub ingress processing. |
+| [0031](0031-private-observability-and-operator-audit.md) | Accepted | Keep telemetry private and bounded, payload-blind aggregate collection least-privileged, and identity-specific reports root-local. |
+| [0032](0032-offline-public-artifact-leakage-scanner.md) | Accepted | Fail closed with a pure bounded offline scanner before any future public artifact can be signed or published. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries
