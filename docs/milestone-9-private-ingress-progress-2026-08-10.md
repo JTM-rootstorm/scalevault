@@ -1,9 +1,9 @@
-# Milestone 9 private-ingress progress
+# Milestone 9 private-ingress acceptance
 
 Milestone 9 was rescoped by ADR 0022 and ADR 0024 to keep ChatGPT Web on the
 outbound Secure MCP Tunnel and give owner-controlled Codex devices a separate
-direct-private HTTPS ingress. This record is a progress checkpoint, not
-Milestone 9 acceptance.
+direct-private HTTPS ingress. This record captures the completed Milestone 9
+acceptance evidence.
 
 ## Repository evidence
 
@@ -20,12 +20,12 @@ Milestone 9 acceptance.
 - Spawned-process key-provider tests cover provision/provision,
   provision/destroy, get/destroy, and interrupted-publication races without
   material resurrection or temporary-file residue.
-- The latest development-host gate passed 1,212 Python tests with 172
-  PostgreSQL tests skipped because that host lacks the required `vector`
-  extension. Ruff, mypy, Go vet/tests/build determinism, protobuf determinism,
-  and JSON schemas passed. The top-level `make verify` stopped only because
-  `pnpm` is not installed; the equivalent package-local npm check and test
-  commands passed.
+- The final development-host gate passed 1,212 Python tests with 175
+  PostgreSQL tests skipped because that host lacks the required PostgreSQL test
+  binaries and extensions. Ruff, mypy, Go vet/tests/build determinism,
+  protobuf determinism, and JSON schemas passed. The top-level `make verify`
+  stopped only because `pnpm` is not installed; the equivalent package-local
+  npm check and test commands passed.
 - The authoritative unprivileged LXC PostgreSQL 17 lane passed all 187
   integration tests with the required extension gate enabled and zero skips.
 - The direct runtime now requires and installs one server-owned, UUIDv7-pinned
@@ -39,8 +39,8 @@ Milestone 9 acceptance.
 
 ## Sanitized live evidence
 
-- Immutable release `93d9b2d` is active. Releases `48a6e4f` and `7df898c` remain
-  retained for recovery and defect provenance.
+- Immutable release `c95d66c` is active. Releases `93d9b2d` and diagnostic
+  release `fde1ccb` remain retained for recovery and defect provenance.
 - The canonical Memory API remained loopback-only and the Secure MCP Tunnel
   remained active throughout deployment.
 - The ingress now serves HTTP on one exact private address and port 8443 with
@@ -160,8 +160,27 @@ Milestone 9 acceptance.
 - The canonical API, ChatGPT tunnel, and Codex ingress were active, tunnel
   readiness was `ready`, and no protected acceptance scratch directories
   remained after all live probes.
+- The first account-side ChatGPT Web read reached the selected tunnel but its
+  four `initialize` attempts failed before MCP parsing. Payload-silent
+  fixed-label counters proved that the loopback ChatGPT boundary rejected
+  forwarding metadata carried through the OpenAI tunnel; the reported follow-up
+  `405` was session-termination cleanup after the actual `400` failure.
+- Diagnostic release `fde1ccb` added only bounded rejection-category metrics.
+  Release `c95d66c` then made the authenticated ChatGPT-only boundary discard
+  forwarding metadata after enforcing header count and byte limits. Direct and
+  Codex ingress retain fail-closed rejection of those headers, and secure-tunnel
+  identity remains derived only from the pinned bearer and installation.
+- A payload-silent live read with forwarding metadata present initialized and
+  returned the expected active revision-two canary while the forwarding-header
+  rejection counter remained unchanged. Both canonical API and Secure MCP
+  Tunnel readiness passed after deployment.
+- The operator repeated the exact `memory_get` from ChatGPT Web with conflict
+  inclusion disabled. It returned the intended active revision-two synthetic
+  canary, the exact expected statement, and no conflicts. This account-side
+  observation closes the final acceptance gate without recording the statement
+  in repository or service logs.
 
-## Open acceptance gates
+## Acceptance result
 
 The separately managed reverse proxy reaches the HTTP backend. Its route guards,
 authenticated direct-private path, bounded SSE lifetime, revocation, observed
@@ -202,10 +221,7 @@ application requests returned fixed `404` with no redirect. The canonical API,
 Codex ingress, and Secure MCP Tunnel services remained active.
 
 The genuinely external source, exact-bearer log, Codex-session, pinned
-promotion-identity, canonical promotion, and host-side Secure Tunnel read gates
-are complete. Milestone acceptance remains open only for the account-side live
-ChatGPT Web read through the unchanged Secure MCP Tunnel; repository and host
-evidence cannot substitute for that client observation.
-
-The private ingress activation blockers and runtime-composition defect are
-closed. The final account-side acceptance read is the only remaining item.
+promotion-identity, canonical promotion, host-side Secure Tunnel read, and
+account-side ChatGPT Web read gates are complete. The private ingress
+activation blockers, runtime-composition defect, and tunnel forwarding-header
+compatibility defect are closed. Milestone 9 is accepted.
