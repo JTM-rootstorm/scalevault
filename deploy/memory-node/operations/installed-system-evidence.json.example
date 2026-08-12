@@ -1,0 +1,47 @@
+{
+  "record_version": 1,
+  "reviewed_at_utc": "PENDING",
+  "status": "pending",
+  "source_release": "PENDING",
+  "source_archive_sha256": "PENDING",
+  "migration_revision": "PENDING",
+  "installation_class": "canonical",
+  "service_units": {
+    "inventory_result": "pending",
+    "verification_result": "pending",
+    "hardening_review_result": "pending",
+    "secret_delivery_result": "pending",
+    "dormant_surface_result": "pending"
+  },
+  "listeners": {
+    "canonical_local_only": "pending",
+    "codex_exact_private_listener": "pending",
+    "public_operator_routes_absent": "pending"
+  },
+  "postgresql_recovery": {
+    "backup_object_id": "PENDING",
+    "manifest_sha256": "PENDING",
+    "wal_continuity_result": "pending",
+    "pitr_result": "pending"
+  },
+  "archive_recovery": {
+    "source_head": "PENDING",
+    "primary_forgejo_result": "pending",
+    "secondary_ciphertext_sha256": "PENDING",
+    "secondary_bundle_result": "pending",
+    "continuation_result": "pending"
+  },
+  "security": {
+    "credential_lifecycle_result": "pending",
+    "npm_external_exposure_result": "pending",
+    "leakage_canary_result": "pending",
+    "destruction_dominance_result": "pending"
+  },
+  "operations": {
+    "alerts_result": "pending",
+    "retention_result": "pending",
+    "operator_report_result": "pending",
+    "cleanup_result": "pending"
+  },
+  "remaining_risk_references": []
+}
