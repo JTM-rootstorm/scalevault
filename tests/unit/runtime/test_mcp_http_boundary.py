@@ -134,3 +134,45 @@ async def test_boundary_rejection_metric_uses_fixed_payload_silent_reason() -> N
     assert messages[0]["status"] == 400
     assert messages[1]["body"] == b'{"error":"invalid_request"}'
     assert metric._value.get() == before + 1
+
+
+async def test_tunnel_boundary_strips_forwarded_headers_before_protocol_parsing() -> None:
+    reached = False
+    forwarded_headers: list[tuple[bytes, bytes]] = []
+    messages: list[Message] = []
+
+    async def inner(scope: Scope, _receive: Receive, send: Send) -> None:
+        nonlocal reached, forwarded_headers
+        reached = True
+        forwarded_headers = list(scope["headers"])
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        messages.append(message)
+
+    app: ASGIApp = MCPHTTPBoundaryMiddleware(inner, strip_forwarded_headers=True)
+    await app(
+        _scope(
+            [
+                (b"host", b"127.0.0.1:8080"),
+                (b"content-type", b"application/json"),
+                (b"forwarded", b"for=192.0.2.1"),
+                (b"x-forwarded-for", b"192.0.2.1"),
+                (b"x-real-ip", b"192.0.2.1"),
+                (b"via", b"1.1 proxy"),
+            ]
+        ),
+        cast(Receive, receive),
+        cast(Send, send),
+    )
+
+    assert reached is True
+    assert messages[0]["status"] == 204
+    assert forwarded_headers == [
+        (b"host", b"127.0.0.1:8080"),
+        (b"content-type", b"application/json"),
+    ]

@@ -45,10 +45,11 @@ def loopback_transport_security() -> TransportSecuritySettings:
 
 
 class MCPHTTPBoundaryMiddleware:
-    """Reject ambiguous or proxy-derived MCP headers before protocol parsing."""
+    """Reject ambiguous MCP headers and contain proxy-derived metadata."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, *, strip_forwarded_headers: bool = False) -> None:
         self._app = app
+        self._strip_forwarded_headers = strip_forwarded_headers
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -62,6 +63,7 @@ class MCPHTTPBoundaryMiddleware:
 
         counts: dict[bytes, int] = {}
         total_bytes = 0
+        filtered_headers: list[tuple[bytes, bytes]] = []
         for raw_name, raw_value in headers:
             if not isinstance(raw_name, bytes) or not isinstance(raw_value, bytes):
                 await _reject(send, status=400, reason="header_encoding")
@@ -73,11 +75,14 @@ class MCPHTTPBoundaryMiddleware:
                 return
             counts[name] = counts.get(name, 0) + 1
             if name in _FORWARDED_HEADERS or name.startswith(b"x-forwarded-"):
+                if self._strip_forwarded_headers:
+                    continue
                 await _reject(send, status=400, reason="forwarded_header")
                 return
             if name in _SINGLETON_HEADERS and counts[name] > 1:
                 await _reject(send, status=400, reason="duplicate_singleton")
                 return
+            filtered_headers.append((raw_name, raw_value))
 
         if counts.get(b"host") != 1:
             await _reject(send, status=400, reason="host_count")
@@ -86,6 +91,9 @@ class MCPHTTPBoundaryMiddleware:
             await _reject(send, status=400, reason="ambiguous_body_framing")
             return
 
+        if len(filtered_headers) != len(headers):
+            scope = dict(scope)
+            scope["headers"] = filtered_headers
         await self._app(scope, receive, send)
 
 

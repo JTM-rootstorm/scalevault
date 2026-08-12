@@ -180,6 +180,47 @@ async def test_chatgpt_route_authenticates_and_reaches_only_read_executor() -> N
     assert runtime.disposed is True
 
 
+async def test_chatgpt_route_discards_tunnel_forwarding_headers() -> None:
+    query_principal = principal()
+    authenticator = FixedQueryAuthenticator(query_principal)
+    queries = RecordingQueries()
+    runtime = InertMemoryRuntime()
+    chatgpt_runtime = ChatGPTReadRuntime(
+        authenticator=authenticator,
+        installation_id=INSTALLATION_ID,
+        queries=cast(Any, queries),
+        status=cast(Any, object()),
+    )
+    app = create_app(
+        chatgpt_settings(),
+        runtime=cast(Any, runtime),
+        chatgpt_runtime=chatgpt_runtime,
+    )
+    transport = ASGITransport(app=app)
+
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:8080",
+            headers={
+                "Authorization": "Bearer test-token",
+                "Forwarded": "for=192.0.2.1",
+                "X-Forwarded-For": "192.0.2.1",
+            },
+        ) as client,
+        streamable_http_client(
+            "http://127.0.0.1:8080/chatgpt/mcp",
+            http_client=client,
+        ) as (read_stream, write_stream, _),
+        ClientSession(read_stream, write_stream) as session,
+    ):
+        initialized = await session.initialize()
+
+    assert initialized.serverInfo.name == "ScaleVault ChatGPT Read Node"
+    assert all(call[0] == "Bearer test-token" for call in authenticator.calls)
+
+
 async def test_chatgpt_route_rejects_missing_or_wrong_authorization() -> None:
     runtime = InertMemoryRuntime()
     chatgpt_runtime = ChatGPTReadRuntime(

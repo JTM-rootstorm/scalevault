@@ -98,7 +98,10 @@ def create_app(
             read_executor=chatgpt_runtime.execute_read,
         )
         chatgpt_application = chatgpt_runtime.authenticate_mcp(
-            MCPHTTPBoundaryMiddleware(chatgpt_server.streamable_http_app())
+            MCPHTTPBoundaryMiddleware(
+                chatgpt_server.streamable_http_app(),
+                strip_forwarded_headers=True,
+            )
         )
 
     @asynccontextmanager
