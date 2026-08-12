@@ -1,0 +1,45 @@
+[Unit]
+Description=Verify latest ScaleVault encrypted PostgreSQL base backup
+RequiresMountsFor=/mnt/memory-backup /mnt/memory-recovery
+ConditionPathIsMountPoint=/mnt/memory-backup
+ConditionPathIsMountPoint=/mnt/memory-recovery
+ConditionPathIsRegularFile=/etc/kivra-memory/backup-age-identity
+
+[Service]
+Type=oneshot
+User=memory-recovery
+Group=memory-recovery
+SupplementaryGroups=kivra-backup
+Environment=HOME=/nonexistent
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
+ExecStart=/usr/local/libexec/kivra-memory-postgres-backup verify latest
+UMask=0007
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+PrivateMounts=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+LockPersonality=true
+MemoryDenyWriteExecute=true
+KeyringMode=private
+LimitCORE=0
+CapabilityBoundingSet=
+IPAddressDeny=any
+ReadOnlyPaths=/mnt/memory-backup/kivra-memory-postgres /etc/kivra-memory/backup-age-identity
+ReadWritePaths=/mnt/memory-recovery /mnt/memory-backup/kivra-memory-postgres/status /mnt/memory-backup/kivra-memory-postgres/verification
+TimeoutStartSec=4h

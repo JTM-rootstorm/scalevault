@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly isolated verification of ScaleVault PostgreSQL backup
+
+[Timer]
+OnCalendar=Sun *-*-* 04:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=kivra-memory-backup-verify.service
+
+[Install]
+WantedBy=timers.target

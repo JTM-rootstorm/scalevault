@@ -1,0 +1,1073 @@
+#!/usr/bin/python3
+"""Strict encrypted PostgreSQL physical-backup and WAL transport helper.
+
+This entry point intentionally has no environment-variable configuration.  Its
+installed paths form part of the reviewed deployment contract.  Tests may load
+the module and replace constants, but production invocations cannot redirect a
+backup through ambient state.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import grp
+import hashlib
+import json
+import os
+import pwd
+import re
+import secrets
+import shutil
+import stat
+import subprocess
+import tarfile
+from collections.abc import Iterable
+from contextlib import suppress
+from pathlib import Path
+from typing import Any, Never
+
+PG_BINDIR = Path("/usr/lib/postgresql/17/bin")
+PG_DATA = Path("/var/lib/postgresql/17/main")
+PG_WAL = PG_DATA / "pg_wal"
+PG_SOCKET = Path("/run/postgresql")
+PG_PORT = 5432
+PG_DATABASE = "kivra_memory"
+PG_BACKUP_ROLE = "memory_backup"
+BACKUP_MOUNT = Path("/mnt/memory-backup")
+PLAINTEXT_STAGING_MOUNT = Path("/mnt/memory-backup-staging")
+STORE = BACKUP_MOUNT / "kivra-memory-postgres"
+BASE_ROOT = STORE / "base"
+WAL_ROOT = STORE / "wal"
+STATUS_ROOT = STORE / "status"
+VERIFICATION_ROOT = STORE / "verification"
+STAGING_ROOT = STORE / ".staging"
+RECOVERY_MOUNT = Path("/mnt/memory-recovery")
+RECIPIENT_FILE = Path("/etc/kivra-memory/backup-age-recipient")
+IDENTITY_FILE = Path("/etc/kivra-memory/backup-age-identity")
+RELEASE_FILE = Path("/opt/kivra-memory/app/REVISION")
+CONFIG_DIGEST_FILE = Path("/etc/kivra-memory/recovery-configuration.sha256")
+AGE = Path("/usr/bin/age")
+
+BACKUP_ID_RE = re.compile(r"\A[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}\Z")
+WAL_RE = re.compile(r"\A(?:[0-9A-F]{24}(?:\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)\Z")
+TARGET_NAME_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_.-]{0,62}\Z")
+LSN_RE = re.compile(r"\A[0-9A-F]+/[0-9A-F]+\Z")
+SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
+AGE_RECIPIENT_RE = re.compile(r"\Aage1[023456789acdefghjklmnpqrstuvwxyz]{20,100}\Z")
+MANIFEST_VERSION = 1
+CHUNK = 1024 * 1024
+STORE_DIRECTORY_MODE = 0o770
+STORE_FILE_MODE = 0o640
+STORE_OWNER = "memory-backup"
+STORE_GROUP = "kivra-backup"
+RECOVERY_GROUP = "memory-recovery"
+
+
+class BackupError(RuntimeError):
+    """A content-free, operator-actionable backup failure."""
+
+
+def _fail(code: str) -> Never:
+    raise BackupError(code)
+
+
+def _log(event: str, result: str, object_id: str = "none") -> None:
+    safe = re.compile(r"\A[a-z0-9_.:-]{1,96}\Z")
+    if not all(safe.fullmatch(value) for value in (event, result, object_id)):
+        _fail("internal_log_value_invalid")
+    print(f"backup_event={event} result={result} object_id={object_id}", flush=True)
+
+
+def _resolved(path: Path, *, must_exist: bool = True) -> Path:
+    try:
+        return path.resolve(strict=must_exist)
+    except (OSError, RuntimeError) as exc:
+        raise BackupError("path_resolution_failed") from exc
+
+
+def _require_exact_mount(path: Path, *, writable: bool) -> None:
+    resolved = _resolved(path)
+    if resolved != path or not path.is_dir() or not os.path.ismount(path):
+        _fail("required_mount_missing")
+    probe_mode = os.W_OK | os.X_OK if writable else os.R_OK | os.X_OK
+    if not os.access(path, probe_mode):
+        _fail("required_mount_access_denied")
+
+
+def _require_directory(path: Path, *, mode: int | None = None) -> None:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise BackupError("required_directory_missing") from exc
+    if not stat.S_ISDIR(info.st_mode) or path.is_symlink() or _resolved(path) != path:
+        _fail("directory_unsafe")
+    if mode is not None and stat.S_IMODE(info.st_mode) != mode:
+        _fail("directory_mode_invalid")
+
+
+def _require_owned(path: Path, *, owner: str, group: str, mode: int) -> None:
+    try:
+        info = path.lstat()
+        expected_uid = pwd.getpwnam(owner).pw_uid
+        expected_gid = grp.getgrnam(group).gr_gid
+    except (KeyError, OSError) as exc:
+        raise BackupError("storage_identity_invalid") from exc
+    if info.st_uid != expected_uid or info.st_gid != expected_gid:
+        _fail("storage_owner_invalid")
+    if stat.S_IMODE(info.st_mode) != mode:
+        _fail("storage_mode_invalid")
+
+
+def _ensure_store() -> None:
+    _require_exact_mount(BACKUP_MOUNT, writable=False)
+    _require_owned(BACKUP_MOUNT, owner="root", group=STORE_GROUP, mode=0o750)
+    modes = {
+        STORE: 0o2750,
+        BASE_ROOT: 0o2750,
+        WAL_ROOT: 0o2770,
+        STATUS_ROOT: 0o2770,
+        VERIFICATION_ROOT: 0o2750,
+        STAGING_ROOT: 0o2770,
+    }
+    for path, mode in modes.items():
+        _require_directory(path, mode=mode)
+        _require_owned(path, owner=STORE_OWNER, group=STORE_GROUP, mode=mode)
+    if not os.access(STORE, os.R_OK | os.X_OK):
+        _fail("store_access_denied")
+    if not all(os.access(path, os.W_OK | os.X_OK) for path in (STATUS_ROOT, STAGING_ROOT)):
+        _fail("store_access_denied")
+
+
+def _require_regular_file(path: Path, *, max_bytes: int, private: bool = False) -> None:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise BackupError("required_file_missing") from exc
+    if not stat.S_ISREG(info.st_mode) or path.is_symlink() or info.st_nlink != 1:
+        _fail("file_unsafe")
+    if info.st_size <= 0 or info.st_size > max_bytes:
+        _fail("file_size_invalid")
+    if private and stat.S_IMODE(info.st_mode) & 0o077:
+        _fail("private_file_mode_invalid")
+
+
+def _read_small_text(path: Path, *, code: str, max_bytes: int = 4096) -> str:
+    _require_regular_file(path, max_bytes=max_bytes)
+    try:
+        value = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError) as exc:
+        raise BackupError(code) from exc
+    if not value or any(ord(char) < 0x20 for char in value):
+        _fail(code)
+    return value
+
+
+def _validate_recipient() -> None:
+    value = _read_small_text(RECIPIENT_FILE, code="recipient_invalid", max_bytes=256)
+    if not AGE_RECIPIENT_RE.fullmatch(value):
+        _fail("recipient_invalid")
+    _require_executable(AGE)
+
+
+def _validate_identity() -> None:
+    _require_regular_file(IDENTITY_FILE, max_bytes=4096, private=True)
+    _require_executable(AGE)
+
+
+def _require_executable(path: Path) -> None:
+    if _resolved(path) != path or not path.is_file() or not os.access(path, os.X_OK):
+        _fail("executable_invalid")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while block := handle.read(CHUNK):
+                digest.update(block)
+    except OSError as exc:
+        raise BackupError("object_read_failed") from exc
+    return digest.hexdigest()
+
+
+def _fsync_file(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_dir(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_json_exclusive(path: Path, value: dict[str, Any]) -> None:
+    payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            STORE_FILE_MODE,
+        )
+        os.fchmod(descriptor, STORE_FILE_MODE)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        raise BackupError("metadata_publish_failed") from exc
+
+
+def _write_private_json(path: Path, value: dict[str, Any]) -> None:
+    payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        raise BackupError("metadata_stage_failed") from exc
+
+
+def _replace_json(path: Path, value: dict[str, Any]) -> None:
+    temp = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    _write_json_exclusive(temp, value)
+    os.replace(temp, path)
+    _fsync_dir(path.parent)
+
+
+def _read_index(path: Path, *, kind: str) -> dict[str, Any]:
+    _require_regular_file(path, max_bytes=64 * 1024)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BackupError("manifest_invalid") from exc
+    if not isinstance(value, dict) or value.get("manifest_version") != MANIFEST_VERSION:
+        _fail("manifest_invalid")
+    if value.get("kind") != kind:
+        _fail("manifest_invalid")
+    common = {
+        "created_at",
+        "kind",
+        "manifest_ciphertext_sha256",
+        "manifest_version",
+        "object_id",
+    }
+    allowed = (
+        common | {"ciphertext_sha256", "plaintext_sha256"}
+        if kind == "wal"
+        else common | {"verification"}
+    )
+    if set(value) != allowed:
+        _fail("manifest_invalid")
+    manifest_sha = value.get("manifest_ciphertext_sha256")
+    if not isinstance(manifest_sha, str) or not SHA256_RE.fullmatch(manifest_sha):
+        _fail("manifest_invalid")
+    if kind == "wal":
+        for field in ("ciphertext_sha256", "plaintext_sha256"):
+            if not isinstance(value.get(field), str) or not SHA256_RE.fullmatch(value[field]):
+                _fail("manifest_invalid")
+    return value
+
+
+def _encrypted_manifest(
+    root: Path, index: dict[str, Any], *, kind: str, temporary_root: Path
+) -> dict[str, Any]:
+    encrypted = root / "recovery-manifest.json.age"
+    _require_regular_file(encrypted, max_bytes=1024 * 1024)
+    if _sha256(encrypted) != index.get("manifest_ciphertext_sha256"):
+        _fail("manifest_ciphertext_digest_mismatch")
+    temporary = temporary_root / f"manifest-{secrets.token_hex(8)}.json"
+    try:
+        _decrypt_file(encrypted, temporary)
+        _require_regular_file(temporary, max_bytes=1024 * 1024, private=True)
+        try:
+            value = json.loads(temporary.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise BackupError("manifest_invalid") from exc
+    finally:
+        with suppress(OSError):
+            temporary.unlink()
+    if not isinstance(value, dict) or value.get("manifest_version") != MANIFEST_VERSION:
+        _fail("manifest_invalid")
+    if value.get("kind") != kind or value.get("object_id") != index.get("object_id"):
+        _fail("manifest_invalid")
+    common = {
+        "ciphertext_sha256",
+        "created_at",
+        "kind",
+        "manifest_version",
+        "object_id",
+        "plaintext_sha256",
+    }
+    allowed = (
+        common
+        if kind == "wal"
+        else common
+        | {
+            "configuration_manifest_sha256",
+            "end_lsn",
+            "migration_revision",
+            "postgres_major",
+            "release_revision",
+            "start_lsn",
+            "start_wal",
+            "system_identifier",
+            "timeline",
+            "verified_at",
+            "verification",
+        }
+    )
+    if set(value) != allowed:
+        _fail("manifest_invalid")
+    for field in ("ciphertext_sha256", "plaintext_sha256"):
+        if not isinstance(value.get(field), str) or not SHA256_RE.fullmatch(value[field]):
+            _fail("manifest_invalid")
+    try:
+        created = dt.datetime.fromisoformat(value["created_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise BackupError("manifest_invalid") from exc
+    if created.tzinfo is None:
+        _fail("manifest_invalid")
+    if kind == "base_backup" and (
+        value.get("postgres_major") != 17
+        or not isinstance(value.get("timeline"), int)
+        or not 1 <= value["timeline"] <= 0xFFFFFFFF
+        or not isinstance(value.get("system_identifier"), str)
+        or not value["system_identifier"].isdigit()
+        or not isinstance(value.get("start_lsn"), str)
+        or not LSN_RE.fullmatch(value["start_lsn"])
+        or not isinstance(value.get("end_lsn"), str)
+        or not LSN_RE.fullmatch(value["end_lsn"])
+        or not isinstance(value.get("start_wal"), str)
+        or not re.fullmatch(r"[0-9A-F]{24}", value["start_wal"])
+        or not isinstance(value.get("migration_revision"), str)
+        or not re.fullmatch(r"[a-z0-9_]{1,64}", value["migration_revision"])
+        or not isinstance(value.get("release_revision"), str)
+        or not re.fullmatch(r"[0-9a-f]{40,64}", value["release_revision"])
+        or not isinstance(value.get("configuration_manifest_sha256"), str)
+        or not SHA256_RE.fullmatch(value["configuration_manifest_sha256"])
+        or value.get("verification") != "pg_verifybackup_ok"
+    ):
+        _fail("manifest_invalid")
+    return value
+
+
+def _publish_encrypted_manifest(stage: Path, value: dict[str, Any]) -> str:
+    plaintext = stage / ".recovery-manifest.json"
+    encrypted = stage / "recovery-manifest.json.age"
+    _write_private_json(plaintext, value)
+    try:
+        _encrypt_file(plaintext, encrypted)
+    finally:
+        with suppress(OSError):
+            plaintext.unlink()
+    return _sha256(encrypted)
+
+
+def _new_id() -> str:
+    stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stamp}-{secrets.token_hex(8)}"
+
+
+def _run(arguments: list[str], *, stdin: int | None = None, stdout: int | None = None) -> None:
+    try:
+        completed = subprocess.run(
+            arguments,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise BackupError("dependency_execution_failed") from exc
+    if completed.returncode != 0:
+        _fail("dependency_failed")
+
+
+def _capture(arguments: list[str], *, code: str) -> str:
+    try:
+        completed = subprocess.run(
+            arguments,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            check=False,
+            text=True,
+            encoding="ascii",
+        )
+    except OSError as exc:
+        raise BackupError("dependency_execution_failed") from exc
+    value = completed.stdout.strip()
+    if completed.returncode != 0 or not value or any(ord(char) < 0x20 for char in value):
+        _fail(code)
+    return value
+
+
+def _encrypt_file(source: Path, destination: Path) -> None:
+    _validate_recipient()
+    descriptor = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        STORE_FILE_MODE,
+    )
+    os.fchmod(descriptor, STORE_FILE_MODE)
+    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        _run([str(AGE), "-R", str(RECIPIENT_FILE)], stdin=source_fd, stdout=descriptor)
+        os.fsync(descriptor)
+    except BaseException:
+        with suppress(OSError):
+            destination.unlink()
+        raise
+    finally:
+        os.close(source_fd)
+        os.close(descriptor)
+
+
+def _decrypt_file(source: Path, destination: Path) -> None:
+    _validate_identity()
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        _run([str(AGE), "--decrypt", "-i", str(IDENTITY_FILE)], stdin=source_fd, stdout=descriptor)
+        os.fsync(descriptor)
+    except BaseException:
+        with suppress(OSError):
+            destination.unlink()
+        raise
+    finally:
+        os.close(source_fd)
+        os.close(descriptor)
+
+
+def _publish_directory(stage: Path, destination: Path) -> None:
+    _fsync_dir(stage)
+    try:
+        os.rename(stage, destination)
+    except FileExistsError as exc:
+        raise BackupError("object_already_exists") from exc
+    _fsync_dir(destination.parent)
+
+
+def archive_wal(source_arg: str, wal_name: str) -> None:
+    if not WAL_RE.fullmatch(wal_name):
+        _fail("wal_name_invalid")
+    source = Path(source_arg)
+    if not source.is_absolute():
+        _fail("wal_source_invalid")
+    resolved = _resolved(source)
+    if resolved.parent != _resolved(PG_WAL) or resolved.name != wal_name:
+        _fail("wal_source_invalid")
+    _require_regular_file(source, max_bytes=1024 * 1024 * 1024)
+    _ensure_store()
+    if not os.access(WAL_ROOT, os.W_OK | os.X_OK):
+        _fail("store_access_denied")
+    plaintext_sha = _sha256(source)
+    destination = WAL_ROOT / wal_name
+    if destination.exists():
+        index = _read_index(destination / "index.json", kind="wal")
+        encrypted = destination / "segment.age"
+        _require_regular_file(encrypted, max_bytes=2 * 1024 * 1024 * 1024)
+        if (
+            index.get("object_id") != wal_name
+            or index.get("plaintext_sha256") != plaintext_sha
+            or index.get("ciphertext_sha256") != _sha256(encrypted)
+        ):
+            _fail("wal_duplicate_mismatch")
+        _log("wal_archive", "duplicate_identical", wal_name.lower())
+        return
+    stage = STAGING_ROOT / f"wal-{wal_name}-{secrets.token_hex(8)}"
+    stage.mkdir(mode=STORE_DIRECTORY_MODE)
+    stage.chmod(STORE_DIRECTORY_MODE)
+    try:
+        encrypted = stage / "segment.age"
+        _encrypt_file(source, encrypted)
+        encrypted_sha = _sha256(encrypted)
+        created_at = dt.datetime.now(dt.UTC).isoformat()
+        manifest_sha = _publish_encrypted_manifest(
+            stage,
+            {
+                "ciphertext_sha256": encrypted_sha,
+                "created_at": created_at,
+                "kind": "wal",
+                "manifest_version": MANIFEST_VERSION,
+                "object_id": wal_name,
+                "plaintext_sha256": plaintext_sha,
+            },
+        )
+        _write_json_exclusive(
+            stage / "index.json",
+            {
+                "ciphertext_sha256": encrypted_sha,
+                "created_at": created_at,
+                "kind": "wal",
+                "manifest_version": MANIFEST_VERSION,
+                "manifest_ciphertext_sha256": manifest_sha,
+                "object_id": wal_name,
+                "plaintext_sha256": plaintext_sha,
+            },
+        )
+        _publish_directory(stage, destination)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    _replace_json(STATUS_ROOT / "latest-wal.json", {"object_id": wal_name, "result": "ok"})
+    _log("wal_archive", "ok", wal_name.lower())
+
+
+def _walk_backup(root: Path) -> Iterable[Path]:
+    for current, directories, files in os.walk(root, topdown=True, followlinks=False):
+        directories.sort()
+        files.sort()
+        current_path = Path(current)
+        for name in directories + files:
+            path = current_path / name
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode) or not (
+                stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)
+            ):
+                _fail("backup_member_unsafe")
+            yield path
+
+
+def _create_tar(source: Path, destination: Path) -> None:
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with (
+            os.fdopen(descriptor, "wb", closefd=False) as output,
+            tarfile.open(fileobj=output, mode="w|") as archive,
+        ):
+            for path in _walk_backup(source):
+                archive.add(path, arcname=str(path.relative_to(source)), recursive=False)
+        _fsync_file(destination)
+    finally:
+        os.close(descriptor)
+
+
+def _pg_manifest_metadata(path: Path) -> tuple[str, int, str, str]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        system_identifier = str(manifest["System-Identifier"])
+        timeline = int(manifest["WAL-Ranges"][0]["Timeline"])
+        start_lsn = str(manifest["WAL-Ranges"][0]["Start-LSN"])
+        end_lsn = str(manifest["WAL-Ranges"][-1]["End-LSN"])
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        raise BackupError("postgres_manifest_invalid") from exc
+    if (
+        not system_identifier.isdigit()
+        or not 1 <= timeline <= 0xFFFFFFFF
+        or not LSN_RE.fullmatch(start_lsn)
+        or not LSN_RE.fullmatch(end_lsn)
+    ):
+        _fail("postgres_manifest_invalid")
+    return system_identifier, timeline, start_lsn, end_lsn
+
+
+def _lsn_to_wal_name(lsn: str, timeline: int = 1) -> str:
+    high, low = (int(part, 16) for part in lsn.split("/"))
+    segment = low // 0x1000000
+    return f"{timeline:08X}{high:08X}{segment:08X}"
+
+
+def base_backup() -> None:
+    _ensure_store()
+    if not os.access(BASE_ROOT, os.W_OK | os.X_OK):
+        _fail("store_access_denied")
+    _require_exact_mount(PLAINTEXT_STAGING_MOUNT, writable=True)
+    _require_owned(PLAINTEXT_STAGING_MOUNT, owner=STORE_OWNER, group=STORE_OWNER, mode=0o700)
+    _validate_recipient()
+    for binary in ("pg_basebackup", "pg_verifybackup", "psql"):
+        _require_executable(PG_BINDIR / binary)
+    backup_id = _new_id()
+    stage = STAGING_ROOT / f"base-{backup_id}"
+    plaintext_stage = PLAINTEXT_STAGING_MOUNT / backup_id
+    plain = plaintext_stage / "plain"
+    stage.mkdir(mode=STORE_DIRECTORY_MODE)
+    stage.chmod(STORE_DIRECTORY_MODE)
+    plaintext_created = False
+    try:
+        plaintext_stage.mkdir(mode=0o700)
+        plaintext_created = True
+        plain.mkdir(mode=0o700)
+        migration_query = [
+            str(PG_BINDIR / "psql"),
+            f"--host={PG_SOCKET}",
+            f"--port={PG_PORT}",
+            f"--username={PG_BACKUP_ROLE}",
+            f"--dbname={PG_DATABASE}",
+            "--no-psqlrc",
+            "--tuples-only",
+            "--no-align",
+            "--set=ON_ERROR_STOP=1",
+            "--command=SELECT version_num FROM alembic_version",
+        ]
+        migration_revision = _capture(migration_query, code="migration_metadata_invalid")
+        if not re.fullmatch(r"[a-z0-9_]{1,64}", migration_revision):
+            _fail("migration_metadata_invalid")
+        _run(
+            [
+                str(PG_BINDIR / "pg_basebackup"),
+                f"--host={PG_SOCKET}",
+                f"--port={PG_PORT}",
+                f"--username={PG_BACKUP_ROLE}",
+                f"--pgdata={plain}",
+                "--format=plain",
+                "--checkpoint=fast",
+                "--wal-method=stream",
+                "--manifest-checksums=SHA256",
+                "--no-password",
+            ]
+        )
+        if _capture(migration_query, code="migration_metadata_invalid") != migration_revision:
+            _fail("migration_changed_during_backup")
+        _run([str(PG_BINDIR / "pg_verifybackup"), "--no-parse-wal", str(plain)])
+        system_id, timeline, start_lsn, end_lsn = _pg_manifest_metadata(plain / "backup_manifest")
+        tar_path = plaintext_stage / "backup.tar"
+        _create_tar(plain, tar_path)
+        plaintext_sha = _sha256(tar_path)
+        encrypted = stage / "backup.tar.age"
+        _encrypt_file(tar_path, encrypted)
+        encrypted_sha = _sha256(encrypted)
+        shutil.rmtree(plain)
+        tar_path.unlink()
+        release = _read_small_text(RELEASE_FILE, code="release_metadata_invalid", max_bytes=256)
+        config_digest = _read_small_text(
+            CONFIG_DIGEST_FILE, code="configuration_metadata_invalid", max_bytes=256
+        )
+        if not re.fullmatch(r"[0-9a-f]{40,64}", release) or not SHA256_RE.fullmatch(config_digest):
+            _fail("recovery_metadata_invalid")
+        created_at = dt.datetime.now(dt.UTC).isoformat()
+        recovery_manifest = {
+            "ciphertext_sha256": encrypted_sha,
+            "configuration_manifest_sha256": config_digest,
+            "created_at": created_at,
+            "end_lsn": end_lsn,
+            "kind": "base_backup",
+            "manifest_version": MANIFEST_VERSION,
+            "migration_revision": migration_revision,
+            "object_id": backup_id,
+            "plaintext_sha256": plaintext_sha,
+            "postgres_major": 17,
+            "release_revision": release,
+            "start_lsn": start_lsn,
+            "start_wal": _lsn_to_wal_name(start_lsn, timeline),
+            "system_identifier": system_id,
+            "timeline": timeline,
+            "verified_at": created_at,
+            "verification": "pg_verifybackup_ok",
+        }
+        manifest_sha = _publish_encrypted_manifest(stage, recovery_manifest)
+        _write_json_exclusive(
+            stage / "index.json",
+            {
+                "created_at": created_at,
+                "kind": "base_backup",
+                "manifest_ciphertext_sha256": manifest_sha,
+                "manifest_version": MANIFEST_VERSION,
+                "object_id": backup_id,
+                "verification": "source_pg_verifybackup_ok",
+            },
+        )
+        _publish_directory(stage, BASE_ROOT / backup_id)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    finally:
+        if plaintext_created:
+            try:
+                shutil.rmtree(plaintext_stage)
+                _fsync_dir(PLAINTEXT_STAGING_MOUNT)
+            except OSError as exc:
+                raise BackupError("plaintext_cleanup_failed") from exc
+    _replace_json(STATUS_ROOT / "latest-base.json", {"object_id": backup_id, "result": "ok"})
+    _log("base_backup", "ok", backup_id.lower())
+
+
+def _safe_extract(archive_path: Path, destination: Path) -> None:
+    with archive_path.open("rb") as source, tarfile.open(fileobj=source, mode="r|") as archive:
+        for member in archive:
+            relative = Path(member.name)
+            if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+                _fail("backup_member_unsafe")
+            target = destination / relative
+            if target != destination and destination not in target.parents:
+                _fail("backup_member_unsafe")
+            if member.isdir():
+                target.mkdir(mode=member.mode & 0o700, parents=True, exist_ok=True)
+            elif member.isfile():
+                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                descriptor = os.open(
+                    target,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    member.mode & 0o700,
+                )
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    os.close(descriptor)
+                    _fail("backup_member_invalid")
+                with os.fdopen(descriptor, "wb") as output:
+                    shutil.copyfileobj(extracted, output, CHUNK)
+                    output.flush()
+                    os.fsync(output.fileno())
+            else:
+                _fail("backup_member_unsafe")
+
+
+def _require_recovery_destination(destination: Path) -> bool:
+    _require_exact_mount(RECOVERY_MOUNT, writable=True)
+    _require_owned(RECOVERY_MOUNT, owner="root", group=RECOVERY_GROUP, mode=0o770)
+    if (
+        not destination.is_absolute()
+        or destination.parent != RECOVERY_MOUNT
+        or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,62}", destination.name)
+    ):
+        _fail("recovery_destination_invalid")
+    if destination == PG_DATA or _resolved(destination, must_exist=False) == _resolved(
+        PG_DATA, must_exist=False
+    ):
+        _fail("canonical_destination_forbidden")
+    existed = destination.exists()
+    if existed:
+        _require_directory(destination, mode=0o700)
+        if any(destination.iterdir()):
+            _fail("recovery_destination_not_empty")
+    else:
+        destination.mkdir(mode=0o700)
+    return existed
+
+
+def _clean_failed_restore(destination: Path, *, preserve_root: bool) -> None:
+    shutil.rmtree(destination, ignore_errors=True)
+    if preserve_root:
+        destination.mkdir(mode=0o700)
+
+
+def _base_object(backup_id: str) -> tuple[Path, dict[str, Any]]:
+    if not BACKUP_ID_RE.fullmatch(backup_id):
+        _fail("backup_id_invalid")
+    root = BASE_ROOT / backup_id
+    _require_directory(root, mode=STORE_DIRECTORY_MODE)
+    index = _read_index(root / "index.json", kind="base_backup")
+    if index.get("object_id") != backup_id:
+        _fail("manifest_invalid")
+    manifest = _encrypted_manifest(root, index, kind="base_backup", temporary_root=RECOVERY_MOUNT)
+    if manifest.get("object_id") != backup_id or manifest.get("postgres_major") != 17:
+        _fail("manifest_invalid")
+    encrypted = root / "backup.tar.age"
+    _require_regular_file(encrypted, max_bytes=16 * 1024**4)
+    if _sha256(encrypted) != manifest["ciphertext_sha256"]:
+        _fail("ciphertext_digest_mismatch")
+    return encrypted, manifest
+
+
+def prepare_restore(backup_id: str, destination_arg: str, target_kind: str, target: str) -> None:
+    _require_exact_mount(BACKUP_MOUNT, writable=False)
+    destination = Path(destination_arg)
+    destination_existed = _require_recovery_destination(destination)
+    encrypted, manifest = _base_object(backup_id)
+    tar_path = RECOVERY_MOUNT / f".{backup_id}.{secrets.token_hex(8)}.tar"
+    try:
+        _decrypt_file(encrypted, tar_path)
+        if _sha256(tar_path) != manifest["plaintext_sha256"]:
+            _fail("plaintext_digest_mismatch")
+        _safe_extract(tar_path, destination)
+        _require_executable(PG_BINDIR / "pg_verifybackup")
+        _run([str(PG_BINDIR / "pg_verifybackup"), "--no-parse-wal", str(destination)])
+        _write_recovery_settings(destination, target_kind, target)
+        (destination / "recovery.signal").touch(mode=0o600, exist_ok=False)
+        _fsync_file(destination / "recovery.signal")
+        _fsync_dir(destination)
+    except BaseException:
+        _clean_failed_restore(destination, preserve_root=destination_existed)
+        raise
+    finally:
+        with suppress(OSError):
+            tar_path.unlink()
+    _log("prepare_restore", "ok", backup_id.lower())
+
+
+def _write_recovery_settings(destination: Path, kind: str, target: str) -> None:
+    if kind == "name":
+        if not TARGET_NAME_RE.fullmatch(target):
+            _fail("recovery_target_invalid")
+        setting = "recovery_target_name"
+    elif kind == "lsn":
+        if not LSN_RE.fullmatch(target):
+            _fail("recovery_target_invalid")
+        setting = "recovery_target_lsn"
+    elif kind == "time":
+        try:
+            parsed = dt.datetime.fromisoformat(target)
+        except ValueError as exc:
+            raise BackupError("recovery_target_invalid") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() != dt.timedelta(0):
+            _fail("recovery_target_invalid")
+        setting = "recovery_target_time"
+    else:
+        _fail("recovery_target_invalid")
+    escaped = target.replace("'", "''")
+    if "\n" in escaped or "\r" in escaped:
+        _fail("recovery_target_invalid")
+    wal_destination = destination / "pg_wal" / "%f"
+    command = f"/usr/local/libexec/kivra-memory-postgres-backup restore-wal %f {wal_destination}"
+    content = (
+        f"restore_command = '{command}'\n"
+        f"{setting} = '{escaped}'\n"
+        "recovery_target_action = 'pause'\n"
+    ).encode("ascii")
+    path = destination / "postgresql.auto.conf"
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "ab") as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def restore_wal(wal_name: str, destination_arg: str) -> None:
+    if not WAL_RE.fullmatch(wal_name):
+        _fail("wal_name_invalid")
+    destination = Path(destination_arg)
+    if not destination.is_absolute() or destination.name != wal_name:
+        _fail("wal_restore_destination_invalid")
+    _require_exact_mount(RECOVERY_MOUNT, writable=True)
+    _require_owned(RECOVERY_MOUNT, owner="root", group=RECOVERY_GROUP, mode=0o770)
+    try:
+        relative = destination.relative_to(RECOVERY_MOUNT)
+    except ValueError as exc:
+        raise BackupError("wal_restore_destination_invalid") from exc
+    if len(relative.parts) < 3 or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,62}", relative.parts[0]):
+        _fail("wal_restore_destination_invalid")
+    drill_root = RECOVERY_MOUNT / relative.parts[0]
+    if (
+        _resolved(drill_root) != drill_root
+        or RECOVERY_MOUNT not in _resolved(destination.parent).parents
+    ):
+        _fail("wal_restore_destination_invalid")
+    root = WAL_ROOT / wal_name
+    index = _read_index(root / "index.json", kind="wal")
+    manifest = _encrypted_manifest(root, index, kind="wal", temporary_root=RECOVERY_MOUNT)
+    encrypted = root / "segment.age"
+    _require_regular_file(encrypted, max_bytes=2 * 1024**3)
+    if manifest.get("object_id") != wal_name or _sha256(encrypted) != manifest["ciphertext_sha256"]:
+        _fail("wal_object_invalid")
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        _decrypt_file(encrypted, temporary)
+        if _sha256(temporary) != manifest["plaintext_sha256"]:
+            _fail("plaintext_digest_mismatch")
+        if destination.exists():
+            _fail("wal_restore_destination_exists")
+        os.rename(temporary, destination)
+        _fsync_dir(destination.parent)
+    finally:
+        with suppress(OSError):
+            temporary.unlink()
+
+
+def verify_backup(backup_id: str) -> None:
+    if backup_id == "latest":
+        latest = _read_manifest_like_status(STATUS_ROOT / "latest-base.json")
+        backup_id = latest
+    _require_exact_mount(BACKUP_MOUNT, writable=False)
+    destination = RECOVERY_MOUNT / f"verify-{backup_id}"
+    if destination.exists():
+        _fail("verification_destination_exists")
+    _require_recovery_destination(destination)
+    encrypted, manifest = _base_object(backup_id)
+    tar_path = RECOVERY_MOUNT / f".{backup_id}.{secrets.token_hex(8)}.tar"
+    try:
+        _decrypt_file(encrypted, tar_path)
+        if _sha256(tar_path) != manifest["plaintext_sha256"]:
+            _fail("plaintext_digest_mismatch")
+        _safe_extract(tar_path, destination)
+        _require_executable(PG_BINDIR / "pg_verifybackup")
+        _run([str(PG_BINDIR / "pg_verifybackup"), "--no-parse-wal", str(destination)])
+    finally:
+        shutil.rmtree(destination, ignore_errors=True)
+        with suppress(OSError):
+            tar_path.unlink()
+    _replace_json(
+        STATUS_ROOT / "latest-verification.json", {"object_id": backup_id, "result": "ok"}
+    )
+    index = _read_index(BASE_ROOT / backup_id / "index.json", kind="base_backup")
+    _replace_json(
+        VERIFICATION_ROOT / f"{backup_id}.json",
+        {
+            "manifest_ciphertext_sha256": index["manifest_ciphertext_sha256"],
+            "object_id": backup_id,
+            "result": "isolated_pg_verifybackup_ok",
+            "verified_at": dt.datetime.now(dt.UTC).isoformat(),
+        },
+    )
+    _log("backup_verify", "ok", backup_id.lower())
+
+
+def _read_manifest_like_status(path: Path) -> str:
+    _require_regular_file(path, max_bytes=4096)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        object_id = value["object_id"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise BackupError("status_invalid") from exc
+    if not isinstance(object_id, str) or not BACKUP_ID_RE.fullmatch(object_id):
+        _fail("status_invalid")
+    return object_id
+
+
+def _verified_bases() -> list[tuple[dt.datetime, Path, dict[str, Any]]]:
+    result = []
+    for entry in BASE_ROOT.iterdir():
+        if not BACKUP_ID_RE.fullmatch(entry.name) or entry.is_symlink() or not entry.is_dir():
+            _fail("unexpected_backup_object")
+        manifest = _read_index(entry / "index.json", kind="base_backup")
+        if (
+            manifest.get("object_id") != entry.name
+            or manifest.get("verification") != "source_pg_verifybackup_ok"
+        ):
+            continue
+        marker_path = VERIFICATION_ROOT / f"{entry.name}.json"
+        if not marker_path.exists():
+            continue
+        _require_regular_file(marker_path, max_bytes=4096)
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise BackupError("verification_marker_invalid") from exc
+        if set(marker) != {
+            "manifest_ciphertext_sha256",
+            "object_id",
+            "result",
+            "verified_at",
+        } or (
+            marker.get("object_id") != entry.name
+            or marker.get("manifest_ciphertext_sha256") != manifest["manifest_ciphertext_sha256"]
+            or marker.get("result") != "isolated_pg_verifybackup_ok"
+        ):
+            _fail("verification_marker_invalid")
+        encrypted_manifest = entry / "recovery-manifest.json.age"
+        _require_regular_file(encrypted_manifest, max_bytes=1024 * 1024)
+        if _sha256(encrypted_manifest) != manifest["manifest_ciphertext_sha256"]:
+            _fail("manifest_ciphertext_digest_mismatch")
+        try:
+            created = dt.datetime.fromisoformat(manifest["created_at"])
+        except (TypeError, ValueError) as exc:
+            raise BackupError("manifest_invalid") from exc
+        result.append((created, entry, manifest))
+    return sorted(result, reverse=True, key=lambda item: item[0])
+
+
+def retain() -> None:
+    _ensure_store()
+    if not os.access(BASE_ROOT, os.W_OK | os.X_OK):
+        _fail("store_access_denied")
+    bases = _verified_bases()
+    if not bases:
+        _fail("no_verified_recovery_chain")
+    keep: set[str] = set()
+    days: set[dt.date] = set()
+    weeks: set[tuple[int, int]] = set()
+    for created, path, _manifest in bases:
+        if len(days) < 8 and created.date() not in days:
+            days.add(created.date())
+            keep.add(path.name)
+        iso = created.isocalendar()
+        week = (iso.year, iso.week)
+        if len(weeks) < 5 and week not in weeks:
+            weeks.add(week)
+            keep.add(path.name)
+    keep.add(bases[0][1].name)
+    for _created, path, _manifest in bases:
+        hold = path / "HOLD"
+        if hold.exists():
+            _require_regular_file(hold, max_bytes=4096)
+            keep.add(path.name)
+    if not keep:
+        _fail("last_recovery_chain_unprotected")
+    oldest = min((item for item in bases if item[1].name in keep), key=lambda item: item[0])
+    # Resolve and validate every deletion target before mutating the store.
+    expired = []
+    for _created, path, _manifest in bases:
+        if path.name not in keep:
+            if path.parent != BASE_ROOT or _resolved(path).parent != _resolved(BASE_ROOT):
+                _fail("retention_target_invalid")
+            expired.append(path)
+    # Without an external, verified chain-dependency watermark, WAL eligibility
+    # is ambiguous. Validate object names and retain all WAL/history fail closed.
+    for entry in WAL_ROOT.iterdir():
+        if not WAL_RE.fullmatch(entry.name) or entry.is_symlink() or not entry.is_dir():
+            _fail("unexpected_wal_object")
+    for path in expired:
+        shutil.rmtree(path)
+    _replace_json(
+        STATUS_ROOT / "latest-retention.json",
+        {"kept_base_count": len(keep), "oldest_kept_id": oldest[1].name, "result": "ok"},
+    )
+    _log("retention", "ok", oldest[1].name.lower())
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    commands = parser.add_subparsers(dest="command", required=True)
+    wal = commands.add_parser("archive-wal", allow_abbrev=False)
+    wal.add_argument("source")
+    wal.add_argument("wal_name")
+    commands.add_parser("base-backup", allow_abbrev=False)
+    verify = commands.add_parser("verify", allow_abbrev=False)
+    verify.add_argument("backup_id")
+    commands.add_parser("retain", allow_abbrev=False)
+    restore = commands.add_parser("prepare-restore", allow_abbrev=False)
+    restore.add_argument("backup_id")
+    restore.add_argument("destination")
+    targets = restore.add_mutually_exclusive_group(required=True)
+    targets.add_argument("--target-name")
+    targets.add_argument("--target-time")
+    targets.add_argument("--target-lsn")
+    restore_wal_parser = commands.add_parser("restore-wal", allow_abbrev=False)
+    restore_wal_parser.add_argument("wal_name")
+    restore_wal_parser.add_argument("destination")
+    return parser
+
+
+def main() -> int:
+    arguments = _parser().parse_args()
+    try:
+        if arguments.command == "archive-wal":
+            archive_wal(arguments.source, arguments.wal_name)
+        elif arguments.command == "base-backup":
+            base_backup()
+        elif arguments.command == "verify":
+            verify_backup(arguments.backup_id)
+        elif arguments.command == "retain":
+            retain()
+        elif arguments.command == "prepare-restore":
+            values = {
+                "name": arguments.target_name,
+                "time": arguments.target_time,
+                "lsn": arguments.target_lsn,
+            }
+            kind, target = next(
+                (kind, value) for kind, value in values.items() if value is not None
+            )
+            prepare_restore(arguments.backup_id, arguments.destination, kind, target)
+        elif arguments.command == "restore-wal":
+            restore_wal(arguments.wal_name, arguments.destination)
+        return 0
+    except BackupError as exc:
+        _log(arguments.command.replace("-", "_"), str(exc))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

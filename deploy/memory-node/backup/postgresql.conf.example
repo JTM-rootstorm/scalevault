@@ -1,0 +1,9 @@
+# ScaleVault PostgreSQL 17 continuous-archive settings.
+# Merge through the distribution-supported cluster configuration mechanism.
+wal_level = replica
+archive_mode = on
+archive_timeout = '60s'
+archive_command = '/usr/local/libexec/kivra-memory-postgres-backup archive-wal /var/lib/postgresql/17/main/%p %f'
+full_page_writes = on
+fsync = on
+synchronous_commit = on

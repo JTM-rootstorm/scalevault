@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily ScaleVault PostgreSQL recovery-chain retention
+
+[Timer]
+OnCalendar=*-*-* 07:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=kivra-memory-backup-retention.service
+
+[Install]
+WantedBy=timers.target

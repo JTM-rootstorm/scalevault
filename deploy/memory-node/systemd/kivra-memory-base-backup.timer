@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily ScaleVault encrypted PostgreSQL base backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=kivra-memory-base-backup.service
+
+[Install]
+WantedBy=timers.target

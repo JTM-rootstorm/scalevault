@@ -1,0 +1,3 @@
+# Use a dedicated physical-backup role. Keep the connection on the local socket.
+local replication memory_backup scram-sha-256
+local kivra_memory memory_backup scram-sha-256

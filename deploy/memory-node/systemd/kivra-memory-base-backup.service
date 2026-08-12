@@ -1,0 +1,51 @@
+[Unit]
+Description=ScaleVault encrypted PostgreSQL base backup
+After=postgresql@17-main.service
+Requires=postgresql@17-main.service
+RequiresMountsFor=/mnt/memory-backup /mnt/memory-backup-staging
+ConditionPathIsMountPoint=/mnt/memory-backup
+ConditionPathIsMountPoint=/mnt/memory-backup-staging
+ConditionPathIsRegularFile=/etc/kivra-memory/backup-age-recipient
+
+[Service]
+Type=oneshot
+User=memory-backup
+Group=kivra-backup
+Environment=HOME=/nonexistent
+Environment=PGPASSFILE=/run/credentials/kivra-memory-base-backup.service/postgres-pgpass
+LoadCredential=postgres-pgpass:/etc/kivra-memory/postgres-backup.pgpass
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
+ExecStart=/usr/local/libexec/kivra-memory-postgres-backup base-backup
+UMask=0007
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+PrivateMounts=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+LockPersonality=true
+MemoryDenyWriteExecute=true
+KeyringMode=private
+LimitCORE=0
+CapabilityBoundingSet=
+IPAddressDeny=any
+ReadOnlyPaths=/etc/kivra-memory/backup-age-recipient /etc/kivra-memory/recovery-configuration.sha256 /opt/kivra-memory/app/REVISION
+ReadWritePaths=/mnt/memory-backup/kivra-memory-postgres /mnt/memory-backup-staging
+TimeoutStartSec=4h
