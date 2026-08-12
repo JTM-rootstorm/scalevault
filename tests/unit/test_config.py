@@ -12,6 +12,9 @@ from pydantic import PostgresDsn, ValidationError
 class _ProductionAuth(TypedDict):
     client_token_pepper_credential: Path
     client_token_pepper_key_id: str
+    candidate_promotion_actor_id: UUID
+    candidate_promotion_client_id: UUID
+    candidate_promotion_transport_binding_id: UUID
 
 
 PRODUCTION_AUTH: _ProductionAuth = {
@@ -19,6 +22,11 @@ PRODUCTION_AUTH: _ProductionAuth = {
         "/run/credentials/kivra-memory-api.service/client-token-pepper"
     ),
     "client_token_pepper_key_id": "codex-primary-v1",
+    "candidate_promotion_actor_id": new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=901),
+    "candidate_promotion_client_id": new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=902),
+    "candidate_promotion_transport_binding_id": new_uuid7(
+        timestamp_ms=1_786_000_000_000, random_bits=903
+    ),
 }
 
 CODEX_INGRESS_AUTH: _ProductionAuth = {
@@ -26,6 +34,11 @@ CODEX_INGRESS_AUTH: _ProductionAuth = {
         "/run/credentials/kivra-memory-codex-ingress.service/client-token-pepper"
     ),
     "client_token_pepper_key_id": "codex-primary-v1",
+    "candidate_promotion_actor_id": new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=901),
+    "candidate_promotion_client_id": new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=902),
+    "candidate_promotion_transport_binding_id": new_uuid7(
+        timestamp_ms=1_786_000_000_000, random_bits=903
+    ),
 }
 
 
@@ -59,6 +72,9 @@ def test_settings_use_loopback_defaults() -> None:
     assert settings.client_token_pepper_key_id is None
     assert settings.chatgpt_secure_tunnel_enabled is False
     assert settings.chatgpt_secure_tunnel_installation_id is None
+    assert settings.candidate_promotion_actor_id is None
+    assert settings.candidate_promotion_client_id is None
+    assert settings.candidate_promotion_transport_binding_id is None
     assert settings.sealed_content_enabled is False
     assert settings.sealed_key_provider_root is None
     assert settings.sealed_digest_binding_credential is None
@@ -185,6 +201,33 @@ def test_production_sealed_content_uses_separate_local_key_boundary() -> None:
 def test_production_requires_database_url() -> None:
     with pytest.raises(ValidationError, match="database_url is required in production"):
         Settings(environment="production", **PRODUCTION_AUTH)
+
+
+def test_candidate_promotion_identity_is_complete_uuid7_and_required_in_production() -> None:
+    with pytest.raises(ValidationError, match="must be supplied together"):
+        Settings(candidate_promotion_actor_id=uid(10))
+    with pytest.raises(ValidationError, match="must use UUIDv7"):
+        Settings(
+            candidate_promotion_actor_id=UUID("00000000-0000-4000-8000-000000000001"),
+            candidate_promotion_client_id=uid(11),
+            candidate_promotion_transport_binding_id=uid(12),
+        )
+    with pytest.raises(ValidationError, match="is required in production"):
+        Settings(
+            environment="production",
+            database_url=PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory"),
+            client_token_pepper_credential=Path(
+                "/run/credentials/kivra-memory-api.service/client-token-pepper"
+            ),
+            client_token_pepper_key_id="codex-primary-v1",
+        )
+
+    settings = Settings(
+        candidate_promotion_actor_id=uid(10),
+        candidate_promotion_client_id=uid(11),
+        candidate_promotion_transport_binding_id=uid(12),
+    )
+    assert settings.candidate_promotion_actor_id == uid(10)
 
 
 def test_client_token_pepper_configuration_is_paired_and_bounded() -> None:
@@ -368,6 +411,18 @@ def test_production_does_not_load_working_directory_dotenv(
         "/run/credentials/kivra-memory-api.service/client-token-pepper",
     )
     monkeypatch.setenv("KIVRA_MEMORY_CLIENT_TOKEN_PEPPER_KEY_ID", "codex-primary-v1")
+    monkeypatch.setenv(
+        "KIVRA_MEMORY_CANDIDATE_PROMOTION_ACTOR_ID",
+        str(PRODUCTION_AUTH["candidate_promotion_actor_id"]),
+    )
+    monkeypatch.setenv(
+        "KIVRA_MEMORY_CANDIDATE_PROMOTION_CLIENT_ID",
+        str(PRODUCTION_AUTH["candidate_promotion_client_id"]),
+    )
+    monkeypatch.setenv(
+        "KIVRA_MEMORY_CANDIDATE_PROMOTION_TRANSPORT_BINDING_ID",
+        str(PRODUCTION_AUTH["candidate_promotion_transport_binding_id"]),
+    )
     get_settings.cache_clear()
 
     settings = get_settings()

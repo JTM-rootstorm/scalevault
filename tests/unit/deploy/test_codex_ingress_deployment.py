@@ -78,6 +78,11 @@ def test_environment_template_freezes_profile_port_and_exact_placeholders() -> N
         "'[\"REPLACE_WITH_EXACT_NPM_EGRESS_CIDR\"]'"
     )
     assert settings["KIVRA_MEMORY_CODEX_INGRESS_MAX_CONCURRENCY"] == "4"
+    assert settings["KIVRA_MEMORY_CANDIDATE_PROMOTION_ACTOR_ID"] == "REPLACE_WITH_UUIDV7"
+    assert settings["KIVRA_MEMORY_CANDIDATE_PROMOTION_CLIENT_ID"] == "REPLACE_WITH_UUIDV7"
+    assert settings["KIVRA_MEMORY_CANDIDATE_PROMOTION_TRANSPORT_BINDING_ID"] == (
+        "REPLACE_WITH_UUIDV7"
+    )
     assert settings["KIVRA_MEMORY_METRICS_ENABLED"] == "false"
     assert "CLIENT_CIDRS" not in example
     assert "0.0.0.0" not in example

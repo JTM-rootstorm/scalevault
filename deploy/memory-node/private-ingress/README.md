@@ -56,7 +56,11 @@ Create these files locally and never add their completed values to Git:
    `/etc/kivra-memory/memory-codex-ingress.env`. Replace every placeholder and
    install it as `root:root` mode `0600`. The listener host must be one exact
    private IP literal, never a hostname, wildcard, loopback, link-local, or
-   public address. Port `8443` is fixed.
+   public address. Port `8443` is fixed. The candidate-promotion identifiers
+   must select one dedicated, unexpired `internal_service` binding in the same
+   tenant. Its service actor and worker client must be active, the client scope
+   must be exactly `memory.lifecycle.promote`, and the binding must authorize
+   only `candidate_promoted`.
 2. Install the existing direct-bearer pepper as
    `/etc/kivra-memory/client-token-pepper`, `root:root` mode `0600`. The unit
    exposes it only at

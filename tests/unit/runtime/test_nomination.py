@@ -27,7 +27,10 @@ from kivra_memory.policy import (
     SelectionRequest,
     evaluate_selection,
 )
-from kivra_memory.runtime.nomination import DirectNominationResolver
+from kivra_memory.runtime.nomination import (
+    DirectNominationResolver,
+    PinnedCandidatePromotionPrincipalProvider,
+)
 
 
 def uid(value: int) -> UUID:
@@ -99,6 +102,35 @@ def policy_outcome(
         evidence=context.evidence,
     )
     return evaluate_selection(request).outcome
+
+
+async def test_pinned_promotion_provider_uses_only_configured_internal_identity() -> None:
+    provider = PinnedCandidatePromotionPrincipalProvider(
+        actor_id=uid(20),
+        client_id=uid(21),
+        transport_binding_id=uid(22),
+    )
+
+    resolved = await provider.resolve(
+        principal(),
+        command(SelectionBasis.ASSISTANT_OBSERVATION),
+        uid(23),
+    )
+
+    assert resolved.tenant_id == principal().tenant_id
+    assert resolved.actor_id == uid(20)
+    assert resolved.client_id == uid(21)
+    assert resolved.transport_binding_id == uid(22)
+    assert resolved.scopes == frozenset({"memory.lifecycle.promote"})
+
+
+def test_pinned_promotion_provider_rejects_non_uuid7_identifiers() -> None:
+    with pytest.raises(ValueError, match="actor_id"):
+        PinnedCandidatePromotionPrincipalProvider(
+            actor_id=UUID("00000000-0000-4000-8000-000000000001"),
+            client_id=uid(21),
+            transport_binding_id=uid(22),
+        )
 
 
 async def test_routine_banter_is_a_content_free_deterministic_omit() -> None:

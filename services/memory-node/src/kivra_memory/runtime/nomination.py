@@ -1,6 +1,8 @@
 """Conservative trusted enrichment for direct private nominations."""
 
 import hashlib
+from dataclasses import dataclass
+from uuid import UUID
 
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import (
@@ -15,6 +17,7 @@ from kivra_memory.domain.enums import (
     MemoryVisibility,
     OntologicalStatus,
 )
+from kivra_memory.domain.identifiers import require_uuid7
 from kivra_memory.policy import (
     EvidenceKind,
     EvidenceSummary,
@@ -37,6 +40,39 @@ _CANDIDATE_SCOPES = frozenset(
     }
 )
 _PRIVATE_VISIBILITIES = frozenset({MemoryVisibility.PRIVATE_ROOT, MemoryVisibility.RESTRICTED})
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedCandidatePromotionPrincipalProvider:
+    """Supply one configured internal-service identity for candidate promotion."""
+
+    actor_id: UUID
+    client_id: UUID
+    transport_binding_id: UUID
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("actor_id", self.actor_id),
+            ("client_id", self.client_id),
+            ("transport_binding_id", self.transport_binding_id),
+        ):
+            require_uuid7(value, field_name=field_name)
+
+    async def resolve(
+        self,
+        nominator: CommandPrincipal,
+        command: NominationCommandLike,
+        memory_id: UUID,
+        /,
+    ) -> CommandPrincipal:
+        del command, memory_id
+        return CommandPrincipal(
+            tenant_id=nominator.tenant_id,
+            actor_id=self.actor_id,
+            client_id=self.client_id,
+            transport_binding_id=self.transport_binding_id,
+            scopes=frozenset({"memory.lifecycle.promote"}),
+        )
 
 
 class DirectNominationResolver:
@@ -98,4 +134,4 @@ def _direct_observation_evidence_key(principal: CommandPrincipal) -> str:
     return f"direct-client-observation-v1:{digest}"
 
 
-__all__ = ["DirectNominationResolver"]
+__all__ = ["DirectNominationResolver", "PinnedCandidatePromotionPrincipalProvider"]

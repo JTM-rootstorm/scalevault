@@ -39,7 +39,10 @@ from kivra_memory.runtime.authentication import (
     DirectBearerAuthenticationMiddleware,
     RequestBearerAuthenticator,
 )
-from kivra_memory.runtime.nomination import DirectNominationResolver
+from kivra_memory.runtime.nomination import (
+    DirectNominationResolver,
+    PinnedCandidatePromotionPrincipalProvider,
+)
 from kivra_memory.storage.credentials import CredentialRepository
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.retrieval import RetrievalRepository
@@ -87,6 +90,7 @@ class MemoryNodeRuntime:
         if database_url is None or credential is None or key_id is None:
             raise RuntimeError("invalid_runtime_configuration")
         try:
+            promotion_provider = _candidate_promotion_provider(settings)
             pepper = _read_client_token_pepper(
                 credential,
                 required_owner_uid=os.geteuid() if settings.environment == "production" else None,
@@ -102,6 +106,7 @@ class MemoryNodeRuntime:
             database,
             authenticator=authenticator,
             sealed_runtime=sealed_runtime,
+            promotion_provider=promotion_provider,
         )
 
     @classmethod
@@ -111,6 +116,7 @@ class MemoryNodeRuntime:
         *,
         authenticator: RequestBearerAuthenticator,
         sealed_runtime: SealedRuntime,
+        promotion_provider: PinnedCandidatePromotionPrincipalProvider | None = None,
     ) -> MemoryNodeRuntime:
         sessions = database.session_factory
         return cls(
@@ -120,6 +126,7 @@ class MemoryNodeRuntime:
             nominations=sealed_runtime.selection_engine(
                 sessions,
                 DirectNominationResolver(),
+                promotion_provider,
             ),
             queries=sealed_runtime.query_engine(
                 database.tenant_session,
@@ -158,6 +165,27 @@ class MemoryNodeRuntime:
 
     async def dispose(self) -> None:
         await self.database.dispose()
+
+
+def _candidate_promotion_provider(
+    settings: Settings,
+) -> PinnedCandidatePromotionPrincipalProvider | None:
+    actor_id = settings.candidate_promotion_actor_id
+    client_id = settings.candidate_promotion_client_id
+    binding_id = settings.candidate_promotion_transport_binding_id
+    identifiers = (actor_id, client_id, binding_id)
+    if any(value is None for value in identifiers):
+        if settings.environment == "production":
+            raise ValueError
+        return None
+    assert actor_id is not None
+    assert client_id is not None
+    assert binding_id is not None
+    return PinnedCandidatePromotionPrincipalProvider(
+        actor_id=actor_id,
+        client_id=client_id,
+        transport_binding_id=binding_id,
+    )
 
 
 def _read_client_token_pepper(path: Path, *, required_owner_uid: int | None) -> bytes:

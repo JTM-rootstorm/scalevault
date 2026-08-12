@@ -14,13 +14,17 @@ from kivra_memory.runtime.chatgpt import (
     current_secure_tunnel_query_principal,
 )
 from kivra_memory.runtime.composition import MemoryNodeRuntime
-from kivra_memory.runtime.nomination import DirectNominationResolver
+from kivra_memory.runtime.nomination import (
+    DirectNominationResolver,
+    PinnedCandidatePromotionPrincipalProvider,
+)
 
 __all__ = [
     "ChatGPTReadRuntime",
     "DirectBearerAuthenticationMiddleware",
     "DirectNominationResolver",
     "MemoryNodeRuntime",
+    "PinnedCandidatePromotionPrincipalProvider",
     "RequestBearerAuthenticator",
     "SecureTunnelBearerAuthenticator",
     "SecureTunnelReadAuthenticationMiddleware",

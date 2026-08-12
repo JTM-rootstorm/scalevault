@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     client_token_pepper_key_id: str | None = None
     chatgpt_secure_tunnel_enabled: bool = False
     chatgpt_secure_tunnel_installation_id: UUID | None = None
+    candidate_promotion_actor_id: UUID | None = None
+    candidate_promotion_client_id: UUID | None = None
+    candidate_promotion_transport_binding_id: UUID | None = None
     sealed_content_enabled: bool = False
     sealed_key_provider_root: Path | None = None
     sealed_digest_binding_credential: Path | None = None
@@ -158,6 +161,33 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ChatGPT secure tunnel installation ID requires the tunnel to be enabled"
             )
+        promotion_identifiers = (
+            self.candidate_promotion_actor_id,
+            self.candidate_promotion_client_id,
+            self.candidate_promotion_transport_binding_id,
+        )
+        if any(value is not None for value in promotion_identifiers) and not all(
+            value is not None for value in promotion_identifiers
+        ):
+            raise ValueError("candidate promotion identity must be supplied together")
+        if self.environment == "production" and any(
+            value is None for value in promotion_identifiers
+        ):
+            raise ValueError("candidate promotion identity is required in production")
+        for field_name, value in (
+            ("candidate_promotion_actor_id", self.candidate_promotion_actor_id),
+            ("candidate_promotion_client_id", self.candidate_promotion_client_id),
+            (
+                "candidate_promotion_transport_binding_id",
+                self.candidate_promotion_transport_binding_id,
+            ),
+        ):
+            if value is None:
+                continue
+            try:
+                require_uuid7(value, field_name=field_name)
+            except (TypeError, ValueError):
+                raise ValueError("candidate promotion identity must use UUIDv7") from None
         if self.sealed_content_enabled:
             if (
                 self.sealed_key_provider_root is None

@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.sealed_runtime import SealedRuntime
 from kivra_memory.config import Settings
 from kivra_memory.domain.identifiers import new_uuid7
@@ -17,6 +18,9 @@ from pydantic import PostgresDsn
 
 DATABASE_URL = PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory")
 INSTALLATION_ID = new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=1)
+PROMOTION_ACTOR_ID = new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=2)
+PROMOTION_CLIENT_ID = new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=3)
+PROMOTION_BINDING_ID = new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=4)
 
 
 def credential(tmp_path: Path, value: bytes = b"p" * 32) -> Path:
@@ -178,6 +182,45 @@ async def test_runtime_composition_installs_only_configured_pepper_key(
     await runtime.dispose()
 
 
+async def test_runtime_composition_installs_pinned_candidate_promotion_identity(
+    tmp_path: Path,
+) -> None:
+    path = credential(tmp_path)
+    settings = Settings(
+        environment="test",
+        database_url=DATABASE_URL,
+        client_token_pepper_credential=path,
+        client_token_pepper_key_id="direct-client-v7",
+        candidate_promotion_actor_id=PROMOTION_ACTOR_ID,
+        candidate_promotion_client_id=PROMOTION_CLIENT_ID,
+        candidate_promotion_transport_binding_id=PROMOTION_BINDING_ID,
+    )
+
+    runtime = MemoryNodeRuntime.from_settings(
+        settings,
+        sealed_runtime=SealedRuntime(key_provider=None, digest_binder=None),
+    )
+    provider = vars(runtime.nominations)["_promotion_principal_provider"]
+    principal = await provider.resolve(
+        CommandPrincipal(
+            tenant_id=INSTALLATION_ID,
+            actor_id=PROMOTION_ACTOR_ID,
+            client_id=PROMOTION_CLIENT_ID,
+            transport_binding_id=PROMOTION_BINDING_ID,
+            scopes=frozenset({"memory.write.nominate"}),
+        ),
+        object(),
+        INSTALLATION_ID,
+    )
+
+    assert principal.tenant_id == INSTALLATION_ID
+    assert principal.actor_id == PROMOTION_ACTOR_ID
+    assert principal.client_id == PROMOTION_CLIENT_ID
+    assert principal.transport_binding_id == PROMOTION_BINDING_ID
+    assert principal.scopes == frozenset({"memory.lifecycle.promote"})
+    await runtime.dispose()
+
+
 async def test_production_composition_requires_effective_service_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -188,6 +231,9 @@ async def test_production_composition_requires_effective_service_owner(
             "/run/credentials/kivra-memory-api.service/client-token-pepper"
         ),
         client_token_pepper_key_id="codex-primary-v1",
+        candidate_promotion_actor_id=PROMOTION_ACTOR_ID,
+        candidate_promotion_client_id=PROMOTION_CLIENT_ID,
+        candidate_promotion_transport_binding_id=PROMOTION_BINDING_ID,
     )
     seen_owner: list[int | None] = []
 
@@ -208,6 +254,26 @@ async def test_production_composition_requires_effective_service_owner(
         )
 
     assert seen_owner == [os.geteuid()]
+
+
+def test_production_composition_defensively_requires_candidate_promotion_identity(
+    tmp_path: Path,
+) -> None:
+    settings = Settings.model_construct(
+        environment="production",
+        database_url=DATABASE_URL,
+        client_token_pepper_credential=credential(tmp_path),
+        client_token_pepper_key_id="codex-primary-v1",
+        candidate_promotion_actor_id=None,
+        candidate_promotion_client_id=None,
+        candidate_promotion_transport_binding_id=None,
+    )
+
+    with pytest.raises(RuntimeError, match=r"^invalid_runtime_configuration$"):
+        MemoryNodeRuntime.from_settings(
+            settings,
+            sealed_runtime=SealedRuntime(key_provider=None, digest_binder=None),
+        )
 
 
 def test_chatgpt_runtime_composition_defensively_requires_enabled_complete_settings() -> None:

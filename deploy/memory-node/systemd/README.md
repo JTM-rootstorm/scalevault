@@ -307,8 +307,19 @@ loopback listener:
 KIVRA_MEMORY_DATABASE_URL=postgresql+psycopg://kivra_memory_api:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
 KIVRA_MEMORY_HOST=127.0.0.1
 KIVRA_MEMORY_PORT=8080
+KIVRA_MEMORY_CANDIDATE_PROMOTION_ACTOR_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_CANDIDATE_PROMOTION_CLIENT_ID=REPLACE_WITH_UUIDV7
+KIVRA_MEMORY_CANDIDATE_PROMOTION_TRANSPORT_BINDING_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_METRICS_ENABLED=true
 ```
+
+The candidate-promotion identifiers must select one dedicated, unexpired
+`internal_service` binding in the same tenant. Its service actor and worker
+client must be active, the client scope must be exactly
+`memory.lifecycle.promote`, and the binding must authorize only
+`candidate_promoted`. Configure the same triple in every canonical API or Codex
+private-ingress process that accepts nominations; no process may derive or
+select a promotion identity from caller input.
 
 The embedding worker has a separate root-owned mode-0600 environment file. It
 contains only its local worker database URL and an explicit comma-separated
