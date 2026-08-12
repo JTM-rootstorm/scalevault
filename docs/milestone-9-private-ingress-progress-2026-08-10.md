@@ -20,7 +20,7 @@ Milestone 9 acceptance.
 - Spawned-process key-provider tests cover provision/provision,
   provision/destroy, get/destroy, and interrupted-publication races without
   material resurrection or temporary-file residue.
-- The latest development-host gate passed 1,207 Python tests with 172
+- The latest development-host gate passed 1,212 Python tests with 172
   PostgreSQL tests skipped because that host lacks the required `vector`
   extension. Ruff, mypy, Go vet/tests/build determinism, protobuf determinism,
   and JSON schemas passed. The top-level `make verify` stopped only because
@@ -28,10 +28,19 @@ Milestone 9 acceptance.
   commands passed.
 - The authoritative unprivileged LXC PostgreSQL 17 lane passed all 187
   integration tests with the required extension gate enabled and zero skips.
+- The direct runtime now requires and installs one server-owned, UUIDv7-pinned
+  candidate-promotion identity. Production configuration is all-or-none and
+  the provider can supply only the configured actor, client, binding, tenant,
+  and exact `memory.lifecycle.promote` scope.
+- Candidate-lifecycle projection loading retains the existing memory-row lock
+  but does not request UPDATE privilege merely to prove that newly allocated,
+  immutable evidence UUIDs are absent. The regression test freezes both sides
+  of that least-privilege boundary.
 
 ## Sanitized live evidence
 
-- Immutable release `48a6e4f` was installed without deleting the prior release.
+- Immutable release `93d9b2d` is active. Releases `48a6e4f` and `7df898c` remain
+  retained for recovery and defect provenance.
 - The canonical Memory API remained loopback-only and the Secure MCP Tunnel
   remained active throughout deployment.
 - The ingress now serves HTTP on one exact private address and port 8443 with
@@ -92,6 +101,62 @@ Milestone 9 acceptance.
   Caller-supplied `Forwarded` and `X-Forwarded-For` values gained no authority
   and reached only the normal `401` boundary; caller-supplied `X-Real-IP`, alone
   or combined with the other fields, failed closed with `403`.
+- The operator repeated the application-path suite from a genuinely external
+  source outside the NPM Access List. Baseline and spoofed forwarding-header
+  requests returned the expected fixed `503` rejection, completing the external
+  source gate without granting backend reachability.
+- An actual Codex CLI 0.147.0 TUI initialized through NPM with a short-lived
+  status-only direct-private credential. The same client session called
+  `memory_transport_status` successfully before and after 330 seconds idle;
+  both calls reported the direct-private transport and active binding.
+- The Codex client held zero established backend connections while idle. It did
+  not open the standalone GET/SSE subscription exercised by the raw transport
+  probe, so no five-minute stream existed for this client to reconnect. The
+  post-idle tool call used a fresh authenticated request and succeeded without a
+  retry storm or client-visible disconnect.
+- The Codex-session credential recorded successful use, was revoked after the
+  test, failed its immediately following request with `401`, and left no local
+  or LXC-side credential scratch artifacts. The canonical API, Codex ingress,
+  and Secure MCP Tunnel remained active.
+- A fresh status-only bearer initialized through NPM. While the exact bearer
+  still existed in protected scratch, its full value had zero matches in the
+  NPM access log, error log, and complete container output. The credential was
+  then revoked, its next request returned `401`, and every local, Memory-LXC,
+  and NPM-LXC bearer artifact was permanently removed.
+- The operator accepted the same-session Codex continuity result together with
+  the completed raw SSE lifetime probe as satisfying the Codex-session gate.
+- Preparation for the ChatGPT Web read created one sensitivity-zero,
+  private-root candidate through the direct-private ingress. A distinct
+  search-capable client retrieved the exact candidate with candidate inclusion
+  enabled. Its corroborating nomination then failed closed with
+  `dependency_unavailable` and rolled back because the direct runtime did not
+  yet have a server-owned promotion-principal provider wired into its selection
+  engine.
+- The preparation attempt added exactly one event, memory, evidence record,
+  selection decision, command receipt, and four outbox jobs. The retained
+  revision-one candidate had a bounded expiry deadline and remained invisible
+  to the unchanged ChatGPT tunnel, whose read capability excludes candidates.
+  All three preparation credentials were revoked, returned `401` afterward,
+  and left no local or LXC-side credential scratch artifacts.
+- The pinned promotion-provider release and a dedicated active service actor,
+  worker client, and `internal_service` binding were then installed. The client
+  is scoped exactly to `memory.lifecycle.promote`; the binding authorizes only
+  `candidate_promoted` and has no installation or expiry.
+- A rollback-only live diagnostic proved the promotion identity and event append
+  were valid, then exposed SQLSTATE `42501` when projection loading attempted an
+  unnecessary UPDATE lock on immutable, newly allocated evidence. That probe
+  produced no durable changes. Release `93d9b2d` removed only that lock and a
+  second rollback-only run completed every promotion stage successfully.
+- A fresh, distinct direct-private client then corroborated the candidate
+  through NPM. The canonical selection path promoted the existing memory to
+  active revision two. The exact database delta was one event, one evidence
+  record, one selection decision, one command receipt, and two outbox jobs,
+  with no new memory row; the event operation is `candidate_promoted`.
+- An authenticated `memory_get` through both the direct-private ingress and the
+  unchanged local `/chatgpt/mcp` Secure Tunnel route returned the same active
+  revision-two memory. The disposable direct credential was revoked, its next
+  ingress request returned `401`, and every local and LXC-side promotion probe,
+  bearer, SQL, archive, and environment-backup scratch artifact was removed.
 - The canonical API, ChatGPT tunnel, and Codex ingress were active, tunnel
   readiness was `ready`, and no protected acceptance scratch directories
   remained after all live probes.
@@ -136,19 +201,11 @@ reached the application's uniform `401`; invalid path, query, and client HTTP
 application requests returned fixed `404` with no redirect. The canonical API,
 Codex ingress, and Secure MCP Tunnel services remained active.
 
-Milestone acceptance remains open until:
+The genuinely external source, exact-bearer log, Codex-session, pinned
+promotion-identity, canonical promotion, and host-side Secure Tunnel read gates
+are complete. Milestone acceptance remains open only for the account-side live
+ChatGPT Web read through the unchanged Secure MCP Tunnel; repository and host
+evidence cannot substitute for that client observation.
 
-1. A genuinely external source repeats the baseline and spoofed `Forwarded`,
-   `X-Forwarded-For`, and `X-Real-IP` gate with zero backend connections.
-2. A fresh authenticated canary permits NPM logs to be searched for the exact
-   bearer before its protected artifact is destroyed. Existing NPM and LXC
-   marker and payload scans have zero matches.
-3. An actual Codex client observes reconnect after the five-minute SSE
-   lifetime. The completed raw transport probe proves a fresh authenticated GET
-   succeeds, not client-specific automatic reconnect behavior.
-4. A live ChatGPT Web read through the unchanged Secure MCP Tunnel passes. This
-   remains an account-side gate; repository and host evidence proves tunnel
-   readiness and isolation but cannot substitute for that client observation.
-
-The private ingress activation blockers are closed. The remaining items are
-acceptance evidence rather than known configuration defects.
+The private ingress activation blockers and runtime-composition defect are
+closed. The final account-side acceptance read is the only remaining item.
