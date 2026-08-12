@@ -32,6 +32,13 @@ def _binding_credential(tmp_path: Path, secret: bytes = b"b" * 32) -> Path:
     return credential
 
 
+def _ledger_root(tmp_path: Path) -> Path:
+    ledger = tmp_path / "destruction-ledger"
+    ledger.mkdir(mode=0o770)
+    ledger.chmod(0o2770)
+    return ledger
+
+
 def test_disabled_runtime_does_not_claim_sealed_content_support() -> None:
     runtime = SealedRuntime.from_settings(Settings())
 
@@ -45,6 +52,7 @@ def test_enabled_runtime_injects_same_provider_into_selection_and_reads(tmp_path
         Settings(
             sealed_content_enabled=True,
             sealed_key_provider_root=_key_root(tmp_path),
+            sealed_destruction_ledger_root=_ledger_root(tmp_path),
             sealed_digest_binding_credential=_binding_credential(tmp_path),
         )
     )
@@ -67,6 +75,7 @@ def test_enabled_runtime_fails_closed_for_invalid_provider_root(tmp_path: Path) 
     settings = Settings(
         sealed_content_enabled=True,
         sealed_key_provider_root=root,
+        sealed_destruction_ledger_root=_ledger_root(tmp_path),
         sealed_digest_binding_credential=_binding_credential(tmp_path),
     )
 
@@ -80,6 +89,7 @@ def test_digest_credential_is_bounded_canonical_and_never_reflected(tmp_path: Pa
     settings = Settings(
         sealed_content_enabled=True,
         sealed_key_provider_root=root,
+        sealed_destruction_ledger_root=_ledger_root(tmp_path),
         sealed_digest_binding_credential=credential,
     )
 
@@ -100,11 +110,13 @@ def test_production_digest_credential_requires_service_effective_uid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = Path("/var/lib/kivra-memory-sealed/keys")
+    ledger_root = Path("/var/lib/kivra-memory-sealed/destruction-ledger")
     credential = Path("/run/credentials/kivra-memory-api.service/sealed-digest-binding")
     settings = Settings.model_construct(
         environment="production",
         sealed_content_enabled=True,
         sealed_key_provider_root=root,
+        sealed_destruction_ledger_root=ledger_root,
         sealed_digest_binding_credential=credential,
     )
     provider = MagicMock()
@@ -116,7 +128,11 @@ def test_production_digest_credential_requires_service_effective_uid(
 
     runtime = SealedRuntime.from_settings(settings)
 
-    provider_factory.assert_called_once_with(root, required_owner_uid=0)
+    provider_factory.assert_called_once_with(
+        root,
+        destruction_ledger_root=ledger_root,
+        required_owner_uid=0,
+    )
     reader.assert_called_once_with(credential, required_owner_uid=971)
     assert runtime.key_provider is provider
 

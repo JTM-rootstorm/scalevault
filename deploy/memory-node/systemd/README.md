@@ -44,10 +44,24 @@ Create `memory-api.env`, `memory-codex-ingress.env`, `memory-worker.env`,
 dedicated lifecycle-worker file described below. The Codex ingress environment
 remains unprovisioned and its service disabled until the separate
 private-ingress prerequisites are satisfied. Never copy `.env` from a
-development checkout. Database
-passwords remain local deployment secrets and must not appear in this
-repository, shell history, or command output. Private keys and API keys must
-use systemd credentials rather than environment files.
+development checkout. Database passwords remain local deployment secrets and
+must not appear in this repository, shell history, command output, or
+environment files. Install each local database URL as a root-owned mode-`0600`
+systemd credential source:
+
+| Consumer | Source file | Credential name |
+|---|---|---|
+| canonical API and Codex ingress | `/etc/kivra-memory/memory-api-database-url` | `database-url` |
+| embedding worker | `/etc/kivra-memory/memory-worker-database-url` | `database-url` |
+| lifecycle worker | `/etc/kivra-memory/memory-lifecycle-worker-database-url` | `database-url` |
+| sealed purge worker | `/etc/kivra-memory/memory-sealed-worker-database-url` | `database-url` |
+| archive exporter | `/etc/kivra-memory/memory-archive-exporter-database-url` | `database-url` |
+| GitHub discovery | `/etc/kivra-memory/memory-github-ingress-database-url` | `ingress-database-url` |
+| GitHub canonical command path | `/etc/kivra-memory/memory-api-database-url` | `command-database-url` |
+
+Each file contains one local, percent-encoded PostgreSQL URL for exactly the
+unit's role, without a trailing newline. Private keys and API keys also use
+systemd credentials rather than environment files.
 
 The Milestone 6 services have separate Unix users and PostgreSQL roles. The
 exporter uses `kivra_memory_exporter`. GitHub discovery and validation use
@@ -64,17 +78,20 @@ settings:
 
 ```sh
 groupadd --system kivra-sealed
+groupadd --system kivra-destruction-ledger
 groupadd --system memory-purge
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid memory-purge memory-purge
-usermod --append --groups kivra-sealed memory-api
-usermod --append --groups kivra-memory,kivra-sealed memory-purge
+usermod --append --groups kivra-sealed,kivra-destruction-ledger memory-api
+usermod --append --groups kivra-memory,kivra-sealed,kivra-destruction-ledger memory-purge
 install -d -o root -g kivra-sealed -m 2710 \
   /var/lib/kivra-memory-sealed/keys
 install -d -o root -g kivra-sealed -m 2770 \
   /var/lib/kivra-memory-sealed/keys/control
 install -d -o root -g kivra-sealed -m 2770 \
   /var/lib/kivra-memory-sealed/keys/material
+install -d -o root -g kivra-destruction-ledger -m 2770 \
+  /var/lib/kivra-memory-sealed/destruction-ledger
 ```
 
 Treat an existing sealed account, group membership, directory owner, or mode
@@ -90,6 +107,7 @@ Configure the API with:
 ```text
 KIVRA_MEMORY_SEALED_CONTENT_ENABLED=true
 KIVRA_MEMORY_SEALED_KEY_PROVIDER_ROOT=/var/lib/kivra-memory-sealed/keys
+KIVRA_MEMORY_SEALED_DESTRUCTION_LEDGER_ROOT=/var/lib/kivra-memory-sealed/destruction-ledger
 KIVRA_MEMORY_SEALED_DIGEST_BINDING_CREDENTIAL=/run/credentials/kivra-memory-api.service/sealed-digest-binding
 ```
 
@@ -102,10 +120,17 @@ sealed-content readability. Replacing the binding credential makes existing
 sealed idempotency bindings unverifiable and requires a separately reviewed
 rotation procedure.
 
+Never include `/var/lib/kivra-memory-sealed/destruction-ledger` in the
+key-provider backup, and never replace, overlay, truncate, or prune that ledger
+during provider restore. Recovery must validate its independently retained
+exact freshness anchor before constructing the restored provider. Provider
+construction then reconciles every ledger fact and removes any DEK resurrected
+by a stale provider backup; missing, corrupt, conflicting, or unanchored ledger
+state keeps key reads, provisioning, and service activation disabled.
+
 Install `memory-sealed-worker.env` as `root:memory-purge` mode `0640`:
 
 ```text
-KIVRA_MEMORY_PURGE_DATABASE_URL=postgresql+psycopg://kivra_memory_purge:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
 KIVRA_MEMORY_PURGE_TENANT_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_PURGE_ACTOR_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_PURGE_CLIENT_ID=REPLACE_WITH_UUIDV7
@@ -243,7 +268,6 @@ Install `/etc/kivra-memory/memory-archive-exporter.env` as root-owned mode
 `0600`:
 
 ```text
-KIVRA_MEMORY_ARCHIVE_DATABASE_URL=postgresql+psycopg://kivra_memory_exporter:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
 KIVRA_MEMORY_ARCHIVE_TENANT_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_ARCHIVE_TARGET_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_ARCHIVE_REPOSITORY=/mnt/memory/kivra-memory/archive
@@ -268,8 +292,6 @@ credential prompts, hooks, and ambient SSH agents are not used.
 Install `/etc/kivra-memory/memory-github-ingress.env` as root-owned mode `0600`:
 
 ```text
-KIVRA_MEMORY_GITHUB_INGRESS_DATABASE_URL=postgresql+psycopg://kivra_memory_ingress:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
-KIVRA_MEMORY_GITHUB_COMMAND_DATABASE_URL=postgresql+psycopg://kivra_memory_api:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
 KIVRA_MEMORY_GITHUB_TENANT_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_GITHUB_TRANSPORT_BINDING_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_GITHUB_INSTALLATION_ID=REPLACE_WITH_UUIDV7
@@ -300,11 +322,10 @@ fine-grained, repository-only, read-only token as root-owned mode `0600` at
 `/etc/kivra-memory/github-ingress-token`. Webhooks remain disabled; any future
 listener must be separately hosted and may only wake this same immutable poller.
 
-The required API file sets a production database URL and normally retains the
-loopback listener:
+The required API file normally retains the loopback listener. Its database URL
+comes only from the unit's `database-url` credential:
 
 ```text
-KIVRA_MEMORY_DATABASE_URL=postgresql+psycopg://kivra_memory_api:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
 KIVRA_MEMORY_HOST=127.0.0.1
 KIVRA_MEMORY_PORT=8080
 KIVRA_MEMORY_CANDIDATE_PROMOTION_ACTOR_ID=REPLACE_WITH_UUIDV7
@@ -322,11 +343,10 @@ private-ingress process that accepts nominations; no process may derive or
 select a promotion identity from caller input.
 
 The embedding worker has a separate root-owned mode-0600 environment file. It
-contains only its local worker database URL and an explicit comma-separated
-allowlist of tenant UUIDs; model paths cannot be supplied by jobs:
+contains an explicit comma-separated allowlist of tenant UUIDs; its database URL
+comes only from the unit credential and model paths cannot be supplied by jobs:
 
 ```text
-KIVRA_MEMORY_DATABASE_URL=postgresql+psycopg://kivra_memory_worker:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
 KIVRA_MEMORY_WORKER_TENANT_IDS=REPLACE_WITH_UUIDV7
 ```
 
@@ -335,7 +355,6 @@ worker account, environment, model mount, or job dispatcher. Its root-owned
 environment file is deliberately readable only by its dedicated service account:
 
 ```text
-KIVRA_MEMORY_DATABASE_URL=postgresql+psycopg://kivra_memory_policy:REPLACE_WITH_PERCENT_ENCODED_PASSWORD@127.0.0.1/kivra_memory
 KIVRA_MEMORY_LIFECYCLE_TENANT_IDS=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_LIFECYCLE_ACTOR_ID=REPLACE_WITH_UUIDV7
 KIVRA_MEMORY_LIFECYCLE_CLIENT_ID=REPLACE_WITH_UUIDV7

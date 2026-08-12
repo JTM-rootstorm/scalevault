@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -16,6 +17,7 @@ from sqlalchemy.engine import make_url
 from kivra_memory.application.candidate_lifecycle import CandidateLifecycleEngine
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.domain.identifiers import new_uuid7, require_uuid7
+from kivra_memory.security.credential_files import read_systemd_credential_text
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import Actor, Client, TransportBinding
 from kivra_memory.storage.outbox_worker import (
@@ -55,6 +57,11 @@ class LifecycleWorkerSettings:
     @classmethod
     def from_environment(cls) -> LifecycleWorkerSettings:
         database_value = os.environ.get("KIVRA_MEMORY_DATABASE_URL", "")
+        if os.environ.get("CREDENTIALS_DIRECTORY") or not database_value:
+            with suppress(OSError, ValueError):
+                database_value = read_systemd_credential_text(
+                    "database-url", minimum_bytes=1, maximum_bytes=4096
+                )
         tenant_value = os.environ.get("KIVRA_MEMORY_LIFECYCLE_TENANT_IDS", "")
         identifier_values = (
             os.environ.get("KIVRA_MEMORY_LIFECYCLE_ACTOR_ID", ""),

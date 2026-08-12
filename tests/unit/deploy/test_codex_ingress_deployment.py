@@ -86,7 +86,7 @@ def test_environment_template_freezes_profile_port_and_exact_placeholders() -> N
     assert settings["KIVRA_MEMORY_METRICS_ENABLED"] == "false"
     assert "CLIENT_CIDRS" not in example
     assert "0.0.0.0" not in example
-    assert "proxy" not in settings["KIVRA_MEMORY_DATABASE_URL"].lower()
+    assert "KIVRA_MEMORY_DATABASE_URL" not in settings
 
 
 def test_npm_template_is_exact_verified_bounded_and_never_retries() -> None:
@@ -242,10 +242,14 @@ def test_acme_exception_is_accepted_precise_and_amends_prior_contracts() -> None
 def test_optional_sealed_drop_in_uses_ingress_credential_namespace() -> None:
     drop_in = SEALED_DROP_IN.read_text(encoding="utf-8")
 
-    assert "SupplementaryGroups=kivra-sealed" in drop_in
+    assert "SupplementaryGroups=kivra-sealed kivra-destruction-ledger" in drop_in
     assert "LoadCredential=sealed-digest-binding:" in drop_in
     assert "KIVRA_MEMORY_SEALED_CONTENT_ENABLED=true" in drop_in
     assert "KIVRA_MEMORY_SEALED_KEY_PROVIDER_ROOT=/var/lib/kivra-memory-sealed/keys" in drop_in
+    assert (
+        "KIVRA_MEMORY_SEALED_DESTRUCTION_LEDGER_ROOT="
+        "/var/lib/kivra-memory-sealed/destruction-ledger"
+    ) in drop_in
     assert (
         "KIVRA_MEMORY_SEALED_DIGEST_BINDING_CREDENTIAL="
         "/run/credentials/kivra-memory-codex-ingress.service/sealed-digest-binding"
@@ -253,6 +257,7 @@ def test_optional_sealed_drop_in_uses_ingress_credential_namespace() -> None:
     assert "/run/credentials/kivra-memory-api.service/" not in drop_in
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in drop_in
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material" in drop_in
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" in drop_in
 
 
 def test_private_ingress_artifacts_contain_no_completed_external_coordinates() -> None:

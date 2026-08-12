@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 import signal
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -14,6 +15,7 @@ from pydantic import PostgresDsn, TypeAdapter, ValidationError
 from sqlalchemy import select
 
 from kivra_memory.domain.identifiers import new_uuid7, require_uuid7
+from kivra_memory.security.credential_files import read_systemd_credential_text
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import EmbeddingModel
 from kivra_memory.storage.outbox_worker import (
@@ -47,6 +49,11 @@ class WorkerSettings:
     @classmethod
     def from_environment(cls) -> WorkerSettings:
         database_value = os.environ.get("KIVRA_MEMORY_DATABASE_URL", "")
+        if os.environ.get("CREDENTIALS_DIRECTORY") or not database_value:
+            with suppress(OSError, ValueError):
+                database_value = read_systemd_credential_text(
+                    "database-url", minimum_bytes=1, maximum_bytes=4096
+                )
         tenant_value = os.environ.get("KIVRA_MEMORY_WORKER_TENANT_IDS", "")
         try:
             database_url = str(TypeAdapter(PostgresDsn).validate_python(database_value))

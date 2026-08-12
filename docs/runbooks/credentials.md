@@ -3,6 +3,8 @@
 This runbook covers every active or deliberately dormant ScaleVault credential.
 It never authorizes a live provider change. Provider revocation, service
 activation, and recovery reissue require a separate operator checkpoint.
+The normative lifecycle and revocation semantics are frozen by
+[ADR 0030](../adr/0030-credential-lifecycle-and-revocation.md).
 
 Do not place credentials, database URLs, private coordinates, response bodies,
 or verifier material in tickets, evidence, command arguments, logs, or this

@@ -35,6 +35,17 @@ _MONTH_PATTERN = re.compile(r"(?:0[1-9]|1[0-2])")
 class GitHubProposalError(RuntimeError):
     """Raised when GitHub cannot provide a verified proposal object."""
 
+    def __init__(self, message: str, *, category: str = "integrity_failed") -> None:
+        if category not in {
+            "auth_failure",
+            "integrity_failed",
+            "rate_limited",
+            "provider_unavailable",
+        }:
+            raise ValueError("invalid GitHub provider error category")
+        self.category = category
+        super().__init__(message)
+
 
 @dataclass(frozen=True, slots=True)
 class GitHubResponse:
@@ -69,7 +80,9 @@ class _UrllibGitHubTransport:
             response_headers = dict(exc.headers.items()) if exc.headers is not None else {}
             return GitHubResponse(status=exc.code, body=b"", headers=response_headers)
         except (OSError, URLError):
-            raise GitHubProposalError("GitHub API request failed") from None
+            raise GitHubProposalError(
+                "GitHub API request failed", category="provider_unavailable"
+            ) from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,11 +517,24 @@ class GitHubProposalClient:
         try:
             response = self._transport.get(url, headers)
         except Exception:
-            raise GitHubProposalError("GitHub API request failed") from None
+            raise GitHubProposalError(
+                "GitHub API request failed", category="provider_unavailable"
+            ) from None
         if isinstance(response.status, bool) or not isinstance(response.status, int):
             raise GitHubProposalError("GitHub API response was invalid")
         if not isinstance(response.body, bytes) or not isinstance(response.headers, Mapping):
             raise GitHubProposalError("GitHub API response was invalid")
+        remaining = self._response_header(response.headers, "X-RateLimit-Remaining")
+        if response.status == 429 or (response.status == 403 and remaining == "0"):
+            raise GitHubProposalError(
+                "GitHub provider rate limit is active",
+                category="rate_limited",
+            )
+        if response.status in {401, 403}:
+            raise GitHubProposalError(
+                "GitHub provider authentication failed",
+                category="auth_failure",
+            )
         return response
 
     @staticmethod

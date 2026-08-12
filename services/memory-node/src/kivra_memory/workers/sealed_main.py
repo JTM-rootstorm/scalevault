@@ -7,6 +7,7 @@ import os
 import pwd
 import signal
 import sys
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from urllib.parse import unquote
@@ -18,6 +19,8 @@ from sqlalchemy.engine import make_url
 
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.domain.identifiers import new_uuid7, require_uuid7
+from kivra_memory.security.credential_files import read_systemd_credential_text
+from kivra_memory.security.destruction_ledger import LOCAL_DESTRUCTION_LEDGER_ROOT
 from kivra_memory.security.keys import KeyDestroyer
 from kivra_memory.security.local_key_provider import (
     LOCAL_KEY_PROVIDER_ROOT,
@@ -60,6 +63,11 @@ class SealedWorkerSettings:
     @classmethod
     def from_environment(cls) -> SealedWorkerSettings:
         database_value = os.environ.get("KIVRA_MEMORY_PURGE_DATABASE_URL", "")
+        if os.environ.get("CREDENTIALS_DIRECTORY") or not database_value:
+            with suppress(OSError, ValueError):
+                database_value = read_systemd_credential_text(
+                    "database-url", minimum_bytes=1, maximum_bytes=4096
+                )
         values = (
             os.environ.get("KIVRA_MEMORY_PURGE_TENANT_ID", ""),
             os.environ.get("KIVRA_MEMORY_PURGE_ACTOR_ID", ""),
@@ -299,6 +307,7 @@ def main() -> None:
         settings = SealedWorkerSettings.from_environment()
         destroyer = LocalDirectoryKeyDestroyer(
             LOCAL_KEY_PROVIDER_ROOT,
+            destruction_ledger_root=LOCAL_DESTRUCTION_LEDGER_ROOT,
             required_owner_uid=0,
             material_file_owner_uid=pwd.getpwnam("memory-api").pw_uid,
         )

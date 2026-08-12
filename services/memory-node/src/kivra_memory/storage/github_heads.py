@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.domain.identifiers import require_uuid7
+from kivra_memory.storage.github_revocation import require_active_github_installation
 from kivra_memory.storage.models import IngressProviderHead
 
 GITHUB_INGRESS_BOOTSTRAP_COMMIT = "84233835924ade0e3cf26bb995717c880c75ff5c"
@@ -70,6 +71,11 @@ class GitHubProviderHeadRepository:
         /,
     ) -> GitHubProviderHeadState:
         identity.validate()
+        await require_active_github_installation(
+            session,
+            tenant_id=identity.tenant_id,
+            installation_id=identity.installation_id,
+        )
         await session.execute(
             insert(IngressProviderHead)
             .values(
@@ -109,6 +115,11 @@ class GitHubProviderHeadRepository:
         etag: str | None,
     ) -> GitHubProviderHeadState:
         identity.validate()
+        await require_active_github_installation(
+            session,
+            tenant_id=identity.tenant_id,
+            installation_id=identity.installation_id,
+        )
         for value in (expected_commit_id, expected_tree_id, commit_id, tree_id):
             if _OBJECT_ID.fullmatch(value) is None:
                 raise ValueError("GitHub object ID is invalid")

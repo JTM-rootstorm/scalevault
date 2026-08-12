@@ -16,10 +16,11 @@ from typing import Literal, Self, cast
 from urllib.parse import unquote
 from uuid import UUID
 
-from pydantic import Field, PostgresDsn, model_validator
+from pydantic import Field, PostgresDsn, TypeAdapter, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from kivra_memory.domain.identifiers import require_uuid7
+from kivra_memory.security.credential_files import read_systemd_credential_text
 
 _LOCAL_DATABASE_SOCKET_DIRECTORIES = {"/run/postgresql", "/var/run/postgresql"}
 _DATABASE_DESTINATION_QUERY_PARAMETERS = {"host", "hostaddr", "service", "servicefile"}
@@ -68,12 +69,26 @@ class Settings(BaseSettings):
     candidate_promotion_transport_binding_id: UUID | None = None
     sealed_content_enabled: bool = False
     sealed_key_provider_root: Path | None = None
+    sealed_destruction_ledger_root: Path | None = None
     sealed_digest_binding_credential: Path | None = None
 
     @model_validator(mode="after")
     def require_production_dependencies(self) -> Self:
         """Reject a production process that cannot become ready."""
 
+        credentials_active = bool(os.environ.get("CREDENTIALS_DIRECTORY"))
+        if self.environment == "production" and (credentials_active or self.database_url is None):
+            try:
+                database_url = TypeAdapter(PostgresDsn).validate_python(
+                    read_systemd_credential_text(
+                        "database-url",
+                        minimum_bytes=1,
+                        maximum_bytes=4096,
+                    )
+                )
+            except (OSError, ValueError, ValidationError):
+                raise ValueError("database_url is required in production") from None
+            object.__setattr__(self, "database_url", database_url)
         if self.environment == "production" and self.database_url is None:
             raise ValueError("database_url is required in production")
         if self.database_url is not None and self.database_url.scheme not in {
@@ -196,6 +211,20 @@ class Settings(BaseSettings):
             ):
                 raise ValueError("sealed_key_provider_root must be an absolute canonical path")
             if (
+                self.sealed_destruction_ledger_root is None
+                or not self.sealed_destruction_ledger_root.is_absolute()
+                or ".." in self.sealed_destruction_ledger_root.parts
+            ):
+                raise ValueError(
+                    "sealed_destruction_ledger_root must be an absolute canonical path"
+                )
+            if (
+                self.sealed_destruction_ledger_root == self.sealed_key_provider_root
+                or self.sealed_destruction_ledger_root.is_relative_to(self.sealed_key_provider_root)
+                or self.sealed_key_provider_root.is_relative_to(self.sealed_destruction_ledger_root)
+            ):
+                raise ValueError("sealed destruction ledger must be outside the key provider root")
+            if (
                 self.sealed_digest_binding_credential is None
                 or not self.sealed_digest_binding_credential.is_absolute()
                 or ".." in self.sealed_digest_binding_credential.parts
@@ -207,6 +236,12 @@ class Settings(BaseSettings):
                 "/var/lib/kivra-memory-sealed/keys"
             ):
                 raise ValueError("sealed_key_provider_root must use the production key boundary")
+            if self.environment == "production" and self.sealed_destruction_ledger_root != Path(
+                "/var/lib/kivra-memory-sealed/destruction-ledger"
+            ):
+                raise ValueError(
+                    "sealed_destruction_ledger_root must use the production ledger boundary"
+                )
             digest_boundary = (
                 "/run/credentials/kivra-memory-codex-ingress.service/sealed-digest-binding"
                 if self.server_profile == "codex_private_ingress"
@@ -220,6 +255,7 @@ class Settings(BaseSettings):
                 )
         elif (
             self.sealed_key_provider_root is not None
+            or self.sealed_destruction_ledger_root is not None
             or self.sealed_digest_binding_credential is not None
         ):
             raise ValueError("sealed provider settings require sealed content to be enabled")

@@ -25,7 +25,9 @@ ExecStartPre=/usr/local/libexec/kivra-memory-tunnel-mcp-probe /usr/bin/curl %d/c
 ExecStart=/usr/local/bin/tunnel-client run --control-plane.tunnel-id=${CONTROL_PLANE_TUNNEL_ID} --control-plane.api-key=file:%d/control-plane-api-key --mcp.server-url=url=http://127.0.0.1:8080/chatgpt/mcp,channel=main --mcp.extra-headers="Authorization: file:%d/chatgpt-mcp-authorization" --mcp.discovery-extra-headers="Authorization: file:%d/chatgpt-mcp-authorization" --mcp.max-concurrent-requests=4 --control-plane.max-inflight=4 --health.listen-addr=127.0.0.1:8081 --log.level=info --log.format=json --log.file=
 Restart=always
 RestartSec=10s
+TimeoutStopSec=30s
 UMask=0077
+LimitCORE=0
 NoNewPrivileges=true
 PrivateDevices=true
 PrivateTmp=true
@@ -36,17 +38,22 @@ ProtectClock=true
 ProtectHostname=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
 ProtectProc=invisible
 ProcSubset=pid
 RemoveIPC=true
 RestrictSUIDSGID=true
 RestrictNamespaces=true
+RestrictRealtime=true
+KeyringMode=private
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 LockPersonality=true
 MemoryDenyWriteExecute=true
 CapabilityBoundingSet=
+SocketBindDeny=any
+SocketBindAllow=tcp:8081
 
 [Install]
 WantedBy=multi-user.target

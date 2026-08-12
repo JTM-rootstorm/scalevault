@@ -34,6 +34,10 @@ case "$authorization_mode" in
     [0-7]00) ;;
     *) fail "the authorization credential must not grant group or other permissions" ;;
 esac
+authorization_owner=$(stat -c '%u' -- "$authorization_credential") \
+    || fail "could not inspect the authorization credential"
+[ "$authorization_owner" -eq "$(id -u)" ] \
+    || fail "the authorization credential must be owned by the service user"
 
 authorization=$(sed -n '1p' "$authorization_credential") \
     || fail "could not inspect the authorization credential"

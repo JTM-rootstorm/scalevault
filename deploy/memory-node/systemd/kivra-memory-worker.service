@@ -6,6 +6,8 @@ Requires=postgresql@17-main.service
 RequiresMountsFor=/mnt/memory
 ConditionPathIsMountPoint=/mnt/memory
 ConditionPathIsDirectory=/mnt/memory/kivra-memory/models
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -21,22 +23,37 @@ Environment=TOKENIZERS_PARALLELISM=false
 Environment=HOME=/nonexistent
 Environment=XDG_CACHE_HOME=/run/kivra-memory-worker/cache
 EnvironmentFile=/etc/kivra-memory/memory-worker.env
+LoadCredential=database-url:/etc/kivra-memory/memory-worker-database-url
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
 ExecStartPre=/usr/bin/test -d /mnt/memory/kivra-memory/models
 ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-worker
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=30s
 RuntimeDirectory=kivra-memory-worker
 RuntimeDirectoryMode=0750
 UMask=0007
+LimitCORE=0
 NoNewPrivileges=true
 PrivateDevices=true
 PrivateTmp=true
+PrivateMounts=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=true
 RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+KeyringMode=private
+SystemCallArchitectures=native
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

@@ -5,6 +5,8 @@ Wants=network-online.target
 Requires=postgresql@17-main.service
 RequiresMountsFor=/mnt/memory
 ConditionPathIsMountPoint=/mnt/memory
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -13,22 +15,41 @@ Group=kivra-memory
 WorkingDirectory=/opt/kivra-memory/app
 Environment=KIVRA_MEMORY_ENVIRONMENT=production
 EnvironmentFile=/etc/kivra-memory/memory-api.env
+LoadCredential=database-url:/etc/kivra-memory/memory-api-database-url
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
 ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-api
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=30s
 UMask=0077
+LimitCORE=0
 NoNewPrivileges=true
 PrivateDevices=true
 PrivateTmp=true
+PrivateMounts=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=true
 RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+KeyringMode=private
+SystemCallArchitectures=native
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+SocketBindDeny=any
+SocketBindAllow=tcp:8080
 CapabilityBoundingSet=
 
 [Install]

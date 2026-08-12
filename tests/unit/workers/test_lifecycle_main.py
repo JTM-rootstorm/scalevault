@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
@@ -87,6 +88,28 @@ def test_settings_require_one_uuid7_tenant_and_all_preprovisioned_ids(
     monkeypatch.setenv("KIVRA_MEMORY_LIFECYCLE_TENANT_IDS", str(settings.tenant_ids[0]))
     with pytest.raises(LifecycleWorkerConfigurationError, match="invalid_lifecycle"):
         LifecycleWorkerSettings.from_environment()
+
+
+def test_systemd_database_credential_overrides_ambient_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = _settings()
+    credential = tmp_path / "database-url"
+    credential.write_text(settings.database_url, encoding="utf-8")
+    credential.chmod(0o600)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+    monkeypatch.setenv(
+        "KIVRA_MEMORY_DATABASE_URL",
+        "postgresql+psycopg://kivra_memory_api@database.invalid/kivra_memory",
+    )
+    monkeypatch.setenv("KIVRA_MEMORY_LIFECYCLE_TENANT_IDS", str(settings.tenant_ids[0]))
+    monkeypatch.setenv("KIVRA_MEMORY_LIFECYCLE_ACTOR_ID", str(settings.actor_id))
+    monkeypatch.setenv("KIVRA_MEMORY_LIFECYCLE_CLIENT_ID", str(settings.client_id))
+    monkeypatch.setenv(
+        "KIVRA_MEMORY_LIFECYCLE_TRANSPORT_BINDING_ID", str(settings.transport_binding_id)
+    )
+
+    assert LifecycleWorkerSettings.from_environment() == settings
 
 
 @pytest.mark.asyncio

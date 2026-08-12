@@ -5,6 +5,8 @@ Wants=network-online.target
 Requires=postgresql@17-main.service
 RequiresMountsFor=/mnt/memory
 ConditionPathIsMountPoint=/mnt/memory
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -15,13 +17,16 @@ Environment=KIVRA_MEMORY_ENVIRONMENT=production
 Environment=KIVRA_MEMORY_CLIENT_TOKEN_PEPPER_CREDENTIAL=/run/credentials/kivra-memory-codex-ingress.service/client-token-pepper
 Environment=KIVRA_MEMORY_CLIENT_TOKEN_PEPPER_KEY_ID=codex-primary-v1
 EnvironmentFile=/etc/kivra-memory/memory-codex-ingress.env
+LoadCredential=database-url:/etc/kivra-memory/memory-api-database-url
 LoadCredential=client-token-pepper:/etc/kivra-memory/client-token-pepper
 UnsetEnvironment=KIVRA_MEMORY_CHATGPT_SECURE_TUNNEL_ENABLED KIVRA_MEMORY_CHATGPT_SECURE_TUNNEL_INSTALLATION_ID
 UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
 ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-codex-ingress
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=30s
 UMask=0077
+LimitCORE=0
 NoNewPrivileges=true
 PrivateDevices=true
 PrivateTmp=true
@@ -39,6 +44,8 @@ ProcSubset=pid
 RemoveIPC=true
 RestrictSUIDSGID=true
 RestrictNamespaces=true
+RestrictRealtime=true
+KeyringMode=private
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 LockPersonality=true

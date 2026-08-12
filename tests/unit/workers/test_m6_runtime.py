@@ -28,6 +28,8 @@ from kivra_memory.workers.github_ingress_main import (
     GitHubIngressSettings,
     PinnedGitHubNominationResolver,
     PinnedPromotionPrincipalProvider,
+    _provider_backoff_seconds,
+    _provider_failure_alert,
 )
 
 
@@ -208,3 +210,21 @@ def test_ingress_settings_fail_closed_without_systemd_credential_directory(
     monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
     with pytest.raises(RuntimeError, match="invalid_github_ingress_configuration"):
         GitHubIngressSettings.from_environment()
+
+
+def test_provider_failures_use_bounded_backoff_and_fixed_alerts() -> None:
+    assert [_provider_backoff_seconds(30, failure) for failure in range(1, 8)] == [
+        30,
+        60,
+        120,
+        240,
+        480,
+        900,
+        900,
+    ]
+    assert _provider_failure_alert("auth_failure") == (
+        "ScaleVault GitHub ingress provider authentication failed"
+    )
+    assert "response" not in _provider_failure_alert("rate_limited")
+    with pytest.raises(ValueError):
+        _provider_backoff_seconds(30, 0)

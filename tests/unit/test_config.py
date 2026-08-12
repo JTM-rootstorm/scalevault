@@ -125,6 +125,9 @@ def test_codex_private_ingress_uses_its_own_sealed_digest_boundary() -> None:
             **codex_ingress_settings(
                 sealed_content_enabled=True,
                 sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
+                sealed_destruction_ledger_root=Path(
+                    "/var/lib/kivra-memory-sealed/destruction-ledger"
+                ),
                 sealed_digest_binding_credential=Path(
                     "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
                 ),
@@ -135,6 +138,7 @@ def test_codex_private_ingress_uses_its_own_sealed_digest_boundary() -> None:
         **codex_ingress_settings(
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
+            sealed_destruction_ledger_root=Path("/var/lib/kivra-memory-sealed/destruction-ledger"),
             sealed_digest_binding_credential=Path(
                 "/run/credentials/kivra-memory-codex-ingress.service/sealed-digest-binding"
             ),
@@ -154,12 +158,28 @@ def test_sealed_content_requires_an_explicit_absolute_provider_root() -> None:
         Settings(
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/tmp/keys"),
+            sealed_destruction_ledger_root=Path("/tmp/destruction-ledger"),
         )
     with pytest.raises(ValidationError, match="sealed_digest_binding_credential"):
         Settings(
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/tmp/keys"),
+            sealed_destruction_ledger_root=Path("/tmp/destruction-ledger"),
             sealed_digest_binding_credential=Path("relative-binding"),
+        )
+    with pytest.raises(ValidationError, match="sealed_destruction_ledger_root"):
+        Settings(
+            sealed_content_enabled=True,
+            sealed_key_provider_root=Path("/tmp/keys"),
+            sealed_destruction_ledger_root=Path("relative-ledger"),
+            sealed_digest_binding_credential=Path("/tmp/binding"),
+        )
+    with pytest.raises(ValidationError, match="outside the key provider root"):
+        Settings(
+            sealed_content_enabled=True,
+            sealed_key_provider_root=Path("/tmp/keys"),
+            sealed_destruction_ledger_root=Path("/tmp/keys/ledger"),
+            sealed_digest_binding_credential=Path("/tmp/binding"),
         )
 
 
@@ -171,6 +191,7 @@ def test_production_sealed_content_uses_separate_local_key_boundary() -> None:
             database_url=database_url,
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/mnt/memory/kivra-memory/sealed-keys"),
+            sealed_destruction_ledger_root=Path("/var/lib/kivra-memory-sealed/destruction-ledger"),
             sealed_digest_binding_credential=Path("/run/credentials/test/binding"),
             **PRODUCTION_AUTH,
         )
@@ -181,6 +202,7 @@ def test_production_sealed_content_uses_separate_local_key_boundary() -> None:
             database_url=database_url,
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
+            sealed_destruction_ledger_root=Path("/var/lib/kivra-memory-sealed/destruction-ledger"),
             sealed_digest_binding_credential=Path("/etc/kivra-memory/binding"),
             **PRODUCTION_AUTH,
         )
@@ -190,6 +212,7 @@ def test_production_sealed_content_uses_separate_local_key_boundary() -> None:
         database_url=database_url,
         sealed_content_enabled=True,
         sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
+        sealed_destruction_ledger_root=Path("/var/lib/kivra-memory-sealed/destruction-ledger"),
         sealed_digest_binding_credential=Path(
             "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
         ),
@@ -201,6 +224,26 @@ def test_production_sealed_content_uses_separate_local_key_boundary() -> None:
 def test_production_requires_database_url() -> None:
     with pytest.raises(ValidationError, match="database_url is required in production"):
         Settings(environment="production", **PRODUCTION_AUTH)
+
+
+def test_production_systemd_database_credential_overrides_secret_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    database_url = "postgresql+psycopg://memory-api:credential@127.0.0.1/kivra_memory"
+    credential = tmp_path / "database-url"
+    credential.write_text(database_url, encoding="utf-8")
+    credential.chmod(0o600)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(tmp_path))
+
+    settings = Settings(
+        environment="production",
+        database_url=PostgresDsn(
+            "postgresql+psycopg://memory-api:ambient@database.invalid/kivra_memory"
+        ),
+        **PRODUCTION_AUTH,
+    )
+
+    assert str(settings.database_url) == database_url
 
 
 def test_candidate_promotion_identity_is_complete_uuid7_and_required_in_production() -> None:

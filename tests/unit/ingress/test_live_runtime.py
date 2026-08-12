@@ -234,6 +234,14 @@ async def test_duplicate_link_is_resolved_before_terminal_row_becomes_dirty(
             self.flushed = True
 
     session = FlushProbe()
+
+    async def active_installation(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "kivra_memory.storage.github_ingress.require_active_github_installation",
+        active_installation,
+    )
     monkeypatch.setattr(repository, "_load_locked", load_locked)
     monkeypatch.setattr(repository, "_find_duplicate_link", find_duplicate_link)
 

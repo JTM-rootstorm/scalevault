@@ -22,6 +22,7 @@ from kivra_memory.archive.adapters import (
 )
 from kivra_memory.archive.git import GitSigningConfig
 from kivra_memory.domain.identifiers import require_uuid7
+from kivra_memory.security.credential_files import read_systemd_credential_text
 from kivra_memory.storage.archive import ArchiveExportBusy
 from kivra_memory.storage.database import Database
 from kivra_memory.workers.archive_exporter import export_archive_target
@@ -46,7 +47,12 @@ def _positive_float(name: str, default: str, *, maximum: float) -> float:
 
 def _local_database_url(name: str) -> str:
     try:
-        value = TypeAdapter(PostgresDsn).validate_python(_required(name))
+        raw_value = os.environ.get(name, "")
+        if os.environ.get("CREDENTIALS_DIRECTORY") or not raw_value:
+            raw_value = read_systemd_credential_text(
+                "database-url", minimum_bytes=1, maximum_bytes=4096
+            )
+        value = TypeAdapter(PostgresDsn).validate_python(raw_value)
         if value.scheme not in {"postgres", "postgresql", "postgresql+psycopg"}:
             raise ValueError
         if {key for key, _item in value.query_params()} & {
@@ -63,7 +69,7 @@ def _local_database_url(name: str) -> str:
             for host in value.hosts()
         ):
             raise ValueError
-    except (ValidationError, ValueError):
+    except (OSError, ValidationError, ValueError):
         raise RuntimeError("invalid_archive_exporter_configuration") from None
     return str(value)
 

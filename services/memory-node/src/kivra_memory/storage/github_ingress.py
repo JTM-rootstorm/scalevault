@@ -19,6 +19,7 @@ from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import IngressState, MemoryStatus
 from kivra_memory.domain.fingerprints import exact_memory_fingerprint
 from kivra_memory.domain.identifiers import require_uuid7
+from kivra_memory.storage.github_revocation import require_active_github_installation
 from kivra_memory.storage.models import (
     IngressItem,
     IngressProviderViolation,
@@ -223,6 +224,11 @@ class GitHubIngressRepository:
         self, session: AsyncSession, discovery: GitHubIngressDiscovery, /
     ) -> IngressRegistration:
         discovery.validate()
+        await require_active_github_installation(
+            session,
+            tenant_id=discovery.tenant_id,
+            installation_id=discovery.installation_id,
+        )
         statement = (
             insert(IngressItem)
             .values(
@@ -281,6 +287,11 @@ class GitHubIngressRepository:
         payload_sha256: bytes,
         validated_at: datetime,
     ) -> IngressRegistration:
+        await require_active_github_installation(
+            session,
+            tenant_id=discovery.tenant_id,
+            installation_id=discovery.installation_id,
+        )
         if not idempotency_key or len(idempotency_key) > 255 or len(payload_sha256) != 32:
             raise GitHubIngressStorageError("semantic_identity_invalid")
         row = await self._load_locked(session, discovery)
@@ -326,6 +337,11 @@ class GitHubIngressRepository:
         error_code: str,
         processed_at: datetime,
     ) -> IngressRegistration:
+        await require_active_github_installation(
+            session,
+            tenant_id=discovery.tenant_id,
+            installation_id=discovery.installation_id,
+        )
         if _SAFE_CODE.fullmatch(error_code) is None:
             raise ValueError("quarantine error code is invalid")
         row = await self._load_locked(session, discovery)
@@ -360,6 +376,11 @@ class GitHubIngressRepository:
         result: SelectionResult,
         processed_at: datetime,
     ) -> None:
+        await require_active_github_installation(
+            session,
+            tenant_id=discovery.tenant_id,
+            installation_id=discovery.installation_id,
+        )
         row = await self._load_locked(session, discovery)
         if row.state in _TERMINAL_STATES:
             return

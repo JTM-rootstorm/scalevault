@@ -10,6 +10,7 @@ from uuid import UUID
 
 import pytest
 from kivra_memory.domain.identifiers import new_uuid7
+from kivra_memory.security.destruction_ledger import LOCAL_DESTRUCTION_LEDGER_ROOT
 from kivra_memory.security.local_key_provider import LOCAL_KEY_PROVIDER_ROOT
 from kivra_memory.storage.outbox_worker import ClaimedOutboxJob
 from kivra_memory.workers import sealed_main
@@ -146,6 +147,7 @@ def test_main_composes_only_destruction_capability(
 
     constructor.assert_called_once_with(
         LOCAL_KEY_PROVIDER_ROOT,
+        destruction_ledger_root=LOCAL_DESTRUCTION_LEDGER_ROOT,
         required_owner_uid=0,
         material_file_owner_uid=8123,
     )
@@ -281,14 +283,22 @@ def test_systemd_profile_is_local_separate_and_least_privilege() -> None:
 
     assert "User=memory-purge" in unit
     assert "Group=memory-purge" in unit
-    assert "SupplementaryGroups=kivra-memory kivra-sealed" in unit
+    assert "SupplementaryGroups=kivra-memory kivra-sealed kivra-destruction-ledger" in unit
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in unit
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material" in unit
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" in unit
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys" not in unit.splitlines()
-    assert "LoadCredential=" not in unit
+    assert unit.count("LoadCredential=") == 1
+    assert "LoadCredential=database-url:" in unit
+    assert "LoadCredential=sealed-digest-binding:" not in unit
     assert "/mnt/memory" not in unit
     assert "LoadCredential=sealed-digest-binding:" in drop_in
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in drop_in
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material" in drop_in
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" in drop_in
+    assert (
+        "KIVRA_MEMORY_SEALED_DESTRUCTION_LEDGER_ROOT="
+        "/var/lib/kivra-memory-sealed/destruction-ledger"
+    ) in drop_in
     assert "DEK files in `material` as `memory-api` mode `0600`" in operator_documentation
     assert "Do not make material files group-readable" in operator_documentation

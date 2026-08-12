@@ -27,9 +27,14 @@ from kivra_memory.application.selection import (
 from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import AuthorityClass, IngressState, MemoryCategory
 from kivra_memory.domain.identifiers import require_uuid7
-from kivra_memory.ingress.github_client import GitHubProposalClient
+from kivra_memory.ingress.github_client import GitHubProposalClient, GitHubProposalError
 from kivra_memory.ingress.poller import GitHubSnapshotPoller
+from kivra_memory.observability.metrics import REGISTRY
 from kivra_memory.policy import EvidenceKind, EvidenceSummary, EvidenceTrust, SelectionBasis
+from kivra_memory.security.credential_files import (
+    read_protected_text,
+    read_systemd_credential_text,
+)
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.github_heads import (
     GITHUB_INGRESS_BOOTSTRAP_COMMIT,
@@ -38,6 +43,7 @@ from kivra_memory.storage.github_heads import (
     GitHubProviderHeadState,
     GitHubProviderIdentity,
 )
+from kivra_memory.storage.github_revocation import require_active_github_installation
 from kivra_memory.storage.models import IngressItem
 from kivra_memory.workers.github_ingress import (
     GitHubIngressIdentity,
@@ -62,9 +68,14 @@ def _uuid7(name: str) -> UUID:
     return value
 
 
-def _database_url(name: str) -> str:
+def _database_url(name: str, credential_name: str) -> str:
     try:
-        value = TypeAdapter(PostgresDsn).validate_python(_required(name))
+        raw_value = os.environ.get(name, "")
+        if os.environ.get("CREDENTIALS_DIRECTORY") or not raw_value:
+            raw_value = read_systemd_credential_text(
+                credential_name, minimum_bytes=1, maximum_bytes=4096
+            )
+        value = TypeAdapter(PostgresDsn).validate_python(raw_value)
         if value.scheme not in {"postgres", "postgresql", "postgresql+psycopg"}:
             raise ValueError
         if {key for key, _item in value.query_params()} & {
@@ -81,7 +92,7 @@ def _database_url(name: str) -> str:
             for host in value.hosts()
         ):
             raise ValueError
-    except (ValidationError, ValueError):
+    except (OSError, ValidationError, ValueError):
         raise RuntimeError("invalid_github_ingress_configuration") from None
     return str(value)
 
@@ -99,17 +110,16 @@ def _bounded_integer(name: str, default: str, *, minimum: int, maximum: int) -> 
 def _read_credential(directory: Path, name: str) -> str:
     path = directory / name
     try:
-        data = path.read_bytes()
-        value = data.decode("utf-8")
-    except (OSError, UnicodeDecodeError):
+        return read_protected_text(
+            path,
+            minimum_bytes=1,
+            maximum_bytes=4096,
+            required_owner_uid=os.geteuid(),
+        )
+    except OSError:
         raise RuntimeError("github_ingress_credential_unavailable") from None
-    if (
-        not 1 <= len(data) <= 4096
-        or value != value.strip()
-        or any(character in value for character in "\r\n\x00")
-    ):
-        raise RuntimeError("github_ingress_credential_invalid")
-    return value
+    except ValueError:
+        raise RuntimeError("github_ingress_credential_invalid") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,8 +203,12 @@ class GitHubIngressSettings:
             branch_name=_required("KIVRA_MEMORY_GITHUB_BRANCH"),
         )
         return cls(
-            ingress_database_url=_database_url("KIVRA_MEMORY_GITHUB_INGRESS_DATABASE_URL"),
-            command_database_url=_database_url("KIVRA_MEMORY_GITHUB_COMMAND_DATABASE_URL"),
+            ingress_database_url=_database_url(
+                "KIVRA_MEMORY_GITHUB_INGRESS_DATABASE_URL", "ingress-database-url"
+            ),
+            command_database_url=_database_url(
+                "KIVRA_MEMORY_GITHUB_COMMAND_DATABASE_URL", "command-database-url"
+            ),
             identity=identity,
             repository_owner=_required("KIVRA_MEMORY_GITHUB_REPOSITORY_OWNER"),
             repository_name=_required("KIVRA_MEMORY_GITHUB_REPOSITORY_NAME"),
@@ -356,53 +370,62 @@ class GitHubIngressPollLoop:
         return known
 
     async def poll_once(self) -> int:
-        checkpoint = await self._provider_head()
-        known = await self._known_objects()
-        snapshot = await asyncio.to_thread(
-            self._poller.poll,
-            checkpoint.etag,
-            trusted_commit_id=checkpoint.last_verified_commit_id,
-            trusted_tree_id=checkpoint.last_verified_tree_id,
-            known_objects=known,
-        )
-        if snapshot.unchanged:
-            return 0
-        discovered_at = datetime.now(UTC)
-        items = tuple(
-            work_item_from_proposal(
-                proposal,
-                identity=self._settings.identity,
-                discovered_at=discovered_at,
+        identity = self._settings.identity
+        # Keep this share lock through provider fetch, validation, canonical
+        # selection, receipts, and checkpoint advancement. A local revocation
+        # update therefore cannot commit until this poll is finished; once it
+        # commits, no later poll can pass this guard.
+        async with self._ingress_database.tenant_session(identity.tenant_id) as guard_session:
+            await require_active_github_installation(
+                guard_session,
+                tenant_id=identity.tenant_id,
+                installation_id=identity.installation_id,
             )
-            for proposal in snapshot.proposals
-        )
-        results = await self._worker.process_batch(items)
-        terminal_states = {
-            IngressState.ACCEPTED,
-            IngressState.DUPLICATE,
-            IngressState.CONFLICT,
-            IngressState.REJECTED,
-            IngressState.QUARANTINED,
-        }
-        if all(
-            result.disposition in {"terminal", "unchanged"} and result.state in terminal_states
-            for result in results
-        ):
-            if snapshot.commit_id is None or snapshot.tree_id is None:
-                raise RuntimeError("github_ingress_snapshot_invalid")
-            async with self._ingress_database.tenant_session(
-                self._settings.identity.tenant_id
-            ) as session:
-                await self._head_repository.advance(
-                    session,
-                    self._provider_identity,
-                    expected_commit_id=checkpoint.last_verified_commit_id,
-                    expected_tree_id=checkpoint.last_verified_tree_id,
-                    commit_id=snapshot.commit_id,
-                    tree_id=snapshot.tree_id,
-                    etag=snapshot.next_etag,
+            checkpoint = await self._provider_head()
+            known = await self._known_objects()
+            snapshot = await asyncio.to_thread(
+                self._poller.poll,
+                checkpoint.etag,
+                trusted_commit_id=checkpoint.last_verified_commit_id,
+                trusted_tree_id=checkpoint.last_verified_tree_id,
+                known_objects=known,
+            )
+            if snapshot.unchanged:
+                return 0
+            discovered_at = datetime.now(UTC)
+            items = tuple(
+                work_item_from_proposal(
+                    proposal,
+                    identity=identity,
+                    discovered_at=discovered_at,
                 )
-        return len(results)
+                for proposal in snapshot.proposals
+            )
+            results = await self._worker.process_batch(items)
+            terminal_states = {
+                IngressState.ACCEPTED,
+                IngressState.DUPLICATE,
+                IngressState.CONFLICT,
+                IngressState.REJECTED,
+                IngressState.QUARANTINED,
+            }
+            if all(
+                result.disposition in {"terminal", "unchanged"} and result.state in terminal_states
+                for result in results
+            ):
+                if snapshot.commit_id is None or snapshot.tree_id is None:
+                    raise RuntimeError("github_ingress_snapshot_invalid")
+                async with self._ingress_database.tenant_session(identity.tenant_id) as session:
+                    await self._head_repository.advance(
+                        session,
+                        self._provider_identity,
+                        expected_commit_id=checkpoint.last_verified_commit_id,
+                        expected_tree_id=checkpoint.last_verified_tree_id,
+                        commit_id=snapshot.commit_id,
+                        tree_id=snapshot.tree_id,
+                        etag=snapshot.next_etag,
+                    )
+            return len(results)
 
     async def close(self) -> None:
         await self._ingress_database.dispose()
@@ -415,13 +438,49 @@ async def run_ingress(settings: GitHubIngressSettings) -> None:
     loop = asyncio.get_running_loop()
     for selected_signal in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(selected_signal, stop.set)
+    provider_failures = 0
     try:
         while not stop.is_set():
-            await worker.poll_once()
+            try:
+                await worker.poll_once()
+            except GitHubProposalError as error:
+                if error.category == "integrity_failed":
+                    raise
+                provider_failures += 1
+                if error.category == "auth_failure":
+                    REGISTRY["kivra_memory_github_events_total"].inc(category="auth_failure")
+                print(_provider_failure_alert(error.category), file=sys.stderr)
+                delay = _provider_backoff_seconds(
+                    settings.poll_interval_seconds,
+                    provider_failures,
+                )
+            else:
+                provider_failures = 0
+                REGISTRY["kivra_memory_github_events_total"].inc(category="poll_success")
+                delay = settings.poll_interval_seconds
             with suppress(TimeoutError):
-                await asyncio.wait_for(stop.wait(), timeout=settings.poll_interval_seconds)
+                await asyncio.wait_for(stop.wait(), timeout=delay)
     finally:
         await worker.close()
+
+
+def _provider_backoff_seconds(poll_interval_seconds: int, failures: int) -> int:
+    if failures < 1:
+        raise ValueError("provider failure count must be positive")
+    multiplier = 1 << min(failures - 1, 5)
+    return min(max(30, poll_interval_seconds) * multiplier, 900)
+
+
+def _provider_failure_alert(category: str) -> str:
+    alerts = {
+        "auth_failure": "ScaleVault GitHub ingress provider authentication failed",
+        "rate_limited": "ScaleVault GitHub ingress provider rate limit is active",
+        "provider_unavailable": "ScaleVault GitHub ingress provider is unavailable",
+    }
+    try:
+        return alerts[category]
+    except KeyError:
+        raise ValueError("invalid GitHub provider error category") from None
 
 
 def main() -> None:
@@ -440,6 +499,8 @@ __all__ = [
     "GitHubIngressSettings",
     "PinnedGitHubNominationResolver",
     "PinnedPromotionPrincipalProvider",
+    "_provider_backoff_seconds",
+    "_provider_failure_alert",
     "main",
     "run_ingress",
 ]

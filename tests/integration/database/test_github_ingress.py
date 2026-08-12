@@ -22,9 +22,15 @@ from kivra_memory.storage.github_ingress import (
     GitHubIngressRepository,
     IngressRegistration,
 )
-from kivra_memory.storage.models import IngressItem, IngressProviderHead, IngressProviderViolation
+from kivra_memory.storage.github_revocation import GitHubInstallationRevoked
+from kivra_memory.storage.models import (
+    IngressItem,
+    IngressProviderHead,
+    IngressProviderViolation,
+    TransportInstallation,
+)
 from kivra_memory.storage.transactions import run_serializable_transaction
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,6 +69,47 @@ async def _seed(database: Database) -> None:
         for layer in seed_model_layers():
             session.add_all(layer)
             await session.flush()
+
+
+async def _revoke_installation(database: Database, installation_id: UUID) -> None:
+    tenant_id = _id("tenants", "tenant_id")
+    async with database.tenant_session(tenant_id) as session:
+        await session.execute(
+            update(TransportInstallation)
+            .where(
+                TransportInstallation.tenant_id == tenant_id,
+                TransportInstallation.installation_id == installation_id,
+            )
+            .values(revoked_at=_NOW)
+        )
+
+
+async def test_local_revocation_fences_registration_and_provider_checkpoint(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+) -> None:
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    ingress = GitHubIngressRepository()
+    heads = GitHubProviderHeadRepository()
+    discovery = _discovery()
+    identity = _provider_identity()
+    await _seed(database)
+    await _revoke_installation(database, discovery.installation_id)
+
+    try:
+        with pytest.raises(GitHubInstallationRevoked, match="github_installation_revoked"):
+            async with database.tenant_session(discovery.tenant_id) as session:
+                await ingress.register(session, discovery)
+        with pytest.raises(GitHubInstallationRevoked, match="github_installation_revoked"):
+            async with database.tenant_session(identity.tenant_id) as session:
+                await heads.load_or_create(session, identity)
+
+        async with database.tenant_session(discovery.tenant_id) as session:
+            assert await session.scalar(select(IngressItem.ingress_id)) is None
+            assert await session.scalar(select(IngressProviderHead.tenant_id)) is None
+    finally:
+        await database.dispose()
 
 
 def _provider_identity() -> GitHubProviderIdentity:

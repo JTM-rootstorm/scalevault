@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +42,7 @@ from kivra_memory.runtime.nomination import (
     DirectNominationResolver,
     PinnedCandidatePromotionPrincipalProvider,
 )
+from kivra_memory.security.credential_files import read_protected_file
 from kivra_memory.storage.credentials import CredentialRepository
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.retrieval import RetrievalRepository
@@ -189,33 +189,12 @@ def _candidate_promotion_provider(
 
 
 def _read_client_token_pepper(path: Path, *, required_owner_uid: int | None) -> bytes:
-    credential = Path(path)
-    if (
-        not credential.is_absolute()
-        or ".." in credential.parts
-        or credential.resolve(strict=True) != credential
-    ):
-        raise ValueError
-    descriptor = os.open(credential, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-    try:
-        metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_nlink != 1
-            or metadata.st_mode & 0o077
-            or (required_owner_uid is not None and metadata.st_uid != required_owner_uid)
-            or not 32 <= metadata.st_size <= 128
-        ):
-            raise ValueError
-        with os.fdopen(descriptor, "rb", closefd=True) as handle:
-            descriptor = -1
-            secret = handle.read(129)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-    if len(secret) != metadata.st_size or not 32 <= len(secret) <= 128:
-        raise ValueError
-    return secret
+    return read_protected_file(
+        path,
+        minimum_bytes=32,
+        maximum_bytes=128,
+        required_owner_uid=required_owner_uid,
+    )
 
 
 __all__ = ["MemoryNodeRuntime", "RuntimeReadQuery", "RuntimeReadResponse"]

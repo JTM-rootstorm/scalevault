@@ -106,10 +106,11 @@ def test_fetch_returns_exact_verified_bytes() -> None:
 def test_fetch_rejects_repository_pin_mismatch(repository: dict[str, object]) -> None:
     transport = StubTransport([_response(repository)])
 
-    with pytest.raises(GitHubProposalError, match="did not match the pin"):
+    with pytest.raises(GitHubProposalError, match="did not match the pin") as caught:
         _client(transport).fetch(PROPOSAL_PATH)
 
     assert len(transport.calls) == 1
+    assert caught.value.category == "integrity_failed"
 
 
 @pytest.mark.parametrize(
@@ -170,6 +171,31 @@ def test_fetch_does_not_include_token_or_content_in_errors() -> None:
 
     assert TOKEN not in str(caught.value)
     assert secret_content not in str(caught.value)
+    assert caught.value.category == "auth_failure"
+
+
+@pytest.mark.parametrize(
+    ("status", "headers", "category"),
+    (
+        (401, {}, "auth_failure"),
+        (403, {}, "auth_failure"),
+        (403, {"X-RateLimit-Remaining": "0"}, "rate_limited"),
+        (429, {}, "rate_limited"),
+    ),
+)
+def test_provider_auth_and_rate_failures_are_content_free_and_classified(
+    status: int, headers: dict[str, str], category: str
+) -> None:
+    canary = "provider response body canary"
+    transport = StubTransport(
+        [GitHubResponse(status=status, headers=headers, body=canary.encode())]
+    )
+
+    with pytest.raises(GitHubProposalError) as caught:
+        _client(transport).verify_repository()
+
+    assert caught.value.category == category
+    assert canary not in str(caught.value)
 
 
 def test_fetch_sanitizes_transport_exceptions() -> None:
@@ -188,4 +214,5 @@ def test_fetch_sanitizes_transport_exceptions() -> None:
         client.fetch(PROPOSAL_PATH)
 
     assert caught.value.__cause__ is None
+    assert caught.value.category == "provider_unavailable"
     assert TOKEN not in str(caught.value)

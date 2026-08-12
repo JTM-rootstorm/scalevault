@@ -61,6 +61,10 @@ Create these files locally and never add their completed values to Git:
    tenant. Its service actor and worker client must be active, the client scope
    must be exactly `memory.lifecycle.promote`, and the binding must authorize
    only `candidate_promoted`.
+   The database URL is not an environment setting. Install the canonical API
+   role's protected local URL at
+   `/etc/kivra-memory/memory-api-database-url` for the unit's `database-url`
+   systemd credential.
 2. Install the existing direct-bearer pepper as
    `/etc/kivra-memory/client-token-pepper`, `root:root` mode `0600`. The unit
    exposes it only at

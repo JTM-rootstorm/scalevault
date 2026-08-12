@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 UNIT = ROOT / "deploy/memory-node/systemd/kivra-memory-tunnel.service"
 PREFLIGHT = ROOT / "deploy/memory-node/tunnel/kivra-memory-tunnel-preflight"
@@ -150,6 +152,18 @@ def test_preflight_rejects_group_readable_control_plane_credential(tmp_path: Pat
     assert "must not grant group or other permissions" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "control_plane",
+    ["short", "valid-prefix\x00suffix", "valid-prefix\tsuffix", "valid-prefix\nsuffix"],
+)
+def test_preflight_rejects_invalid_control_plane_text(tmp_path: Path, control_plane: str) -> None:
+    result = _run_preflight(tmp_path, control_plane=control_plane)
+
+    assert result.returncode != 0
+    assert "control-plane credential" in result.stderr
+    assert control_plane not in result.stderr
+
+
 def test_mcp_probe_keeps_authorization_out_of_argv_and_output(tmp_path: Path) -> None:
     result, arguments, config = _run_mcp_probe(tmp_path)
 
@@ -213,6 +227,7 @@ def _run_preflight(
     hard_link_authorization: bool = False,
     control_plane_mode: int = 0o600,
     hard_link_control_plane: bool = False,
+    control_plane: str = "sk-test-control-plane-credential",
 ) -> subprocess.CompletedProcess[str]:
     tunnel_client = tmp_path / "tunnel-client"
     flags = "--mcp.extra-headers --mcp.discovery-extra-headers" if include_header_flags else ""
@@ -228,11 +243,11 @@ def _run_preflight(
         encoding="utf-8",
     )
     tunnel_client.chmod(0o755)
-    control_plane = tmp_path / "control-plane-api-key"
-    control_plane.write_text("sk-test-control-plane-credential\n", encoding="utf-8")
-    control_plane.chmod(control_plane_mode)
+    control_plane_path = tmp_path / "control-plane-api-key"
+    control_plane_path.write_text(control_plane + "\n", encoding="utf-8")
+    control_plane_path.chmod(control_plane_mode)
     if hard_link_control_plane:
-        os.link(control_plane, tmp_path / "control-plane-api-key-linked")
+        os.link(control_plane_path, tmp_path / "control-plane-api-key-linked")
     chatgpt_authorization = tmp_path / "chatgpt-mcp-authorization"
     chatgpt_authorization.write_text(authorization + "\n", encoding="utf-8")
     chatgpt_authorization.chmod(authorization_mode)
@@ -245,7 +260,7 @@ def _run_preflight(
         [
             str(PREFLIGHT),
             str(tunnel_client),
-            str(control_plane),
+            str(control_plane_path),
             str(chatgpt_authorization),
         ],
         check=False,

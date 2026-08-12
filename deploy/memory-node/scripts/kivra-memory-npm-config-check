@@ -1,0 +1,117 @@
+#!/bin/sh
+
+set -eu
+
+fail() {
+    printf '%s\n' "NPM configuration check failed: $1" >&2
+    exit 1
+}
+
+[ "$#" -eq 1 ] || fail "expected one protected nginx configuration path"
+configuration=$1
+[ -f "$configuration" ] || fail "configuration is not a regular file"
+[ ! -L "$configuration" ] || fail "configuration must not be a symbolic link"
+[ -r "$configuration" ] || fail "configuration is not readable"
+
+links=$(stat -c '%h' -- "$configuration") || fail "configuration metadata is unavailable"
+[ "$links" -eq 1 ] || fail "configuration must have exactly one hard link"
+mode=$(stat -c '%a' -- "$configuration") || fail "configuration metadata is unavailable"
+case "$mode" in
+    [0-7]00) ;;
+    *) fail "configuration must not grant group or other permissions" ;;
+esac
+owner=$(stat -c '%u' -- "$configuration") || fail "configuration metadata is unavailable"
+[ "$owner" -eq "$(id -u)" ] || fail "configuration owner does not match the checker"
+
+# Inspect only the one server containing the fixed private port-8443 upstream.
+# Other NPM hosts may legitimately have unrelated policy. Global address-
+# rewriting interactions remain an explicit manual review gate.
+if awk '
+function reset_counts() {
+    location_count = real_unix = recursive_off = upstream = 0
+    request_headers_off = retry_off = redirect_off = access_off = 0
+    block_exploits = basic_auth = proxy_ssl = broad_trust = 0
+    authorization_clear = force_redirect = 0
+}
+function evaluate_target() {
+    if (upstream == 0) return
+    targets++
+    if (failure == 0 && location_count != 1) failure = 11
+    if (failure == 0 && real_unix != 1) failure = 12
+    if (failure == 0 && recursive_off != 1) failure = 13
+    if (failure == 0 && upstream != 1) failure = 14
+    if (failure == 0 && request_headers_off != 1) failure = 15
+    if (failure == 0 && retry_off != 1) failure = 16
+    if (failure == 0 && redirect_off != 1) failure = 17
+    if (failure == 0 && access_off < 2) failure = 18
+    if (failure == 0 && block_exploits != 0) failure = 19
+    if (failure == 0 && basic_auth != 0) failure = 20
+    if (failure == 0 && proxy_ssl != 0) failure = 21
+    if (failure == 0 && broad_trust != 0) failure = 22
+    if (failure == 0 && authorization_clear != 0) failure = 23
+    if (failure == 0 && force_redirect != 0) failure = 24
+}
+function brace_delta(value, opened, closed, copy) {
+    copy = value
+    opened = gsub(/\{/, "", copy)
+    copy = value
+    closed = gsub(/\}/, "", copy)
+    return opened - closed
+}
+/^[[:space:]]*server[[:space:]]*\{/ && !inside_server {
+    inside_server = 1
+    depth = brace_delta($0)
+    reset_counts()
+}
+inside_server {
+    if ($0 ~ /^[[:space:]]*location \/mcp([[:space:]]|\{)/) location_count++
+    if ($0 ~ /^[[:space:]]*set_real_ip_from unix:;/) real_unix++
+    if ($0 ~ /^[[:space:]]*real_ip_recursive off;/) recursive_off++
+    if ($0 ~ /^[[:space:]]*proxy_pass http:\/\/[^;]*:8443(\/mcp)?;/) upstream++
+    if ($0 ~ /^[[:space:]]*proxy_pass_request_headers off;/) request_headers_off++
+    if ($0 ~ /^[[:space:]]*proxy_next_upstream off;/) retry_off++
+    if ($0 ~ /^[[:space:]]*proxy_redirect off;/) redirect_off++
+    if ($0 ~ /^[[:space:]]*access_log off;/) access_off++
+    if ($0 ~ /block-exploits\.conf/) block_exploits++
+    if ($0 ~ /^[[:space:]]*auth_basic([[:space:]]|;)/) basic_auth++
+    if ($0 ~ /^[[:space:]]*proxy_ssl_/) proxy_ssl++
+    if ($0 ~ /^[[:space:]]*set_real_ip_from (10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/) broad_trust++
+    if ($0 ~ /^[[:space:]]*proxy_set_header Authorization[[:space:]]+"";/) authorization_clear++
+    if ($0 ~ /^[[:space:]]*return 30(1|2|7|8)[[:space:]]/) force_redirect++
+    if ($0 !~ /^[[:space:]]*server[[:space:]]*\{/) depth += brace_delta($0)
+    if (depth == 0) {
+        evaluate_target()
+        inside_server = 0
+    }
+}
+END {
+    if (targets != 1) exit 10
+    exit failure
+}
+' "$configuration"; then
+    result=0
+else
+    result=$?
+fi
+
+case "$result" in
+    0) ;;
+    10) fail "expected exactly one server with a private HTTP port-8443 upstream" ;;
+    11) fail "expected exactly one /mcp location" ;;
+    12) fail "expected exactly one local real-IP trust replacement" ;;
+    13) fail "expected exactly one non-recursive real-IP policy" ;;
+    14) fail "expected exactly one private HTTP port-8443 upstream" ;;
+    15) fail "expected one request-header reset" ;;
+    16) fail "expected one no-retry policy" ;;
+    17) fail "expected one no-redirect policy" ;;
+    18) fail "owned application locations must disable access logging" ;;
+    19) fail "Block Common Exploits include is forbidden" ;;
+    20) fail "Basic authentication is forbidden" ;;
+    21) fail "backend TLS directives are forbidden" ;;
+    22) fail "broad RFC1918 real-IP trust is forbidden in the ScaleVault server" ;;
+    23) fail "the ScaleVault server must not clear Authorization" ;;
+    24) fail "Force SSL redirects are forbidden" ;;
+    *) fail "configuration scan failed" ;;
+esac
+
+printf '%s\n' "NPM configuration contract satisfied"

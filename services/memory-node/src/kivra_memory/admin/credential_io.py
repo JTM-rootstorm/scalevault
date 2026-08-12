@@ -22,6 +22,7 @@ from kivra_memory.admin.credentials import (
 )
 from kivra_memory.auth import BearerTokenCodec
 from kivra_memory.domain.canonical_json import parse_json_strict
+from kivra_memory.security.credential_files import read_protected_file
 
 DEFAULT_ADMIN_CONFIG_PATH: Final = Path("/etc/kivra-memory/credential-admin.json")
 _CONFIG_MAXIMUM_BYTES: Final = 8_192
@@ -213,27 +214,13 @@ def load_or_create_authorization(path: Path, proposed: str) -> str:
 
 
 def _read_protected_file(path: Path, *, minimum_bytes: int, maximum_bytes: int) -> bytes:
-    selected = Path(path)
-    if not selected.is_absolute() or ".." in selected.parts:
-        raise ValueError
-    path_lstat = selected.lstat()
-    if stat.S_ISLNK(path_lstat.st_mode) or selected.resolve(strict=True) != selected:
-        raise ValueError
-    descriptor = os.open(selected, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-    with os.fdopen(descriptor, "rb", closefd=True) as handle:
-        file_stat = os.fstat(handle.fileno())
-        if (
-            not stat.S_ISREG(file_stat.st_mode)
-            or stat.S_IMODE(file_stat.st_mode) != 0o600
-            or file_stat.st_uid != os.geteuid()
-            or file_stat.st_nlink != 1
-            or not minimum_bytes <= file_stat.st_size <= maximum_bytes
-        ):
-            raise ValueError
-        raw = handle.read(maximum_bytes + 1)
-    if len(raw) != file_stat.st_size or len(raw) > maximum_bytes:
-        raise ValueError
-    return raw
+    return read_protected_file(
+        path,
+        minimum_bytes=minimum_bytes,
+        maximum_bytes=maximum_bytes,
+        required_owner_uid=os.geteuid(),
+        allowed_modes=frozenset({0o600}),
+    )
 
 
 def _absolute_path(value: object) -> Path:

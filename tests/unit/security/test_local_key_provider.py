@@ -58,6 +58,9 @@ def _key_root(tmp_path: Path) -> tuple[Path, Path, Path]:
     material = root / MATERIAL_DIRECTORY_NAME
     material.mkdir(mode=0o770)
     material.chmod(0o2770)
+    ledger = root.parent / "destruction-ledger"
+    ledger.mkdir(mode=0o770)
+    ledger.chmod(0o2770)
     return root, control, material
 
 
@@ -746,6 +749,9 @@ def test_root_must_be_absolute_setgid_layout_without_symlink(tmp_path: Path) -> 
     material = root / MATERIAL_DIRECTORY_NAME
     material.mkdir(mode=0o770)
     material.chmod(0o2770)
+    ledger = root.parent / "destruction-ledger"
+    ledger.mkdir(mode=0o770)
+    ledger.chmod(0o2770)
     link = tmp_path / "key-link"
     link.symlink_to(root, target_is_directory=True)
     with pytest.raises(KeyProviderError):

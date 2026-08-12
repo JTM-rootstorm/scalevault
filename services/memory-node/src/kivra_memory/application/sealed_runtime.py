@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import stat
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +30,7 @@ from kivra_memory.application.selection import (
     SelectionEngine,
 )
 from kivra_memory.config import Settings
+from kivra_memory.security.credential_files import read_protected_file
 from kivra_memory.security.keys import KeyProvider
 from kivra_memory.security.local_key_provider import LocalDirectoryKeyProvider
 from kivra_memory.storage.selection_history import SelectionHistoryRepository
@@ -52,12 +52,14 @@ class SealedRuntime:
         if not settings.sealed_content_enabled:
             return cls(key_provider=None, digest_binder=None)
         root = settings.sealed_key_provider_root
+        ledger_root = settings.sealed_destruction_ledger_root
         credential = settings.sealed_digest_binding_credential
-        if root is None or credential is None:
+        if root is None or ledger_root is None or credential is None:
             raise RuntimeError("invalid_sealed_content_configuration")
         try:
             provider = LocalDirectoryKeyProvider(
                 root,
+                destruction_ledger_root=ledger_root,
                 required_owner_uid=0 if settings.environment == "production" else None,
             )
             digest_binder = HmacSha256SealedDigestBinder(
@@ -116,28 +118,12 @@ class SealedRuntime:
 
 
 def _read_digest_binding_secret(path: Path, *, required_owner_uid: int | None) -> bytes:
-    credential = Path(path)
-    if (
-        not credential.is_absolute()
-        or ".." in credential.parts
-        or credential.resolve(strict=True) != credential
-    ):
-        raise ValueError
-    descriptor = os.open(credential, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-    with os.fdopen(descriptor, "rb", closefd=True) as handle:
-        metadata = os.fstat(handle.fileno())
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_nlink != 1
-            or metadata.st_mode & 0o077
-            or (required_owner_uid is not None and metadata.st_uid != required_owner_uid)
-            or not 32 <= metadata.st_size <= 128
-        ):
-            raise ValueError
-        secret = handle.read(129)
-    if len(secret) != metadata.st_size or not 32 <= len(secret) <= 128:
-        raise ValueError
-    return secret
+    return read_protected_file(
+        path,
+        minimum_bytes=32,
+        maximum_bytes=128,
+        required_owner_uid=required_owner_uid,
+    )
 
 
 __all__ = ["SealedRuntime"]

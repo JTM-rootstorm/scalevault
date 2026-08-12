@@ -4,28 +4,46 @@ After=postgresql@17-main.service
 Requires=postgresql@17-main.service
 ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys/control
 ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys/material
+ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/destruction-ledger
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=memory-purge
 Group=memory-purge
-SupplementaryGroups=kivra-memory kivra-sealed
+SupplementaryGroups=kivra-memory kivra-sealed kivra-destruction-ledger
 WorkingDirectory=/opt/kivra-memory/app
 Environment=KIVRA_MEMORY_ENVIRONMENT=production
 EnvironmentFile=/etc/kivra-memory/memory-sealed-worker.env
+LoadCredential=database-url:/etc/kivra-memory/memory-sealed-worker-database-url
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
 ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-sealed-worker
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=30s
 UMask=0007
+LimitCORE=0
 NoNewPrivileges=true
 PrivateDevices=true
 PrivateTmp=true
+PrivateMounts=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=true
 RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+KeyringMode=private
+SystemCallArchitectures=native
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
@@ -34,6 +52,7 @@ IPAddressAllow=localhost
 CapabilityBoundingSet=
 ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control
 ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material
+ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger
 
 [Install]
 WantedBy=multi-user.target

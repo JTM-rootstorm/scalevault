@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import shutil
 from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import UUID
 
@@ -16,11 +18,16 @@ from kivra_memory.application import (
     CandidateLifecycleEngine,
     CandidateLifecycleExecutionError,
     CommandPrincipal,
+    MutationEngine,
     ResolvedNominationContext,
     SelectionEngine,
     SelectionExecutionError,
 )
-from kivra_memory.domain.commands import CandidateExpiryCommand
+from kivra_memory.application.sealed_content import (
+    HmacSha256SealedDigestBinder,
+    SealedContentRequest,
+)
+from kivra_memory.domain.commands import CandidateExpiryCommand, ForgetCommand, MutationResult
 from kivra_memory.domain.enums import (
     AuthorityClass,
     EventOperation,
@@ -40,22 +47,32 @@ from kivra_memory.policy import (
     NominationProposal,
     SelectionBasis,
 )
+from kivra_memory.security.destruction_ledger import LocalDestructionLedger
+from kivra_memory.security.keys import ContentKeyReference, KeyProviderError
+from kivra_memory.security.local_key_provider import (
+    CONTROL_DIRECTORY_NAME,
+    MATERIAL_DIRECTORY_NAME,
+    LocalDirectoryKeyProvider,
+)
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import (
     Actor,
     Client,
     CommandReceipt,
     Memory,
+    MemoryContentKey,
     MemoryEvent,
     MemoryEvidence,
     OutboxJob,
     SelectionDecision,
     TransportBinding,
 )
+from kivra_memory.storage.outbox_worker import claim_outbox_jobs
 from kivra_memory.storage.selection_history import (
     SelectionHistoryFilters,
     SelectionHistoryRepository,
 )
+from kivra_memory.workers.sealed_content import handle_purge_payload_job
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -530,3 +547,147 @@ async def test_lifecycle_rejects_direct_relay_and_cross_tenant_principals(
 
 async def _return(value: Any) -> Any:
     return value
+
+
+def _sealed_provider_layout(tmp_path: Path) -> tuple[Path, Path]:
+    provider_root = tmp_path / "keys"
+    provider_root.mkdir(mode=0o710)
+    provider_root.chmod(0o2710)
+    for name in (CONTROL_DIRECTORY_NAME, MATERIAL_DIRECTORY_NAME):
+        directory = provider_root / name
+        directory.mkdir(mode=0o770)
+        directory.chmod(0o2770)
+    ledger_root = tmp_path / "destruction-ledger"
+    ledger_root.mkdir(mode=0o770)
+    ledger_root.chmod(0o2770)
+    return provider_root, ledger_root
+
+
+async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_dek(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: object,
+    tmp_path: Path,
+) -> None:
+    """Exercise PostgreSQL lifecycle, real purge, and backup-dominating ledger."""
+
+    _ = migrated_database
+    principal = _principal()
+    canary = "synthetic-private-canary-never-in-plaintext-columns"
+    proposal = _proposal(
+        statement=canary,
+        basis=SelectionBasis.EXPLICIT_USER_CORRECTION,
+        category=MemoryCategory.STABLE_FACT,
+        ontology=OntologicalStatus.LITERAL_TECHNICAL_FACT,
+    ).model_copy(update={"sensitivity": 4})
+    command = _command("sealed-hard-forget-backup-recovery", proposal).model_copy(
+        update={
+            "sealed_content": SealedContentRequest(
+                safe_summary="A reviewed synthetic private record."
+            )
+        }
+    )
+    provider_root, ledger_root = _sealed_provider_layout(tmp_path / "live")
+    provider = LocalDirectoryKeyProvider(
+        provider_root,
+        destruction_ledger_root=ledger_root,
+    )
+
+    async with _seeded_database(postgresql_server.database_url) as database:
+        factory = async_sessionmaker(database.engine, expire_on_commit=False)
+        selection = SelectionEngine(
+            factory,
+            lambda *_: _return(_active_context()),
+            key_provider=provider,
+            sealed_digest_binder=HmacSha256SealedDigestBinder(b"b" * 32),
+        )
+        selected = await selection.execute(principal, command)
+        assert selected.outcome == "active"
+        assert selected.memory_id is not None
+
+        async with database.tenant_session(principal.tenant_id) as session:
+            row = await session.get(Memory, selected.memory_id)
+            assert row is not None
+            assert row.statement is None
+            assert row.reason_to_remember is None
+            assert row.content_key_id is not None
+            content_key_id = row.content_key_id
+            key_row = await session.get(MemoryContentKey, content_key_id)
+            assert key_row is not None
+            provider_reference = (
+                key_row.provider_name,
+                key_row.provider_key_reference,
+            )
+            event_payloads = (await session.scalars(select(MemoryEvent.payload))).all()
+            assert canary not in str(event_payloads)
+
+        backup_root = tmp_path / "pre-forget-backup" / "keys"
+        backup_root.parent.mkdir()
+        shutil.copytree(provider_root, backup_root)
+
+        mutation = MutationEngine(factory)
+        forgotten = await mutation.execute(
+            principal,
+            ForgetCommand(
+                contract_version="mcp-mutation-v1",
+                idempotency_key="sealed-hard-forget-backup-recovery:forget",
+                logical_session_id=None,
+                persona_id=_seed_identifier("personas", "persona_id"),
+                branch_id=_seed_identifier("branches", "branch_id"),
+                reason="Exercise real sealed hard forget and backup recovery.",
+                memory_id=selected.memory_id,
+                expected_revision=1,
+                mode="hard",
+                confirmation="confirm_hard_forget",
+            ),
+        )
+        assert isinstance(forgotten, MutationResult)
+        assert forgotten.forget_state == "purge_pending"
+
+        purge_principal = principal.model_copy(
+            update={"scopes": frozenset({"memory.lifecycle.purge"})}
+        )
+        async with database.tenant_session(principal.tenant_id) as session:
+            jobs = await claim_outbox_jobs(
+                session,
+                tenant_id=principal.tenant_id,
+                worker_owner="sealed-backup-acceptance",
+                job_types=("purge_payload",),
+            )
+            assert len(jobs) == 1
+            purged = await handle_purge_payload_job(
+                session,
+                job=jobs[0],
+                principal=purge_principal,
+                key_destroyer=provider,
+            )
+            assert purged.outcome == "purged"
+
+        async with database.tenant_session(principal.tenant_id) as session:
+            row = await session.get(Memory, selected.memory_id)
+            key_row = await session.get(MemoryContentKey, content_key_id)
+            assert row is not None and row.content_protection == "cryptographically_erased"
+            assert key_row is not None and key_row.state == "destroyed"
+            assert key_row.destruction_receipt_sha256 is not None
+            event_payloads = (await session.scalars(select(MemoryEvent.payload))).all()
+            assert canary not in str(event_payloads)
+
+        restored_root = tmp_path / "restore" / "keys"
+        restored_root.parent.mkdir()
+        shutil.copytree(backup_root, restored_root)
+        stale_material = restored_root / MATERIAL_DIRECTORY_NAME / f"key-{content_key_id}.bin"
+        assert stale_material.is_file()
+        ledger = LocalDestructionLedger(ledger_root)
+        current_anchor = ledger.anchor()
+        ledger.require_anchor(current_anchor)
+        restored = LocalDirectoryKeyProvider(
+            restored_root,
+            destruction_ledger_root=ledger_root,
+        )
+        assert not stale_material.exists()
+        restored_reference = ContentKeyReference(
+            content_key_id=content_key_id,
+            provider_name=provider_reference[0],
+            provider_key_reference=provider_reference[1],
+        )
+        with pytest.raises(KeyProviderError):
+            await restored.get_key(restored_reference)

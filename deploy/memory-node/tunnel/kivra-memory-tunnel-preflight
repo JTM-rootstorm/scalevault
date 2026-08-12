@@ -65,12 +65,27 @@ for credential_path in "$control_plane_credential" "$chatgpt_authorization_crede
         [0-7]00) ;;
         *) fail "a required credential must not grant group or other permissions" ;;
     esac
+    credential_owner=$(stat -c '%u' -- "$credential_path") \
+        || fail "could not inspect a required credential"
+    [ "$credential_owner" -eq "$(id -u)" ] \
+        || fail "a required credential must be owned by the service user"
 done
 
 control_plane_size=$(wc -c < "$control_plane_credential") \
     || fail "could not inspect the control-plane credential"
 if [ "$control_plane_size" -lt 16 ] || [ "$control_plane_size" -gt 4096 ]; then
     fail "the control-plane credential has an invalid size"
+fi
+control_plane_value=$(sed -n '1p' "$control_plane_credential") \
+    || fail "could not inspect the control-plane credential"
+control_plane_lines=$(wc -l < "$control_plane_credential") \
+    || fail "could not inspect the control-plane credential"
+control_plane_length=${#control_plane_value}
+if [ "$control_plane_lines" -gt 1 ] \
+    || { [ "$control_plane_size" -ne "$control_plane_length" ] \
+        && [ "$control_plane_size" -ne $((control_plane_length + 1)) ]; } \
+    || LC_ALL=C grep -q '[^!-~]' "$control_plane_credential"; then
+    fail "the control-plane credential must contain one printable value"
 fi
 
 authorization=$(sed -n '1p' "$chatgpt_authorization_credential") \
