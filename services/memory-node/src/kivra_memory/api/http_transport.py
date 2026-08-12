@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 from mcp.server.transport_security import TransportSecuritySettings
-from prometheus_client import Counter
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from kivra_memory.observability.metrics import REGISTRY
 
 MAX_MCP_REQUEST_BODY_BYTES = 1024 * 1024
 MAX_MCP_HEADER_COUNT = 64
 MAX_MCP_HEADER_BYTES = 16 * 1024
 
-MCP_HTTP_BOUNDARY_REJECTIONS = Counter(
-    "kivra_memory_mcp_http_boundary_rejections_total",
-    "MCP requests rejected before protocol parsing.",
-    labelnames=("reason",),
-)
+MCP_HTTP_BOUNDARY_REJECTIONS = REGISTRY["kivra_memory_mcp_http_boundary_rejections_total"]
 
 _SINGLETON_HEADERS = frozenset(
     {

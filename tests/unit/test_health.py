@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from kivra_memory.api.app import create_app, main
 from kivra_memory.config import Settings, get_settings
+from kivra_memory.observability.metrics import REGISTRY
 from kivra_memory.runtime import MemoryNodeRuntime
 from kivra_memory.storage.readiness import (
     EXPECTED_ALEMBIC_HEAD,
@@ -17,6 +18,7 @@ from kivra_memory.storage.readiness import (
     database_is_ready,
     psycopg_connection_info,
 )
+from prometheus_client import generate_latest
 from pydantic import PostgresDsn
 
 DATABASE_URL = PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory")
@@ -189,6 +191,17 @@ async def test_liveness_is_available() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+async def test_metrics_uses_the_explicit_bounded_registry() -> None:
+    app = create_app(Settings(metrics_enabled=True))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.get("/healthz")
+        response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    assert 'kivra_memory_health_requests_total{endpoint="healthz",result="ok"}' in response.text
+    assert response.content == generate_latest(REGISTRY.prometheus)
 
 
 async def test_readiness_fails_closed_without_dependencies() -> None:

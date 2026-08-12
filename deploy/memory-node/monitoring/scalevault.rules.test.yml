@@ -1,0 +1,63 @@
+rule_files:
+  - scalevault.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'kivra_memory_backup_age_seconds{kind="base"}'
+        values: '100000x20 0x20'
+      - series: 'kivra_memory_database_pool_saturation_ratio'
+        values: '1x20 0x20'
+      - series: 'kivra_memory_tunnel_connected'
+        values: '0x20 1x20'
+      - series: 'kivra_memory_github_poll_age_seconds'
+        values: '1000x20 0x20'
+      - series: 'kivra_memory_projection_inconsistencies{kind="event_gap"}'
+        values: '1x20 0x20'
+      - series: 'kivra_memory_queue_oldest_age_seconds{queue="purge"}'
+        values: '1000x20 0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ScaleVaultBackupRPOBreach
+        exp_alerts:
+          - exp_labels: {severity: critical, category: backup, kind: base}
+      - eval_time: 20m
+        alertname: ScaleVaultDatabasePoolSaturation
+        exp_alerts:
+          - exp_labels: {severity: warning, category: database}
+      - eval_time: 20m
+        alertname: ScaleVaultTunnelDisconnected
+        exp_alerts:
+          - exp_labels: {severity: critical, category: tunnel}
+      - eval_time: 20m
+        alertname: ScaleVaultGitHubPollStalled
+        exp_alerts:
+          - exp_labels: {severity: warning, category: github}
+      - eval_time: 20m
+        alertname: ScaleVaultProjectionInconsistency
+        exp_alerts:
+          - exp_labels: {severity: critical, category: consistency}
+      - eval_time: 20m
+        alertname: ScaleVaultHardForgetPurgeBacklog
+        exp_alerts:
+          - exp_labels: {severity: critical, category: erasure, queue: purge}
+      - eval_time: 40m
+        alertname: ScaleVaultBackupRPOBreach
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ScaleVaultDatabasePoolSaturation
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ScaleVaultTunnelDisconnected
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ScaleVaultGitHubPollStalled
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ScaleVaultProjectionInconsistency
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ScaleVaultHardForgetPurgeBacklog
+        exp_alerts: []

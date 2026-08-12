@@ -7,7 +7,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Response, status
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import ValidationError
 from pydantic_settings import SettingsError
 from starlette.types import ASGIApp
@@ -29,6 +29,7 @@ from kivra_memory.api.mcp import (
 )
 from kivra_memory.application.sealed_runtime import SealedRuntime
 from kivra_memory.config import Settings, get_settings
+from kivra_memory.observability.metrics import REGISTRY
 from kivra_memory.runtime import (
     ChatGPTReadRuntime,
     MemoryNodeRuntime,
@@ -42,11 +43,7 @@ from kivra_memory.storage.readiness import (
     database_is_ready,
 )
 
-HEALTH_REQUESTS = Counter(
-    "kivra_memory_health_requests_total",
-    "Health endpoint requests",
-    labelnames=("endpoint", "result"),
-)
+HEALTH_REQUESTS = REGISTRY["kivra_memory_health_requests_total"]
 
 
 def create_app(
@@ -177,7 +174,10 @@ def create_app(
     async def metrics() -> Response:
         if not runtime_settings.metrics_enabled:
             return Response(status_code=status.HTTP_404_NOT_FOUND)
-        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+        return Response(
+            generate_latest(REGISTRY.prometheus),
+            media_type=CONTENT_TYPE_LATEST,
+        )
 
     @app.get("/.well-known/oauth-protected-resource/chatgpt/mcp", include_in_schema=False)
     @app.get("/.well-known/oauth-protected-resource", include_in_schema=False)

@@ -1,0 +1,114 @@
+groups:
+  - name: scalevault-security-backup-operations
+    rules:
+      - alert: ScaleVaultBackupFailure
+        expr: increase(kivra_memory_backup_results_total{result="failure"}[15m]) > 0
+        labels: {severity: critical, category: backup}
+        annotations: {summary: "ScaleVault backup failed", response: "backup_failure"}
+      - alert: ScaleVaultBackupVerificationFailure
+        expr: increase(kivra_memory_backup_verification_results_total{result="failure"}[15m]) > 0
+        labels: {severity: critical, category: backup}
+        annotations: {summary: "ScaleVault backup verification failed", response: "backup_verification"}
+      - alert: ScaleVaultBackupRPOBreach
+        expr: kivra_memory_backup_age_seconds{kind="base"} > 90000
+        for: 10m
+        labels: {severity: critical, category: backup}
+        annotations: {summary: "ScaleVault base backup exceeds the RPO", response: "backup_stale"}
+      - alert: ScaleVaultWALArchiveFailure
+        expr: increase(kivra_memory_wal_archive_failures_total[10m]) > 0
+        labels: {severity: critical, category: wal}
+        annotations: {summary: "ScaleVault WAL archival failed", response: "wal_failure"}
+      - alert: ScaleVaultWALBacklog
+        expr: kivra_memory_wal_backlog_bytes > 1073741824 or kivra_memory_wal_oldest_age_seconds > 900
+        for: 10m
+        labels: {severity: critical, category: wal}
+        annotations: {summary: "ScaleVault WAL backlog exceeds bounds", response: "wal_backlog"}
+      - alert: ScaleVaultStoragePressure
+        expr: kivra_memory_storage_free_bytes < 5368709120
+        for: 15m
+        labels: {severity: warning, category: storage}
+        annotations: {summary: "ScaleVault storage headroom is low", response: "storage_pressure"}
+      - alert: ScaleVaultOffsiteCopyStale
+        expr: kivra_memory_offsite_copy_age_seconds{kind="git_bundle"} > 90000
+        for: 10m
+        labels: {severity: critical, category: offsite}
+        annotations: {summary: "ScaleVault offsite Git bundle is stale", response: "offsite_stale"}
+      - alert: ScaleVaultOffsiteVerificationFailure
+        expr: increase(kivra_memory_offsite_verification_results_total{result="failure"}[15m]) > 0
+        labels: {severity: critical, category: offsite}
+        annotations: {summary: "ScaleVault offsite verification failed", response: "offsite_verification"}
+      - alert: ScaleVaultArchiveLag
+        expr: kivra_memory_archive_lag_events{stage="push"} > 1000 or kivra_memory_archive_lag_seconds{stage="push"} > 900
+        for: 10m
+        labels: {severity: warning, category: archive}
+        annotations: {summary: "ScaleVault archive exporter is lagging", response: "archive_lag"}
+      - alert: ScaleVaultArchiveVerificationFailure
+        expr: increase(kivra_memory_archive_verification_failures_total[15m]) > 0
+        labels: {severity: critical, category: archive}
+        annotations: {summary: "ScaleVault archive continuity, divergence, or signature verification failed", response: "archive_verification"}
+      - alert: ScaleVaultQueueOldestJob
+        expr: kivra_memory_queue_oldest_age_seconds{queue=~"embedding|projection"} > 900
+        for: 10m
+        labels: {severity: warning, category: queue}
+        annotations: {summary: "ScaleVault derived-data queue is stalled", response: "queue_stall"}
+      - alert: ScaleVaultPostgreSQLUnavailable
+        expr: up{job="scalevault-postgresql"} == 0
+        for: 5m
+        labels: {severity: critical, category: database}
+        annotations: {summary: "ScaleVault PostgreSQL is unavailable", response: "database_unavailable"}
+      - alert: ScaleVaultDatabasePoolSaturation
+        expr: kivra_memory_database_pool_saturation_ratio > 0.9
+        for: 10m
+        labels: {severity: warning, category: database}
+        annotations: {summary: "ScaleVault database pool is saturated", response: "pool_saturation"}
+      - alert: ScaleVaultTunnelDisconnected
+        expr: kivra_memory_tunnel_connected == 0
+        for: 10m
+        labels: {severity: critical, category: tunnel}
+        annotations: {summary: "ScaleVault private tunnel is disconnected", response: "tunnel_disconnected"}
+      - alert: ScaleVaultAuthorizationFailureSpike
+        expr: sum(rate(kivra_memory_authentication_failures_total[5m])) > 1
+        for: 5m
+        labels: {severity: warning, category: authorization}
+        annotations: {summary: "ScaleVault authorization failures are elevated", response: "authorization_spike"}
+      - alert: ScaleVaultDirectCredentialExpiry
+        expr: sum(kivra_memory_credentials_total{profile="direct_private",expiry=~"expired|le_1d|le_7d",state="active"}) > 0
+        for: 5m
+        labels: {severity: warning, category: credential}
+        annotations: {summary: "A direct-private credential is nearing expiry", response: "credential_expiry"}
+      - alert: ScaleVaultGitHubPollStalled
+        expr: kivra_memory_github_poll_age_seconds > 900
+        for: 10m
+        labels: {severity: warning, category: github}
+        annotations: {summary: "ScaleVault GitHub polling is stale", response: "github_poll_stall"}
+      - alert: ScaleVaultGitHubAuthFailure
+        expr: increase(kivra_memory_github_events_total{category="auth_failure"}[15m]) > 0
+        labels: {severity: critical, category: github}
+        annotations: {summary: "ScaleVault GitHub authentication failed", response: "github_auth_failure"}
+      - alert: ScaleVaultGitHubQuarantineSpike
+        expr: increase(kivra_memory_github_events_total{category="quarantined"}[15m]) > 10
+        labels: {severity: warning, category: github}
+        annotations: {summary: "ScaleVault GitHub quarantine volume is elevated", response: "github_quarantine"}
+      - alert: ScaleVaultProjectionInconsistency
+        expr: sum(kivra_memory_projection_inconsistencies) > 0
+        for: 5m
+        labels: {severity: critical, category: consistency}
+        annotations: {summary: "ScaleVault projection and event state disagree", response: "projection_inconsistent"}
+      - alert: ScaleVaultPublicExposure
+        expr: sum(kivra_memory_public_exposure_probe_success) > 0 or increase(kivra_memory_public_exposure_backend_connections_total{result="unauthorized"}[15m]) > 0
+        labels: {severity: critical, category: exposure}
+        annotations: {summary: "An external probe reached a protected ScaleVault surface", response: "public_exposure"}
+      - alert: ScaleVaultHardForgetPurgeBacklog
+        expr: kivra_memory_queue_oldest_age_seconds{queue="purge"} > 900
+        for: 10m
+        labels: {severity: critical, category: erasure}
+        annotations: {summary: "ScaleVault hard-forget purge work is overdue", response: "purge_backlog"}
+      - alert: ScaleVaultHardForgetPurgeFailure
+        expr: increase(kivra_memory_hard_forget_purge_results_total{result="failure"}[15m]) > 0
+        labels: {severity: critical, category: erasure}
+        annotations: {summary: "ScaleVault hard-forget purge failed", response: "purge_failure"}
+      - alert: ScaleVaultRecoveryDrillOverdue
+        expr: kivra_memory_recovery_drill_age_seconds > 7776000
+        for: 1h
+        labels: {severity: warning, category: recovery}
+        annotations: {summary: "A ScaleVault recovery drill is overdue", response: "recovery_drill"}
