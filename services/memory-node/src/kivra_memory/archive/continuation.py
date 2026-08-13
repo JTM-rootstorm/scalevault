@@ -12,6 +12,7 @@ from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.archive.git import (
@@ -252,6 +253,10 @@ class DatabaseCheckpointReconstructor:
         )
         self.session.add(target)
         try:
+            await self.session.flush()
+        except SQLAlchemyError:
+            raise ArchiveContinuationError("continuation target creation failed") from None
+        try:
             exported_at = datetime.fromisoformat(plan.exported_at.replace("Z", "+00:00"))
             source = ArchiveBatchSource(
                 tenant_id=str(self.tenant_id),
@@ -278,6 +283,9 @@ class DatabaseCheckpointReconstructor:
                 postgres_timeline_id=plan.postgres_timeline_id,
                 started_at=exported_at,
             )
+        except (ArchiveStorageError, ValueError):
+            raise ArchiveContinuationError("checkpoint reconstruction prepare failed") from None
+        try:
             await commit_archive_checkpoint(
                 self.session,
                 checkpoint,
@@ -285,7 +293,7 @@ class DatabaseCheckpointReconstructor:
                 committed_at=exported_at,
             )
         except (ArchiveStorageError, ValueError):
-            raise ArchiveContinuationError("checkpoint reconstruction failed") from None
+            raise ArchiveContinuationError("checkpoint reconstruction commit failed") from None
 
 
 class CheckpointReconstructor(Protocol):
