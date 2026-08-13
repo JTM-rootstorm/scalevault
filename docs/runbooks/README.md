@@ -9,9 +9,10 @@ or output into repository files.
 
 1. Identify the intended release, installation, service set, and failure
    domain without displaying private coordinates or credentials.
-2. Capture bounded status with `kivra-memory-operator-report` and confirm the
-   latest verified recovery chain. A report is diagnostic evidence, not proof
-   that a restore works.
+2. Capture the applicable root-local report through
+   `kivra-memory-operator-report@<report-id>.service` and confirm the latest
+   separate bounded recovery status. A report is diagnostic evidence, not
+   proof that a restore works.
 3. Declare the stop condition, rollback point, write-disable boundary, and
    cleanup target.
 4. Preserve an unexpected state before remediation. Do not rewrite archives,

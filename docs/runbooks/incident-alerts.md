@@ -15,6 +15,15 @@
    listeners immediately. Archive faults require stopping the exporter.
    Database durability risk may require the full shutdown sequence.
 
+The checked-in default thresholds are part of the reviewed contract: WAL age
+warns at 10 minutes and is critical at 15; verified-base absence is critical at
+26 hours; offsite-head verification at one hour; archive/runnable-job age at
+15 minutes/one hour; storage free at 20/10 percent; pool use at 80/90 percent
+for five minutes; tunnel disconnect at 5/15 minutes; direct credential expiry
+at 30/7 days; PITR/full-drill overdue at 35/100 days; and enabled GitHub polling
+at two/four times its configured interval. Missing required telemetry and
+scrape failures alert separately. Do not weaken a threshold to clear an alert.
+
 ## Investigation boundary
 
 Query bounded time windows and fixed fields. Never enable HTTP raw/debug logs,

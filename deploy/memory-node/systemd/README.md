@@ -69,8 +69,17 @@ systemd credentials rather than environment files.
 The metrics URL must use only the `kivra_memory_metrics` login. Install the
 single authorized UUIDv7 tenant scope at `/etc/kivra-memory/metrics-tenant-id`.
 Both source files are root-owned mode `0600`; systemd exposes private copies to
-`memory-metrics`. Install and activate the loopback-only exporter after both
-credentials and the reviewed observability functions exist:
+`memory-metrics`. Bind both fixed PostgreSQL wrapper logins to that same tenant
+through an owner-authorized interactive prompt; neither service credential can
+read or mutate the binding table:
+
+```sh
+sudo -u postgres psql --dbname kivra_memory \
+  --file deploy/memory-node/postgresql/bind_observability_tenant.sql
+```
+
+Install and activate the loopback-only exporter after both credentials, the
+binding, and the reviewed observability functions exist:
 
 ```sh
 install -o root -g root -m 0644 \

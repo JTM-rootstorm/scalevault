@@ -14,9 +14,14 @@ exporter checkpoints, or deployment configuration.
    manifests, schemas, hashes, object bounds, and snapshot/event boundary.
 4. Resolve the exact compatible application and Alembic revision from archive
    metadata. Stop rather than guessing or running an incompatible decoder.
-5. Prepare an absolute recovery configuration that pins the local clone, exact
-   branch/head, application/Alembic versions, and gap-free signer epochs whose
-   public allowed-signers files are supplied separately. Verify it:
+5. Prepare an absolute recovery configuration that pins the archive target,
+   local clone, exact branch/head, final manifest digest, high-water sequence,
+   application/Alembic versions, and gap-free signer epochs. Each epoch binds
+   its ID, exact public key fingerprint, allowed-signers file/principal, bounded
+   event range, and transition-record ID. Every planned transition supplies the
+   canonical record plus old/new detached signatures; a compromised epoch also
+   supplies its independently anchored last accepted commit and event sequence.
+   Verify it:
 
    ```bash
    kivra-memory-archive-recovery --config /absolute/recovery.json verify
@@ -40,10 +45,40 @@ exporter checkpoints, or deployment configuration.
    deployment configuration were not synthesized. Reissue independently before
    any later activation. Preserve and apply the current independent destruction
    ledger before restoring or reconciling a permitted key backup.
-9. Archive recovery never re-anchors an existing target. Require the fixed
-   `new_immutable_archive_target_required` result and exercise continuation only
-   against a newly provisioned isolated immutable target. Never point the
-   exporter at the production remote as part of a drill.
+9. Archive recovery never re-anchors an existing target. Pre-create an empty
+   local bare target with no refs, objects, or alternates, then run:
+
+   ```bash
+   kivra-memory-archive-recovery --config /absolute/recovery.json \
+     continue-new-target \
+     --confirmation continue-to-new-immutable-target \
+     --target-repository /absolute/new-empty-bare-target \
+     --target-id <UUIDV7_TARGET_ID> \
+     --checkpoint-id <UUIDV7_CHECKPOINT_ID> \
+     --target-name <BOUNDED_TARGET_NAME> \
+     --repository-reference <FILE_URI_OF_TARGET_REPOSITORY> \
+     --target-branch <ANCHORED_SOURCE_BRANCH>
+   ```
+
+   The protected configuration must reference its mode-`0600` local-only
+   database URL file and the same disposable `scalevault_recovery_...` database.
+   The repository reference is exactly the canonical `file://` URI of the
+   resolved target repository. A typo, symlink, SSH URL, or mismatch rejects
+   before copying. The command copies only the externally anchored objects,
+   reverifies signatures and byte equality, checks database migration/counter/
+   event equality, records a disabled target, and records one committed
+   checkpoint with no remote commit SHA through existing locked handlers. It
+   never signs, appends, pushes, promotes the local target to a remote, or
+   activates an exporter. Require
+   `continuation=verified_remote_promotion_required`.
+
+10. A checked-in production SSH-promotion command does not yet exist. Keep the
+    reconstructed target disabled until a separately reviewed procedure pins
+    SSH identity/host trust, promotes byte-identical history to a new immutable
+    remote, and proves its exact head. Only then configure and activate the
+    normal single exporter and prove its first operation is exactly one normal
+    first-parent append. Never point it at the old or production target during
+    a drill.
 
 Stop and follow [Archive divergence](archive-divergence.md) on any head,
 signature, manifest, signer, host-key, or prefix discrepancy. Finish with the

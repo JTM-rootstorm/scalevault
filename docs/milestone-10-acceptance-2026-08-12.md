@@ -32,7 +32,7 @@ protected operator store and transfer only permitted fields here.
 
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
-| Architecture and threat decisions accepted | Review | Pending | Required M10 decisions and threat rows not yet accepted in this record |
+| Architecture and threat decisions accepted | Review | Pending | ADRs 0027-0032 are accepted; final threat/runbook mapping review remains pending |
 | Complete repository verification | Repository | Pending | `make PNPM='npx --yes pnpm@10.15.0' verify` not yet recorded |
 | Required PostgreSQL 17 integration gate | Durable local | Pending | Zero-skip required database suite not yet recorded |
 | Production-relevant PITR durability | Durable local | Pending | Separate WAL/fsync recovery suite not yet recorded |
@@ -41,7 +41,7 @@ protected operator store and transfer only permitted fields here.
 | Isolated PostgreSQL PITR succeeds | Recovery drill | Pending | Real PITR drill not yet run/recorded |
 | Primary Forgejo clean restore succeeds | Provider/recovery drill | Pending | Real read-only clone and restore not yet run/recorded |
 | Secondary encrypted bundle restore succeeds | Offsite/recovery drill | Pending | Independent failure-domain drill not yet run/recorded |
-| Archive continuation policy succeeds | Recovery drill | Pending | Isolated continuation/re-anchor proof not yet recorded |
+| Archive continuation policy succeeds | Recovery drill | Pending | New-target reconstruction, verified remote promotion, and normal exporter append not yet run |
 | Credential revoke/rotation bounds pass | Installed/provider | Pending | Per-class current gates not yet recorded |
 | Privacy-safe observability and alerts pass | Repository/installed | Pending | Rule tests, delivery, fault injection, and canary scans pending |
 | Leakage scanner detects every synthetic canary | Repository/durable local | Pending | Current complete scanner suite not yet recorded |
@@ -54,14 +54,15 @@ failed, or skipped.
 
 ## Architecture and threat decisions
 
-Status: **Pending review**.
+Status: **ADRs accepted; final mapping review pending**.
 
-Record the accepted decisions for encrypted PostgreSQL PITR/recovery sets;
-monotonic destruction across key backups; archive rollback/signer transition
-and continuation; credential lifecycle; telemetry, retention, and evidence;
-and fail-closed leakage scanning. Map every implementation test and runbook to
-the active-topology threat matrix. Dormant relay, node-agent, OAuth, public
-plugin/submission, and generic enrollment paths must remain explicitly
+ADRs 0027 through 0032 accept encrypted PostgreSQL PITR/recovery sets;
+monotonic destruction across key backups; archive signer epochs, dual-signed
+transition evidence, compromise cutoffs and new-target continuation; credential
+lifecycle; privacy-safe telemetry, retention and evidence; and fail-closed
+leakage scanning. Final acceptance still requires mapping every implementation
+test and runbook to the active-topology threat matrix. Dormant relay,
+node-agent, OAuth, public plugin/submission, and generic enrollment paths remain
 non-applicable and unprovisioned.
 
 ## Repository verification
@@ -71,7 +72,11 @@ Status: **Pending**.
 Record the final source commit and immutable source checksum, targeted suite
 result counts, complete `make verify` result, deterministic generated-artifact
 checks, alert syntax/tests, systemd/NPM static checks, and approved package
-manager substitution if required. No results are claimed here yet.
+manager substitution if required. The current repository includes migration
+`0011_observability_aggregates`, the least-privilege metrics/report role and
+function boundary, the loopback metrics exporter, archive dual-signed
+transition/compromise verification, and `continue-new-target`; final gate
+results are not claimed here yet.
 
 ## Durable PostgreSQL 17 verification
 
@@ -109,7 +114,10 @@ Record safe base-backup object identifier, ciphertext/manifest digests,
 completed/verified timestamps, WAL continuity result, recovery-window result,
 offsite-copy age/result, retention decision, and confirmation that the routine
 node did not contain the recovery private identity. Backup creation and
-verification do not close the PITR drill below.
+verification do not close the PITR drill below. Destructive retention is
+architecture-blocked: the validation-only helper must report
+`no_prune_dependency_watermark_absent` until authenticated PITR and exact
+dependency/hold authority exist.
 
 ## PostgreSQL PITR drill
 
@@ -126,8 +134,10 @@ proof, and cleanup confirmation.
 Status: **Pending; not run or accepted by this record**.
 
 Follow [Forgejo recovery](runbooks/forgejo-recovery.md). Record source head and
-external-anchor digests, pinned-host-key result, complete signed-chain and
-manifest results, compatible revision, clean-destination preflight,
+external head/manifest/high-water anchors, pinned-host-key result, signer epoch
+public-key fingerprints, canonical transition-record and both detached-
+signature results, compromise cutoff results when applicable, complete signed-
+chain/manifest results, compatible revision, clean-destination preflight,
 aggregate/canary results, archive-exclusion proof, RTO, and cleanup.
 
 ## Secondary encrypted bundle drill
@@ -135,21 +145,26 @@ aggregate/canary results, archive-exclusion proof, RTO, and cleanup.
 Status: **Pending; not run or accepted by this record**.
 
 Follow [Secondary-bundle recovery](runbooks/secondary-bundle-recovery.md).
-Record ciphertext and plaintext-bundle digests, authenticated decryption and
-`git bundle verify` result codes, exact ref/head, signed-history and clean
-restore results, canaries, RTO, and verified removal of every plaintext scratch
-object. Do not record the private recovery identity.
+Record the externally retained ciphertext digest, pre-decryption digest check,
+authenticated decryption and `git bundle verify` result codes, exact ref/head,
+signed-history and clean restore results, canaries, RTO, and verified removal of
+every plaintext scratch object. The plaintext bundle digest remains protected
+in-memory flow and is not retained. Do not record the private recovery identity.
 
 ## Archive continuation evidence
 
 Status: **Pending**.
 
-Record the new-immutable-target policy, the fixed
-`new_immutable_archive_target_required` recovery result, database/archive
-prefix relationship, external rollback anchor, isolated new-target result,
-first subsequent exporter checkpoint result, and confirmation that production
-history was not rewritten. Existing-target re-anchor is not supported.
-Divergence is a failure requiring preservation and investigation.
+Record `new_immutable_archive_target_required` after clean restore; the exact
+`continue-new-target` invocation and `verified_remote_promotion_required`
+result; database/archive prefix equality; external head/manifest/high-water
+anchors; byte-identical empty-target reconstruction; verified promotion to the
+new immutable remote; and exactly one subsequent normal exporter first-parent
+append. The continuation command itself must not sign, append, push, promote,
+or activate the exporter. Existing-target re-anchor is not supported.
+No checked-in production SSH-promotion command currently closes the next step;
+remote promotion and normal exporter activation remain live/implementation
+blockers. Divergence is preserved and fails the gate.
 
 ## Observability, alerts, and retention
 
@@ -160,6 +175,15 @@ tests; installed scrape and rule health; backup, WAL, offsite, archive, queue,
 database, pool, storage, tunnel, credential, ingress, exposure, purge, and
 recovery-drill alert fault injections; delivery outcomes; journald/NPM/
 PostgreSQL/monitoring retention review; and root-only operator-report bounds.
+Record migration `0011_observability_aggregates`; denial/isolation proofs for
+both login/capability role pairs and fixed security-definer functions; the
+dedicated `memory-metrics` exporter on `127.0.0.1:9098`; collector clear/down
+behavior; and protected systemd report publication with no stdout.
+
+Retention remains **pending** until operator-chosen byte caps are installed for
+the 30-day journal/alert and 400-day content-free report maxima and the alert
+receiver/handling policy is selected and verified. Repository defaults do not
+supply those activation inputs.
 
 ## Leakage scanner and hard-forget gates
 
@@ -183,9 +207,12 @@ PostgreSQL, private archive, secondary copy, PITR, Forgejo-only recovery,
 bundle recovery, and every permitted key backup. Acceptance is bounded to
 cryptographic erasure inside those tested copies. Record that the independent
 current destruction ledger was excluded from key backups, survived each
-rollback boundary, and dominated stale restored keys. It must not claim plaintext
-or Genesis compatibility records were cryptographically erased, that unlink is
-physical sanitization, or that unknown external copies do not exist.
+rollback boundary, matched or extended its independently retained freshness
+anchor, and dominated stale restored keys. Routine key-provider backup
+activation remains blocked until the manifest/anchor and restore-reconciliation
+contract passes live gates. It must not claim plaintext or Genesis compatibility
+records were cryptographically erased, that unlink is physical sanitization, or
+that unknown external copies do not exist.
 
 ## Provider and live evidence
 

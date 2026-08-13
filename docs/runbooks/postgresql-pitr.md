@@ -3,6 +3,10 @@
 This procedure restores PostgreSQL 17 into `/mnt/memory-recovery`. It never
 overlays `/mnt/memory` or an active production cluster.
 
+Run an isolated PITR drill at least monthly and a full physical/Forgejo/bundle/
+credential/destruction exercise at least quarterly. Measure the 15-minute RPO
+and four-hour RTO objectives; do not infer them from backup completion.
+
 ## Prepare
 
 1. Select a verified base-backup object and a target name, time, or LSN within

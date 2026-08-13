@@ -56,6 +56,38 @@ full-history bundle in a separate failure domain supplies the secondary archive
 copy. Neither archive path contains runtime credentials, sealed-content keys,
 embeddings, worker leases, exporter checkpoints, or deployment configuration.
 
+Archive trust is held outside Git. Recovery pins the exact target, branch,
+head, final manifest digest, event high-water mark, compatible release and
+Alembic revision, signer epochs, and public-key fingerprints. A planned signer
+change has one canonical transition record signed by both old and new keys. A
+compromised epoch remains usable only through an independently anchored exact
+last-accepted commit and event sequence; later commits from that signer are
+rejected. Recovery never learns a new signer from archive content.
+
+Archive-only continuation creates a new immutable target. The recovery command
+copies and reverifies the exact anchored object history and reconstructs one
+disabled target with one committed, not-pushed checkpoint in the disposable
+recovered database. It does not sign, append, push, promote a remote, activate
+the exporter, or re-anchor the existing target. Verified remote promotion,
+normal exporter activation, and the first new first-parent append are separate
+gates.
+
+## Observability plane
+
+Database telemetry has no table-reading service credential. The
+`kivra_memory_metrics` login can set only the `kivra_memory_observability`
+capability, which can execute the fixed-shape
+`scalevault_observability_snapshot(uuid)` security-definer function. A
+dedicated `memory-metrics` process refreshes that bounded snapshot every 30
+seconds and exposes it only on `127.0.0.1:9098`. Collection failure clears the
+database-derived samples and reports the collector down.
+
+Protected operator reports use a separate
+`kivra_memory_operator_report_login` wrapper and
+`kivra_memory_operator_report` capability over the reviewed fixed-shape report
+functions. The root-local systemd instance writes one new mode-`0600` report;
+it has no remote route and never streams report contents to the journal.
+
 All recovery paths start with writers and external listeners disabled. They
 verify source anchors, compatibility, and destruction state before service
 activation. Divergence is preserved and investigated; neither Git history nor

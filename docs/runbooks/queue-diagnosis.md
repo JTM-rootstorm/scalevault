@@ -1,8 +1,10 @@
 # Queue diagnosis
 
-Use fixed-label metrics and the root-local operator report first. Diagnose one
-queue class at a time: embedding/outbox, archive export, GitHub ingress,
-lifecycle, sealed purge, or backup.
+Use fixed-label metrics from the loopback database metrics exporter first. When
+identity-specific diagnosis is required, create one protected root-local report
+through `kivra-memory-operator-report@<report-id>.service`; do not stream it to
+a terminal or journal. Diagnose one queue class at a time: embedding/outbox,
+archive export, GitHub ingress, lifecycle, sealed purge, or backup.
 
 1. Record queue class, bounded depth/age bucket, worker result, and first
    observed time. Do not list job payloads or identifiers.

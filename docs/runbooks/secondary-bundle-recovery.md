@@ -13,15 +13,17 @@
    ```bash
    kivra-memory-archive-recovery --config /absolute/recovery.json \
      bundle-materialize --encrypted-bundle /absolute/offsite/object.age \
+     --expected-ciphertext-sha256 <EXTERNALLY_RETAINED_SHA256> \
      --identity-file /absolute/protected/identity \
      --output-repository /absolute/new-recovery-repository \
      --scratch-directory /absolute/protected-scratch
    ```
 
-   The command verifies authenticated decryption, plaintext bundle integrity,
-   refs/head, complete objects, and the configured signed history before
-   returning fixed content-free JSON. The output repository must not exist
-   beforehand.
+   The command checks the independently retained ciphertext digest before
+   decryption, then verifies authenticated decryption, plaintext bundle
+   integrity, refs/head, complete objects, and the configured signed history
+   before returning fixed content-free JSON. The output repository must not
+   exist beforehand.
 5. Treat the new output repository as the local recovery source and apply every
    signed-history, signer-transition, manifest, schema, hash, bound,
    compatibility, and external-anchor check used for

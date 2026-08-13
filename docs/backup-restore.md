@@ -28,12 +28,19 @@ verification, and content-free evidence.
    view. Preserve the current root-owned destruction ledger at
    `/var/lib/kivra-memory-sealed/destruction-ledger`, construct the recovered
    provider with that ledger, and reconcile stale keys before any listener or
-   writer starts. The ledger is explicitly excluded from content-key backups.
+   writer starts. The ledger is explicitly excluded from content-key backups
+   and must match or monotonically extend its independently retained exact
+   freshness anchor; absence or ambiguity disables sealed operations.
 6. Rebuild projections and embeddings through supported application paths.
    Never copy stale worker leases or exporter checkpoint state into a recovered
    installation.
 7. Preserve divergence for investigation. Never amend, merge, force-push, or
    rewrite recovery history.
+8. Archive verification pins the exact external head, final manifest digest,
+   event high-water mark, signer epochs and public-key fingerprints. Every
+   epoch transition requires its canonical record plus both old- and new-key
+   detached signatures. A compromised signer is accepted only through its
+   independently anchored exact last commit/sequence cutoff.
 
 ## Routine backup cycle
 
@@ -45,8 +52,9 @@ Follow [Backup operations](runbooks/backup-operations.md). The operator must:
 4. verify the already-pushed Forgejo head and its external rollback anchor;
 5. create, verify, and encrypt a complete Git bundle, then copy only the
    ciphertext to the independent failure domain;
-6. apply retention only after proving that at least one complete verified PITR
-   chain and one accepted secondary archive copy remain; and
+6. run the retention validator without deleting anything; destructive pruning
+   remains blocked until authenticated PITR/dependency/hold authority exists;
+   and
 7. record only bounded result codes, safe identifiers, timestamps, counts, and
    digests.
 
@@ -64,7 +72,7 @@ No recovered installation is activated until all applicable gates pass:
 - PostgreSQL system identifier, timeline, target, extensions, event hashes,
   high-water marks, projections, and aggregate digests are valid;
 - archive head, external anchor, first-parent history, signatures, manifests,
-  schemas, hashes, and bounds are valid;
+  signer transitions/compromise cutoffs, schemas, hashes, and bounds are valid;
 - destroyed sealed-content keys remain destroyed across every permitted key
   backup and recovery source; the independent current destruction ledger is
   present and reconciliation removed or rejected every stale restored key;

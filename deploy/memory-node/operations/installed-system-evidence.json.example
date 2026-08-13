@@ -26,10 +26,16 @@
   },
   "archive_recovery": {
     "source_head": "PENDING",
+    "manifest_sha256": "PENDING",
+    "high_water_sequence": "PENDING",
+    "signer_transition_result": "pending",
+    "compromise_cutoff_result": "not-applicable",
     "primary_forgejo_result": "pending",
     "secondary_ciphertext_sha256": "PENDING",
     "secondary_bundle_result": "pending",
-    "continuation_result": "pending"
+    "local_new_target_result": "pending",
+    "remote_promotion_result": "pending",
+    "normal_exporter_append_result": "pending"
   },
   "security": {
     "credential_lifecycle_result": "pending",
@@ -38,8 +44,12 @@
     "destruction_dominance_result": "pending"
   },
   "operations": {
+    "observability_migration_result": "pending",
+    "least_privilege_database_roles_result": "pending",
+    "loopback_metrics_exporter_result": "pending",
     "alerts_result": "pending",
-    "retention_result": "pending",
+    "retention_result": "no_prune_dependency_watermark_absent",
+    "retention_activation_result": "blocked",
     "operator_report_result": "pending",
     "cleanup_result": "pending"
   },

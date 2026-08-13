@@ -9,6 +9,7 @@ or a dependency-failed process ready.
 | Process | Default listener | Liveness | Readiness | Metrics |
 |---|---|---|---|---|
 | Memory API | `127.0.0.1:8080` | `GET /healthz` returns `200` with the version | `GET /readyz` returns `200` only when PostgreSQL is reachable, the database is at the exact compatible Alembic head, and `vector`, `pg_trgm`, `citext`, and `pgcrypto` are installed; otherwise it returns a sanitized `503` dependency state | `GET /metrics` returns Prometheus text, or `404` when `KIVRA_MEMORY_METRICS_ENABLED=false` |
+| Database metrics exporter | `127.0.0.1:9098` | `kivra_memory_database_collector_up` | Each 30-second collection has a hard 10-second timeout; failure clears database-derived samples | `GET /metrics` exposes only fixed-shape aggregates from the dedicated observability function |
 | Codex private ingress | exact private address, port `8443` | Not exposed | Not exposed; exact `/mcp` requests require a direct-private bearer | Not exposed |
 | Secure MCP Tunnel | `127.0.0.1:8081` | `GET /healthz` is owned by `tunnel-client` | `GET /readyz` is owned by `tunnel-client` and depends on tunnel control-plane and MCP initialization | Not owned by ScaleVault |
 
@@ -42,6 +43,7 @@ With the processes running on their default listeners:
 curl --fail --silent --show-error http://127.0.0.1:8080/healthz
 curl --silent --show-error http://127.0.0.1:8080/readyz
 curl --fail --silent --show-error http://127.0.0.1:8080/metrics
+curl --fail --silent --show-error http://127.0.0.1:9098/metrics
 ```
 
 The tunnel has a separate activation and credential boundary; follow the
@@ -80,13 +82,34 @@ curl --fail --silent --show-error http://127.0.0.1:8080/metrics
 systemctl --no-pager --failed
 ```
 
-The root-local `kivra-memory-operator-report` command emits a tenant-scoped,
-metadata-only report. It may contain protected identifiers and therefore stays
-in the root-local operator boundary. Backup and recovery sections deliberately
-report `status_artifact_required`; ingest the separate bounded backup/recovery
-status artifacts during operator review. The report must not be copied into a
-public issue or acceptance record without reducing it to the evidence boundary
-below.
+Database-backed metrics use the `kivra_memory_metrics` login and its SET-only
+`kivra_memory_observability` capability. Neither role can select application
+tables; the capability can execute only the reviewed aggregate function.
+Prometheus scrapes the dedicated `scalevault-database-metrics` job on
+loopback port 9098. Do not point it at a private interface or reuse an API
+database credential.
+
+Generate a protected tenant-scoped operator report through the systemd-bound
+runner, where `<report-id>` is a bounded non-sensitive local label:
+
+```bash
+systemctl start 'kivra-memory-operator-report@<report-id>.service'
+```
+
+The unit supplies the dedicated `kivra_memory_operator_report_login` database
+credential and UUIDv7 tenant scope from separate systemd credentials and
+creates `/var/lib/kivra-memory/operator-reports/<report-id>.json` as a new
+root-only file. It does not use an ambient database URL or stdout. The report
+may contain protected identifiers and stays inside the root-local boundary.
+Backup and recovery sections deliberately report `status_artifact_required`;
+review their separate bounded status artifacts. Reduce any accepted findings
+to the evidence boundary below rather than copying the report.
+
+Operational logs and alerts have a 30-day maximum; content-free recovery and
+acceptance reports may be retained for at most 400 days. Both classes also
+require operator-chosen byte caps, and the earlier age/capacity bound wins.
+Until the installed caps, alert receiver, and handling policy are selected and
+verified, retention activation remains pending rather than accepted.
 
 ## Evidence boundary
 

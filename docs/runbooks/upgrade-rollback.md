@@ -13,8 +13,10 @@
    head before maintenance.
 5. Enter the [safe shutdown](shutdown-startup.md) boundary. Install immutable
    artifacts and configuration without modifying credential values.
-6. Run migrations once with the dedicated migration role. Never let runtime
-   services own or opportunistically apply schema changes.
+6. Run migrations once with the dedicated migration role. For revision
+   `0011_observability_aggregates`, prove both wrapper/capability role pairs
+   retain no direct table access and only their reviewed fixed-shape functions.
+   Never let runtime services own or opportunistically apply schema changes.
 7. Start in dependency order. Verify readiness, queue progress, archive
    continuity, alerts, log canaries, and both access paths before closing the
    window.
