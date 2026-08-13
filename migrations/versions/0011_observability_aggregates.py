@@ -122,7 +122,7 @@ def upgrade() -> None:
         "CASE stage.name WHEN 'source' THEN (SELECT count(*) FROM public.memory_events AS event "
         "WHERE event.tenant_id = p_tenant_id) ELSE (SELECT count(*) "
         "FROM public.memory_events AS event WHERE event.tenant_id = p_tenant_id "
-        "AND event.event_sequence > coalesce((SELECT max(checkpoint.last_event_sequence) "
+        "AND event.sequence > coalesce((SELECT max(checkpoint.last_event_sequence) "
         "FROM public.archive_export_checkpoints AS checkpoint "
         "WHERE checkpoint.tenant_id = p_tenant_id AND ((stage.name = 'export' "
         "AND checkpoint.state IN ('committed','pushed')) OR "

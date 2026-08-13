@@ -1777,9 +1777,9 @@ def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
             connection.execute(
                 text(
                     "INSERT INTO tenants (tenant_id, slug, display_name) "
-                    "VALUES (:tenant_id, :slug, :slug)"
+                    "VALUES (:tenant_id, :slug, :display_name)"
                 ),
-                {"tenant_id": tenant_id, "slug": slug},
+                {"tenant_id": tenant_id, "slug": slug, "display_name": slug},
             )
         for tenant_id, job_uuid, key in jobs:
             connection.execute(
@@ -1823,6 +1823,19 @@ def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
                 {"tenant_id": TENANT_A},
             ).all()
             assert [tuple(row) for row in rows] == [("queue_depth", "lifecycle", "pending", 1.0)]
+            archive_rows = connection.execute(
+                text(
+                    "SELECT label_one, metric_value "
+                    "FROM public.scalevault_observability_snapshot(:tenant_id) "
+                    "WHERE metric_name = 'archive_lag_events' ORDER BY label_one"
+                ),
+                {"tenant_id": TENANT_A},
+            ).all()
+            assert [tuple(row) for row in archive_rows] == [
+                ("export", 0.0),
+                ("push", 0.0),
+                ("source", 0.0),
+            ]
             with pytest.raises(DBAPIError) as denied, connection.begin_nested():
                 connection.execute(text("SELECT payload FROM public.outbox_jobs"))
             assert _sqlstate(denied.value) == "42501"
