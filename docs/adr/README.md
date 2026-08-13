@@ -38,6 +38,7 @@ documentation and do not change these decisions implicitly.
 | [0030](0030-credential-lifecycle-and-revocation.md) | Accepted | Give every credential an explicit rotation, revocation, compromise, and recovery contract, including no post-revocation GitHub ingress processing. |
 | [0031](0031-private-observability-and-operator-audit.md) | Accepted | Keep telemetry private and bounded, payload-blind aggregate collection least-privileged, and identity-specific reports root-local. |
 | [0032](0032-offline-public-artifact-leakage-scanner.md) | Accepted | Fail closed with a pure bounded offline scanner before any future public artifact can be signed or published. |
+| [0033](0033-operator-managed-offsite-and-local-alert-acceptance.md) | Accepted | Keep Backblaze transfer operator-managed and make private local alert evaluation, rather than external notification delivery, the M10 acceptance boundary. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 it. Implementation changes must preserve the security and authority boundaries

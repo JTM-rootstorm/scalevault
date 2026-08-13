@@ -32,18 +32,18 @@ protected operator store and transfer only permitted fields here.
 
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
-| Architecture and threat decisions accepted | Review | Pending | ADRs 0027-0032 are accepted; final threat/runbook mapping review remains pending |
+| Architecture and threat decisions accepted | Review | Pending | ADRs 0027-0033 are accepted; final threat/runbook mapping review remains pending |
 | Complete repository verification | Repository | Passed | `make PNPM='npx --yes pnpm@10.15.0' verify`: 1526 passed, 179 environment-gated skips; all remaining language/schema/plugin gates passed |
 | Required PostgreSQL 17 integration gate | Durable local | Passed | Debian recovery LXC: 192 passed, zero skipped, PostgreSQL 17 |
 | Production-relevant PITR durability | Durable local | Passed | Debian recovery LXC: production helper archive/restore path, 1 passed, zero skipped |
 | Installed services and credentials hardened | Installed LXC | Pending | Exact installed units/credentials/hardening not yet audited |
-| Encrypted base backup and WAL current | Installed LXC/storage | Pending | Verified complete chain not yet recorded |
+| Encrypted base backup and WAL current | Installed LXC/local recovery storage | Pending | Verified complete local chain not yet recorded; Backblaze transfer is operator-managed and non-blocking |
 | Isolated PostgreSQL PITR succeeds | Recovery drill | Passed (repository durability gate) | Disposable PostgreSQL 17 A/B-not-C recovery and corrupt manifest/ciphertext rejection passed; installed-storage drill remains pending |
 | Primary Forgejo clean restore succeeds | Provider/recovery drill | Pending | Real read-only clone and restore not yet run/recorded |
-| Secondary encrypted bundle restore succeeds | Offsite/recovery drill | Pending | Independent failure-domain drill not yet run/recorded |
+| Secondary encrypted bundle restore succeeds | Local recovery drill | Pending | Exact encrypted bundle has not yet been locally materialized and restored; Backblaze placement/retrieval is operator-managed and non-blocking |
 | Archive continuation policy succeeds | Recovery drill | Pending | New-target reconstruction, verified remote promotion, and normal exporter append not yet run |
 | Credential revoke/rotation bounds pass | Installed/provider | Pending | Per-class current gates not yet recorded |
-| Privacy-safe observability and alerts pass | Repository/installed | Partial | Prometheus syntax and rule scenarios pass; installed delivery, fault injection, and canary scans pending |
+| Privacy-safe observability and alerts pass | Repository/installed | Partial | Prometheus syntax and rule scenarios pass; installed evaluation, fault injection, and canary scans pending; external delivery is not required |
 | Leakage scanner detects every synthetic canary | Repository/durable local | Pending | Current complete scanner suite not yet recorded |
 | Hard forget dominates all retained recovery copies | Durable local/recovery | Pending | Database/archive/key-backup non-resurrection pending |
 | NPM/public-exposure boundary remains closed | Installed/external | Pending | Fresh generated-config and spoof/backend-counter proof pending |
@@ -56,11 +56,13 @@ failed, or skipped.
 
 Status: **ADRs accepted; final mapping review pending**.
 
-ADRs 0027 through 0032 accept encrypted PostgreSQL PITR/recovery sets;
+ADRs 0027 through 0033 accept encrypted PostgreSQL PITR/recovery sets;
 monotonic destruction across key backups; archive signer epochs, dual-signed
 transition evidence, compromise cutoffs and new-target continuation; credential
 lifecycle; privacy-safe telemetry, retention and evidence; and fail-closed
-leakage scanning. Final acceptance still requires mapping every implementation
+leakage scanning. ADR 0033 records operator-managed Backblaze custody and local
+alert evaluation without requiring external notification delivery. Final
+acceptance still requires mapping every implementation
 test and runbook to the active-topology threat matrix. Dormant relay,
 node-agent, OAuth, public plugin/submission, and generic enrollment paths remain
 non-applicable and unprovisioned.
@@ -108,7 +110,8 @@ The separate production-helper PITR test completed with one passed and zero
 skipped. PostgreSQL continuously invoked the checked-in archive and restore
 helper paths; recovery included the required A/B-not-C assertion and corrupt
 manifest/ciphertext negative cases. This closes the repository durability
-gate, not the installed backup-store, custody, timer, or offsite drill gates.
+gate, not the installed backup-store, custody, or timer gates. Backblaze offsite
+handling is an operator-managed concern and is not an M10 acceptance blocker.
 
 ## Installed service and credential hardening
 
@@ -127,12 +130,18 @@ Status: **Pending live evidence**.
 
 Record safe base-backup object identifier, ciphertext/manifest digests,
 completed/verified timestamps, WAL continuity result, recovery-window result,
-offsite-copy age/result, retention decision, and confirmation that the routine
+retention decision, and confirmation that the routine
 node did not contain the recovery private identity. Backup creation and
 verification do not close the PITR drill below. Destructive retention is
 architecture-blocked: the validation-only helper must report
 `no_prune_dependency_watermark_absent` until authenticated PITR and exact
 dependency/hold authority exist.
+
+Backblaze is the operator-selected offsite destination. Provider-specific copy,
+retention, freshness, and restore evidence remains useful operational evidence,
+but is outside the M10 blocker set and is not required to change this record's
+acceptance decision. Without that evidence, this record must not claim that an
+independent Backblaze copy exists, is current, or was restored.
 
 ## PostgreSQL PITR drill
 
@@ -160,14 +169,21 @@ aggregate/canary results, archive-exclusion proof, RTO, and cleanup.
 
 ## Secondary encrypted bundle drill
 
-Status: **Pending; not run or accepted by this record**.
+Status: **Pending local recovery evidence; Backblaze retrieval is non-blocking**.
 
-Follow [Secondary-bundle recovery](runbooks/secondary-bundle-recovery.md).
-Record the externally retained ciphertext digest, pre-decryption digest check,
-authenticated decryption and `git bundle verify` result codes, exact ref/head,
-signed-history and clean restore results, canaries, RTO, and verified removal of
-every plaintext scratch object. The plaintext bundle digest remains protected
-in-memory flow and is not retained. Do not record the private recovery identity.
+M10 must locally materialize the exact offsite-suitable ciphertext with
+independently supplied recovery material. Follow
+[Secondary-bundle recovery](runbooks/secondary-bundle-recovery.md) using a
+protected local recovery store. Record the ciphertext digest, pre-decryption
+digest check, authenticated decryption and `git bundle verify` result codes,
+exact ref/head, signed-history and clean restore results, canaries, RTO, and
+verified removal of every plaintext scratch object. The plaintext bundle digest
+remains protected in-memory flow and is not retained. Do not record the private
+recovery identity.
+
+Backblaze handles the offsite failure domain. Provider placement, freshness,
+retention, and retrieval validation are operator-managed and non-blocking. In
+their absence, do not claim that a provider copy exists or has been restored.
 
 ## Archive continuation evidence
 
@@ -189,9 +205,10 @@ blockers. Divergence is preserved and fails the gate.
 Status: **Repository rule and database-boundary gates passed; live evidence pending**.
 
 Record fixed-label/cardinality test results; Prometheus rule syntax and unit
-tests; installed scrape and rule health; backup, WAL, offsite, archive, queue,
+tests; installed scrape and rule health; backup, WAL, archive, queue,
 database, pool, storage, tunnel, credential, ingress, exposure, purge, and
-recovery-drill alert fault injections; delivery outcomes; journald/NPM/
+recovery-drill alert fault injections; local pending/firing/recovery outcomes;
+zero rule-evaluation errors; journald/NPM/
 PostgreSQL/monitoring retention review; and root-only operator-report bounds.
 Record migration `0011_observability_aggregates`; denial/isolation proofs for
 both login/capability role pairs and fixed security-definer functions; the
@@ -203,12 +220,18 @@ installed `promtool`. The PostgreSQL 17 suite also passed the function-only
 metrics/report principals, owner-controlled tenant bindings, arbitrary-tenant
 denial, payload/table denial, bounded report limits including NULL rejection,
 and all nine report function families. These repository gates do not replace
-installed scrape freshness, alert delivery, or operator-report publication.
+installed scrape freshness or operator-report publication. External alert
+delivery is explicitly not required for M10; local rule evaluation and visible
+collector/rule health remain required. When no receiver is configured, this
+record must not claim notification delivery.
+
+The checked-in Backblaze/offsite rule scenarios remain validated repository
+contracts, but no installed provider-series producer or provider fault
+injection is required for M10.
 
 Retention remains **pending** until operator-chosen byte caps are installed for
-the 30-day journal/alert and 400-day content-free report maxima and the alert
-receiver/handling policy is selected and verified. Repository defaults do not
-supply those activation inputs.
+the 30-day journal/alert and 400-day content-free report maxima. No external
+alert receiver is required for M10.
 
 ## Leakage scanner and hard-forget gates
 
@@ -246,8 +269,10 @@ Status: **Pending**.
 Record fresh NPM generated-config and external source/spoof/backend-counter
 results; exact private/canonical listener result; direct and Secure Tunnel
 credential gates; Forgejo deploy-key/host-key gates; GitHub provider gates only
-if the optional ingress is provisioned; alert delivery; real canary scans; and
-actual independent Forgejo/offsite recovery.
+if the optional ingress is provisioned; local alert evaluation and recovery;
+real canary scans; and independent Forgejo recovery. Backblaze operation and
+external alert delivery are not M10 acceptance blockers. Their absence must not
+be reported as successful offsite durability or notification delivery.
 
 Non-applicable paths: public relay, node-agent, OAuth, public plugin submission,
 generic third-party enrollment, public branch/export/publication, and

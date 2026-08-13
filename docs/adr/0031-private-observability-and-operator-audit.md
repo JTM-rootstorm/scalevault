@@ -4,6 +4,7 @@
 - Date: 2026-08-12
 - Supersedes: None
 - Extends: ADR 0005, ADR 0018, ADR 0023, and ADR 0024
+- Amended by: ADR 0033
 
 ## Context
 

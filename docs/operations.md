@@ -108,8 +108,10 @@ to the evidence boundary below rather than copying the report.
 Operational logs and alerts have a 30-day maximum; content-free recovery and
 acceptance reports may be retained for at most 400 days. Both classes also
 require operator-chosen byte caps, and the earlier age/capacity bound wins.
-Until the installed caps, alert receiver, and handling policy are selected and
-verified, retention activation remains pending rather than accepted.
+Until the installed caps are selected and verified, retention activation
+remains pending rather than accepted. External alert delivery is not required
+for M10; local rule evaluation and visible collector/rule health remain the
+acceptance boundary.
 
 ## Evidence boundary
 

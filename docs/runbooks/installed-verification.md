@@ -52,8 +52,8 @@ new mode-`0600` file below `/var/lib/kivra-memory/operator-reports`, and emits
 no report contents to stdout or the journal.
 
 Verify PostgreSQL 17 durability/WAL settings and recovery-chain freshness,
-Forgejo pinned host key and external head anchor, encrypted offsite copy age,
-alert rules/delivery, fixed-label Prometheus output, root-only report access,
+Forgejo pinned host key and external head anchor, alert rule evaluation,
+fixed-label Prometheus output, root-only report access,
 and content-free journal/NPM/metric/artifact canary scans. Confirm
 `/var/lib/kivra-memory-sealed/destruction-ledger` is root-owned, group
 `kivra-destruction-ledger`, mode `2770`; only the dedicated destruction broker
@@ -63,15 +63,19 @@ freshness anchor matches or is monotonically extended before reactivation.
 
 Operational journal/alert history may not exceed 30 days; content-free
 recovery/acceptance reports may not exceed 400 days. Both need explicit
-operator-chosen byte caps. Missing caps, alert receiver, or receiver handling
-policy leaves installed retention pending.
+operator-chosen byte caps. Missing caps leave installed retention pending.
+External alert delivery is not required for M10.
 
 Apply the complete [NPM drift gate](npm-drift.md), provider revocation gates
 when provisioned, and separate [PITR](postgresql-pitr.md),
-[Forgejo](forgejo-recovery.md), and
-[secondary-bundle](secondary-bundle-recovery.md) drills. Record each category
+[Forgejo](forgejo-recovery.md), and, when operator-scheduled,
+[secondary-bundle](secondary-bundle-recovery.md) drills. Backblaze is the
+operator-managed offsite destination and its provider drill is not an M10
+blocker. Record each category
 as `pass`, `fail`, `pending`, or `not-applicable`; absence of evidence is
-`pending`, never `pass`.
+`pending`, never `pass`, for required categories. Record the Backblaze provider
+category as `not-applicable` to the M10 decision unless the operator separately
+supplies evidence.
 
 For every candidate public artifact, run `kivra-memory-scan-public-artifact`
 with independently supplied synthetic canaries. Preserve only `ok`, the
