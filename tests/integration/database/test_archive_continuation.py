@@ -38,7 +38,6 @@ from tests.integration.database.test_archive_restore_acceptance import (
 )
 
 _ROOT = Path(__file__).resolve().parents[3]
-pytest_plugins = ("tests.integration.database.conftest",)
 
 
 class PostgreSQLTestServer(Protocol):
