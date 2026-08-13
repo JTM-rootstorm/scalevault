@@ -1,0 +1,339 @@
+#!/usr/bin/python3
+"""Emit a content-free, read-only audit of an installed ScaleVault release."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+from pathlib import Path
+from typing import Never
+
+REVISION_RE = re.compile(r"\A[0-9a-f]{40}\Z")
+SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
+EXPECTED_MIGRATION = "0011_observability_aggregates"
+VALID_UNIT_STATES = {
+    "active",
+    "activating",
+    "deactivating",
+    "disabled",
+    "enabled",
+    "failed",
+    "inactive",
+    "indirect",
+    "linked",
+    "masked",
+    "not-found",
+    "static",
+    "unknown",
+}
+
+
+class AuditError(RuntimeError):
+    """A content-free installed-audit failure."""
+
+
+def _fail(code: str) -> Never:
+    raise AuditError(code)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _small_line(path: Path, pattern: re.Pattern[str] | None = None) -> str:
+    metadata = path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size > 256:
+        _fail("release_metadata_invalid")
+    try:
+        value = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        _fail("release_metadata_invalid")
+    if not value or (pattern is not None and not pattern.fullmatch(value)):
+        _fail("release_metadata_invalid")
+    return value
+
+
+def _command(command: list[str]) -> tuple[int, str]:
+    environment = {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    }
+    result = subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+        env=environment,
+    )
+    return result.returncode, result.stdout.strip()
+
+
+def _unit_state(systemctl: Path, action: str, unit: str) -> str:
+    returncode, output = _command([str(systemctl), action, unit])
+    state = output.splitlines()[0] if output else ("not-found" if returncode else "unknown")
+    if state not in VALID_UNIT_STATES:
+        return "unknown"
+    return state
+
+
+def _credential_metadata(unit_path: Path) -> list[dict[str, object]]:
+    credentials: list[dict[str, object]] = []
+    for line in unit_path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("LoadCredential="):
+            continue
+        assignment = line.removeprefix("LoadCredential=")
+        name, separator, raw_path = assignment.partition(":")
+        record: dict[str, object] = {"name": name, "present": False, "valid": None}
+        if not separator or not name or not raw_path.startswith("/"):
+            _fail("unit_credential_invalid")
+        path = Path(raw_path)
+        try:
+            metadata = path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            credentials.append(record)
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            _fail("credential_not_regular")
+        valid = (
+            metadata.st_uid == 0
+            and metadata.st_nlink == 1
+            and 0 < metadata.st_size <= 8192
+            and stat.S_IMODE(metadata.st_mode) & 0o077 == 0
+        )
+        record.update(
+            {
+                "gid": metadata.st_gid,
+                "link_count": metadata.st_nlink,
+                "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+                "present": True,
+                "size_bytes": metadata.st_size,
+                "uid": metadata.st_uid,
+                "valid": valid,
+            }
+        )
+        credentials.append(record)
+    return credentials
+
+
+def _release(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
+    pointer = Path(args.release_pointer)
+    releases_root = Path(args.releases_root).resolve()
+    if not pointer.is_absolute() or not pointer.is_symlink():
+        _fail("release_pointer_invalid")
+    target_text = os.readlink(pointer)
+    if not os.path.isabs(target_text):
+        _fail("release_pointer_invalid")
+    release = Path(target_text).resolve(strict=True)
+    if release.parent != releases_root or release.is_symlink() or not release.is_dir():
+        _fail("release_target_invalid")
+    revision = _small_line(release / "REVISION", REVISION_RE)
+    archive_sha256 = _small_line(release / "SOURCE_ARCHIVE.sha256", SHA256_RE)
+    migration = _small_line(release / "EXPECTED_MIGRATION")
+    if release.name != revision or migration != EXPECTED_MIGRATION:
+        _fail("release_identity_mismatch")
+    try:
+        manifest = json.loads((release / "RELEASE_MANIFEST.json").read_bytes())
+    except (OSError, ValueError):
+        _fail("release_manifest_invalid")
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("version") != 1
+        or manifest.get("revision") != revision
+        or manifest.get("source_archive_sha256") != archive_sha256
+        or manifest.get("expected_migration") != migration
+        or not isinstance(manifest.get("executable_sha256"), dict)
+        or not isinstance(manifest.get("deployment_script_sha256"), dict)
+    ):
+        _fail("release_manifest_invalid")
+    archive = Path(args.archives_root) / f"{revision}.tar"
+    archive_metadata = archive.stat(follow_symlinks=False)
+    if (
+        not stat.S_ISREG(archive_metadata.st_mode)
+        or archive_metadata.st_uid != 0
+        or stat.S_IMODE(archive_metadata.st_mode) & 0o222
+        or _sha256(archive) != archive_sha256
+    ):
+        _fail("source_archive_mismatch")
+    writable_count = 0
+    non_root_owned_count = 0
+    for current, directories, files in os.walk(release, followlinks=False):
+        for name in [".", *directories, *files]:
+            path = Path(current) if name == "." else Path(current, name)
+            if not path.is_symlink():
+                metadata = path.stat()
+                if stat.S_IMODE(metadata.st_mode) & 0o222:
+                    writable_count += 1
+                if metadata.st_uid != 0:
+                    non_root_owned_count += 1
+    if writable_count or non_root_owned_count:
+        _fail("release_tree_not_immutable")
+    executable_digests: dict[str, str] = {}
+    for name, expected in sorted(manifest["executable_sha256"].items()):
+        if (
+            not isinstance(name, str)
+            or not isinstance(expected, str)
+            or not SHA256_RE.fullmatch(expected)
+        ):
+            _fail("release_manifest_invalid")
+        executable = release / ".venv" / "bin" / name
+        if not executable.is_file() or executable.is_symlink():
+            _fail("release_executable_missing")
+        actual = _sha256(executable)
+        if actual != expected:
+            _fail("release_executable_mismatch")
+        executable_digests[name] = actual
+    deployment_script_digests: dict[str, str] = {}
+    for name, expected in sorted(manifest["deployment_script_sha256"].items()):
+        if (
+            not isinstance(name, str)
+            or not name.startswith("kivra-memory-")
+            or "/" in name
+            or not isinstance(expected, str)
+            or not SHA256_RE.fullmatch(expected)
+        ):
+            _fail("release_manifest_invalid")
+        installed = Path(args.libexec_root) / name
+        metadata = installed.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != 0
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+        ):
+            _fail("installed_deployment_script_invalid")
+        actual = _sha256(installed)
+        if actual != expected:
+            _fail("installed_deployment_script_mismatch")
+        deployment_script_digests[name] = actual
+    return release, {
+        "deployment_script_sha256": deployment_script_digests,
+        "expected_migration": migration,
+        "executable_sha256": executable_digests,
+        "release_manifest_sha256": _sha256(release / "RELEASE_MANIFEST.json"),
+        "revision": revision,
+        "source_archive_sha256": archive_sha256,
+        "tree_non_root_owned_entries": non_root_owned_count,
+        "tree_writable_entries": writable_count,
+    }
+
+
+def _audit(args: argparse.Namespace) -> None:
+    for raw_path in (
+        args.release_pointer,
+        args.releases_root,
+        args.archives_root,
+        args.libexec_root,
+        args.unit_root,
+        args.systemctl,
+        args.systemd_analyze,
+        args.runuser,
+        args.psql,
+    ):
+        if not Path(raw_path).is_absolute():
+            _fail("path_not_absolute")
+    release, result = _release(args)
+    source_unit_root = release / "deploy" / "memory-node" / "systemd"
+    installed_unit_root = Path(args.unit_root)
+    source_units = sorted(
+        (
+            *source_unit_root.glob("kivra-memory-*.service"),
+            *source_unit_root.glob("kivra-memory-*.path"),
+            *source_unit_root.glob("kivra-memory-*.timer"),
+        )
+    )
+    if not source_units:
+        _fail("release_units_missing")
+    units: dict[str, object] = {}
+    unit_paths: list[str] = []
+    for source in source_units:
+        installed = installed_unit_root / source.name
+        try:
+            installed_metadata = installed.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            _fail("installed_unit_missing")
+        if (
+            not stat.S_ISREG(installed_metadata.st_mode)
+            or installed_metadata.st_uid != 0
+            or stat.S_IMODE(installed_metadata.st_mode) & 0o022
+        ):
+            _fail("installed_unit_missing")
+        source_digest = _sha256(source)
+        if _sha256(installed) != source_digest:
+            _fail("installed_unit_mismatch")
+        unit_paths.append(str(installed))
+        units[source.name] = {
+            "active": _unit_state(Path(args.systemctl), "is-active", source.name),
+            "credentials": _credential_metadata(installed),
+            "enabled": _unit_state(Path(args.systemctl), "is-enabled", source.name),
+            "sha256": source_digest,
+        }
+    verify_code, _ = _command([str(args.systemd_analyze), "verify", *unit_paths])
+    if verify_code:
+        _fail("systemd_verify_failed")
+    migration_code, migration = _command(
+        [
+            str(args.runuser),
+            "-u",
+            "postgres",
+            "--",
+            str(args.psql),
+            "--dbname=kivra_memory",
+            "--no-psqlrc",
+            "--tuples-only",
+            "--no-align",
+            "--quiet",
+            "--command=SELECT version_num FROM alembic_version",
+        ]
+    )
+    if migration_code or migration != EXPECTED_MIGRATION:
+        _fail("installed_migration_mismatch")
+    result.update(
+        {
+            "installed_migration": migration,
+            "result": "installed_audit_satisfied",
+            "systemd_verify": "pass",
+            "units": units,
+            "version": 1,
+        }
+    )
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--release-pointer", default="/opt/kivra-memory/app")
+    parser.add_argument("--releases-root", default="/opt/kivra-memory/releases")
+    parser.add_argument("--archives-root", default="/opt/kivra-memory/source-archives")
+    parser.add_argument("--libexec-root", default="/usr/local/libexec")
+    parser.add_argument("--unit-root", default="/etc/systemd/system")
+    parser.add_argument("--systemctl", default="/usr/bin/systemctl")
+    parser.add_argument("--systemd-analyze", default="/usr/bin/systemd-analyze")
+    parser.add_argument("--runuser", default="/usr/sbin/runuser")
+    parser.add_argument("--psql", default="/usr/bin/psql")
+    return parser
+
+
+def main() -> int:
+    try:
+        _audit(_parser().parse_args())
+    except (AuditError, OSError) as exc:
+        code = str(exc) if isinstance(exc, AuditError) else "installed_audit_io_failed"
+        print(code, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

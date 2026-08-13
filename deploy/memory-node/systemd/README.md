@@ -1,7 +1,11 @@
 # Memory Node units
 
-These units target the canonical Debian 13 LXC. Install the application under
-`/opt/kivra-memory/app`, place service environment files under
+These units target the canonical Debian 13 LXC. Install immutable versioned
+releases below `/opt/kivra-memory/releases/<full-revision>` and select one with
+the atomic `/opt/kivra-memory/app` symlink; all application `ExecStart` paths
+resolve through that pointer. Follow the release preparation, pointer plan,
+apply, and installed-audit procedure in
+[`../scripts/README.md`](../scripts/README.md). Place service environment files under
 `/etc/kivra-memory`, and keep persistent state below
 `/mnt/memory/kivra-memory`. The units refuse to start without that mount.
 
@@ -26,7 +30,8 @@ useradd --system --no-create-home --home-dir /nonexistent \
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-ingress
 mountpoint --quiet /mnt/memory
-install -d -o root -g root -m 0755 /opt/kivra-memory/app
+install -d -o root -g root -m 0755 /opt/kivra-memory/releases
+install -d -o root -g root -m 0755 /opt/kivra-memory/source-archives
 install -d -o root -g kivra-memory -m 0750 /etc/kivra-memory
 install -d -o root -g root -m 0755 /mnt/memory/kivra-memory
 install -d -o root -g kivra-memory -m 2750 \
@@ -39,6 +44,12 @@ Treat an already-existing account with unexpected UID, GID, shell, home, or
 group membership as an installation error; inspect and reconcile it rather than
 blindly replacing it. The application tree is root-owned and not writable by a
 service account.
+
+Do not create `/opt/kivra-memory/app` as a directory. Preserve the prior
+versioned release and select the reviewed candidate only through the atomic
+pointer operation. Before starting services, verify that the pointer resolves
+to the exact full revision, its source archive checksum matches, and the
+installed audit reports migration `0011_observability_aggregates`.
 
 Create `memory-api.env`, `memory-codex-ingress.env`, `memory-worker.env`,
 `memory-lifecycle-worker.env`, and `tunnel.env` locally under

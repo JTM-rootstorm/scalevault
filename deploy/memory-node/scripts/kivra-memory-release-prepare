@@ -1,0 +1,389 @@
+#!/usr/bin/python3
+"""Prepare an exact versioned release and atomically select a reviewed release."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+from contextlib import suppress
+from pathlib import Path
+from typing import Never
+
+REVISION_RE = re.compile(r"\A[0-9a-f]{40}\Z")
+SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
+EXPECTED_MIGRATION = "0011_observability_aggregates"
+ENTRY_POINTS = (
+    "kivra-memory-api",
+    "kivra-memory-archive-recovery",
+    "kivra-memory-archive-exporter",
+    "kivra-memory-codex-ingress",
+    "kivra-memory-credential-admin",
+    "kivra-memory-diagnose",
+    "kivra-memory-destruction-broker",
+    "kivra-memory-github-ingress",
+    "kivra-memory-lifecycle-worker",
+    "kivra-memory-metrics-exporter",
+    "kivra-memory-operator-report",
+    "kivra-memory-operator-report-run",
+    "kivra-memory-scan-operational-canaries",
+    "kivra-memory-scan-public-artifact",
+    "kivra-memory-sealed-restore-reconcile",
+    "kivra-memory-sealed-worker",
+    "kivra-memory-worker",
+)
+
+
+class ReleaseError(RuntimeError):
+    """A content-free release preparation failure."""
+
+
+def _fail(code: str) -> Never:
+    raise ReleaseError(code)
+
+
+def _run(command: list[str], *, cwd: Path, stdout: object = subprocess.PIPE) -> bytes:
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=stdout,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        _fail("release_command_failed")
+    return result.stdout if isinstance(result.stdout, bytes) else b""
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_write(path: Path, value: bytes, mode: int = 0o644) -> None:
+    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(value)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
+
+
+def _repository_revision(repository: Path, requested: str) -> str:
+    if not repository.is_absolute() or not repository.is_dir():
+        _fail("repository_invalid")
+    top = _run(["git", "rev-parse", "--show-toplevel"], cwd=repository).decode().strip()
+    if Path(top) != repository:
+        _fail("repository_not_top_level")
+    # Release bytes come only from the exact committed tree. Preserve known
+    # untracked operator plans while refusing any tracked or staged drift.
+    if _run(["git", "status", "--porcelain=v1", "--untracked-files=no"], cwd=repository):
+        _fail("repository_dirty")
+    revision = (
+        _run(["git", "rev-parse", "--verify", f"{requested}^{{commit}}"], cwd=repository)
+        .decode()
+        .strip()
+    )
+    head = _run(["git", "rev-parse", "--verify", "HEAD"], cwd=repository).decode().strip()
+    if not REVISION_RE.fullmatch(revision) or requested != revision or head != revision:
+        _fail("revision_not_exact_head")
+    return revision
+
+
+def _make_read_only(root: Path) -> None:
+    for current, directories, files in os.walk(root, topdown=False, followlinks=False):
+        for name in files:
+            path = Path(current, name)
+            if not path.is_symlink():
+                path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o222)
+        for name in directories:
+            path = Path(current, name)
+            if not path.is_symlink():
+                path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o222)
+    root.chmod(stat.S_IMODE(root.stat().st_mode) & ~0o222)
+
+
+def _prepare(args: argparse.Namespace) -> None:
+    if os.geteuid() == 0:
+        _fail("prepare_must_be_unprivileged")
+    repository = Path(args.repository)
+    releases_root = Path(args.releases_root)
+    archives_root = Path(args.archives_root)
+    uv = Path(args.uv)
+    if not all(path.is_absolute() for path in (repository, releases_root, archives_root, uv)):
+        _fail("path_not_absolute")
+    if not uv.is_file() or uv.is_symlink() or not os.access(uv, os.X_OK):
+        _fail("uv_invalid")
+    revision = _repository_revision(repository, args.revision)
+    release = releases_root / revision
+    archive = archives_root / f"{revision}.tar"
+    checksum_file = archives_root / f"{revision}.tar.sha256"
+    if release.exists() or release.is_symlink() or archive.exists() or checksum_file.exists():
+        _fail("release_already_exists")
+    releases_root.mkdir(parents=True, exist_ok=True)
+    archives_root.mkdir(parents=True, exist_ok=True)
+    archive_temporary = archives_root / f".{revision}.tar.tmp.{os.getpid()}"
+    release.mkdir(mode=0o700)
+    try:
+        descriptor = os.open(archive_temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            _run(
+                ["git", "archive", "--format=tar", revision],
+                cwd=repository,
+                stdout=output,
+            )
+            output.flush()
+            os.fsync(output.fileno())
+        archive_sha256 = _sha256(archive_temporary)
+        with tarfile.open(archive_temporary, mode="r:") as source:
+            source.extractall(release, filter="data")
+        _run(
+            [str(uv), "sync", "--locked", "--no-dev", "--project", str(release)],
+            cwd=release,
+        )
+        executable_digests: dict[str, str] = {}
+        for entry_point in ENTRY_POINTS:
+            executable = release / ".venv" / "bin" / entry_point
+            if not executable.is_file() or executable.is_symlink():
+                _fail("release_entry_point_missing")
+            executable_digests[entry_point] = _sha256(executable)
+        deployment_script_digests: dict[str, str] = {}
+        for script in sorted(
+            (release / "deploy" / "memory-node" / "scripts").glob("kivra-memory-*")
+        ):
+            if not script.is_file() or script.is_symlink():
+                _fail("release_deployment_script_invalid")
+            deployment_script_digests[script.name] = _sha256(script)
+        if not deployment_script_digests:
+            _fail("release_deployment_script_invalid")
+        manifest = {
+            "deployment_script_sha256": deployment_script_digests,
+            "expected_migration": EXPECTED_MIGRATION,
+            "executable_sha256": executable_digests,
+            "revision": revision,
+            "source_archive_sha256": archive_sha256,
+            "version": 1,
+        }
+        _atomic_write(release / "REVISION", f"{revision}\n".encode())
+        _atomic_write(release / "SOURCE_ARCHIVE.sha256", f"{archive_sha256}\n".encode())
+        _atomic_write(release / "EXPECTED_MIGRATION", f"{EXPECTED_MIGRATION}\n".encode())
+        _atomic_write(
+            release / "RELEASE_MANIFEST.json",
+            (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        )
+        os.replace(archive_temporary, archive)
+        archive.chmod(0o444)
+        _atomic_write(checksum_file, f"{archive_sha256}  {archive.name}\n".encode(), 0o444)
+        _make_read_only(release)
+    except Exception:
+        shutil.rmtree(release, ignore_errors=True)
+        for path in (archive_temporary, archive, checksum_file):
+            with suppress(FileNotFoundError):
+                path.unlink()
+        raise
+    print("release_prepared")
+    print(f"revision={revision}")
+    print(f"source_archive_sha256={archive_sha256}")
+    print(f"migration_head={EXPECTED_MIGRATION}")
+
+
+def _read_manifest(release: Path) -> dict[str, object]:
+    if not release.is_absolute() or not release.is_dir() or release.is_symlink():
+        _fail("release_invalid")
+    try:
+        raw = (release / "RELEASE_MANIFEST.json").read_bytes()
+        manifest = json.loads(raw)
+    except (OSError, ValueError):
+        _fail("release_manifest_invalid")
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("version") != 1
+        or not isinstance(manifest.get("revision"), str)
+        or not REVISION_RE.fullmatch(manifest["revision"])
+        or release.name != manifest["revision"]
+        or not isinstance(manifest.get("source_archive_sha256"), str)
+        or not SHA256_RE.fullmatch(manifest["source_archive_sha256"])
+        or manifest.get("expected_migration") != EXPECTED_MIGRATION
+    ):
+        _fail("release_manifest_invalid")
+    return manifest
+
+
+def _require_installed_release(release: Path) -> None:
+    expected_uid = 0 if os.geteuid() == 0 else os.geteuid()
+    for current, directories, files in os.walk(release, followlinks=False):
+        for name in [".", *directories, *files]:
+            path = Path(current) if name == "." else Path(current, name)
+            if path.is_symlink():
+                continue
+            metadata = path.stat()
+            if metadata.st_uid != expected_uid or stat.S_IMODE(metadata.st_mode) & 0o222:
+                _fail("release_not_immutable")
+
+
+def _current_pointer(pointer: Path) -> str:
+    if not pointer.exists() and not pointer.is_symlink():
+        return "absent"
+    if not pointer.is_symlink():
+        _fail("release_pointer_not_symlink")
+    target = os.readlink(pointer)
+    if not os.path.isabs(target):
+        _fail("release_pointer_not_absolute")
+    return os.path.normpath(target)
+
+
+def _plan_pointer(args: argparse.Namespace) -> None:
+    release = Path(args.release)
+    pointer = Path(args.pointer)
+    plan_file = Path(args.plan_file)
+    if not pointer.is_absolute() or not plan_file.is_absolute():
+        _fail("path_not_absolute")
+    manifest = _read_manifest(release)
+    expected_current = args.expected_current
+    if expected_current != "absent":
+        expected_path = Path(expected_current)
+        if not expected_path.is_absolute():
+            _fail("expected_pointer_invalid")
+        expected_current = os.path.normpath(expected_current)
+    if _current_pointer(pointer) != expected_current:
+        _fail("release_pointer_changed")
+    plan = {
+        "expected_current": expected_current,
+        "pointer": str(pointer),
+        "release": str(release),
+        "release_manifest_sha256": _sha256(release / "RELEASE_MANIFEST.json"),
+        "revision": manifest["revision"],
+        "version": 1,
+    }
+    if plan_file.exists() or plan_file.is_symlink():
+        _fail("plan_already_exists")
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(
+        plan_file,
+        (json.dumps(plan, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        0o600,
+    )
+    print("release_pointer_plan_ready")
+    print(f"revision={manifest['revision']}")
+
+
+def _apply_pointer(args: argparse.Namespace) -> None:
+    plan_path = Path(args.plan_file)
+    if not plan_path.is_absolute():
+        _fail("plan_invalid")
+    try:
+        descriptor = os.open(plan_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError:
+        _fail("plan_invalid")
+    try:
+        plan_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(plan_stat.st_mode)
+            or plan_stat.st_nlink != 1
+            or plan_stat.st_size > 16_384
+            or (os.geteuid() == 0 and plan_stat.st_uid != 0)
+            or stat.S_IMODE(plan_stat.st_mode) & 0o077
+        ):
+            _fail("plan_invalid")
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = -1
+            plan = json.loads(source.read(16_385))
+    except (OSError, ValueError):
+        _fail("plan_invalid")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if (
+        not isinstance(plan, dict)
+        or set(plan)
+        != {
+            "expected_current",
+            "pointer",
+            "release",
+            "release_manifest_sha256",
+            "revision",
+            "version",
+        }
+        or plan.get("version") != 1
+    ):
+        _fail("plan_invalid")
+    release = Path(str(plan["release"]))
+    pointer = Path(str(plan["pointer"]))
+    if not release.is_absolute() or not pointer.is_absolute():
+        _fail("plan_invalid")
+    manifest = _read_manifest(release)
+    _require_installed_release(release)
+    if (
+        manifest["revision"] != plan["revision"]
+        or _sha256(release / "RELEASE_MANIFEST.json") != plan["release_manifest_sha256"]
+        or _current_pointer(pointer) != plan["expected_current"]
+    ):
+        _fail("release_pointer_changed")
+    pointer.parent.mkdir(parents=False, exist_ok=True)
+    temporary = pointer.with_name(f".{pointer.name}.next.{os.getpid()}")
+    try:
+        os.symlink(release, temporary)
+        os.replace(temporary, pointer)
+        directory_fd = os.open(pointer.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
+    print("release_pointer_applied")
+    print(f"revision={manifest['revision']}")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    prepare = commands.add_parser("prepare")
+    prepare.add_argument("--repository", required=True)
+    prepare.add_argument("--revision", required=True)
+    prepare.add_argument("--releases-root", required=True)
+    prepare.add_argument("--archives-root", required=True)
+    prepare.add_argument("--uv", default="/usr/local/bin/uv")
+    prepare.set_defaults(handler=_prepare)
+    plan = commands.add_parser("plan-pointer")
+    plan.add_argument("--release", required=True)
+    plan.add_argument("--pointer", required=True)
+    plan.add_argument("--expected-current", required=True)
+    plan.add_argument("--plan-file", required=True)
+    plan.set_defaults(handler=_plan_pointer)
+    apply = commands.add_parser("apply-pointer")
+    apply.add_argument("--plan-file", required=True)
+    apply.set_defaults(handler=_apply_pointer)
+    return parser
+
+
+def main() -> int:
+    try:
+        args = _parser().parse_args()
+        args.handler(args)
+    except (OSError, ReleaseError) as exc:
+        code = str(exc) if isinstance(exc, ReleaseError) else "release_io_failed"
+        print(code, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

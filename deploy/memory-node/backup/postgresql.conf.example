@@ -3,7 +3,7 @@
 wal_level = replica
 archive_mode = on
 archive_timeout = '60s'
-archive_command = '/usr/local/libexec/kivra-memory-postgres-backup archive-wal /var/lib/postgresql/17/main/%p %f'
+archive_command = '/usr/local/libexec/kivra-memory-postgres-backup archive-wal /mnt/memory/kivra-memory/postgresql/17/main/%p %f'
 full_page_writes = on
 fsync = on
 synchronous_commit = on
