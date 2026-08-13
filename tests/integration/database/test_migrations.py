@@ -26,7 +26,7 @@ from .conftest import (
     installed_extensions,
 )
 
-EXPECTED_HEAD = "0010_ingress_provider_heads"
+EXPECTED_HEAD = "0011_observability_aggregates"
 revision_module = importlib.import_module("migrations.versions.0001_initial_domain")
 
 
@@ -128,7 +128,7 @@ def test_zero_to_head_and_full_round_trip(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (10, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (11, EXPECTED_HEAD, EXPECTED_HEAD)
 
     runner.downgrade("base")
     with runner.connect() as connection:
@@ -162,7 +162,7 @@ def test_existing_0001_database_upgrades_to_hybrid_retrieval(
                 "SELECT contract_version, minimum_reader_revision, minimum_writer_revision "
                 "FROM alembic_compatibility WHERE component = 'memory_node'"
             )
-        ).one() == (10, EXPECTED_HEAD, EXPECTED_HEAD)
+        ).one() == (11, EXPECTED_HEAD, EXPECTED_HEAD)
 
 
 def test_existing_0007_live_like_identity_rows_upgrade_with_no_credentials(

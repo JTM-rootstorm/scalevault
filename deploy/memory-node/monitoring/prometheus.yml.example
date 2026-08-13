@@ -10,3 +10,7 @@ scrape_configs:
     static_configs:
       - targets:
           - 127.0.0.1:8080
+  - job_name: scalevault-database-metrics
+    static_configs:
+      - targets:
+          - 127.0.0.1:9098

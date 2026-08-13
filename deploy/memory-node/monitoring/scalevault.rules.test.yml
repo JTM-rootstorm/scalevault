@@ -208,6 +208,10 @@ tests:
         values: '0 0 0 1 1 1 1 1 1 1'
       - series: 'up{job="scalevault-postgresql",instance="loopback"}'
         values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'up{job="scalevault-database-metrics",instance="loopback"}'
+        values: '1 1 1 1 1 1 1 1 1 1'
+      - series: 'kivra_memory_database_collector_up'
+        values: '0 0 0 1 1 1 1 1 1 1'
       - series: 'kivra_memory_backup_age_seconds{kind="base"}'
         values: '_ _ _ _ _ _ _ _ _ 0'
       - series: 'kivra_memory_wal_oldest_age_seconds'
@@ -228,11 +232,27 @@ tests:
       - eval_time: 3m
         alertname: ScaleVaultMemoryNodeScrapeUnavailable
         exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, category: monitoring}
+            exp_annotations: {summary: "ScaleVault database aggregate metrics are unavailable", response: "database_metrics_unavailable"}
+      - eval_time: 3m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts: []
       - eval_time: 2m
         alertname: ScaleVaultPostgreSQLUnavailable
         exp_alerts:
           - exp_labels: {severity: critical, category: database, job: scalevault-postgresql, instance: loopback}
             exp_annotations: {summary: "ScaleVault PostgreSQL is unavailable", response: "database_unavailable"}
+      - eval_time: 2m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, category: monitoring}
+            exp_annotations: {summary: "ScaleVault database aggregate metrics are unavailable", response: "database_metrics_unavailable"}
       - eval_time: 3m
         alertname: ScaleVaultPostgreSQLUnavailable
         exp_alerts: []

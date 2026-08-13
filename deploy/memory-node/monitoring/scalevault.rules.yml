@@ -6,6 +6,11 @@ groups:
         for: 2m
         labels: {severity: critical, category: monitoring}
         annotations: {summary: "ScaleVault Memory Node metrics are unavailable", response: "monitoring_unavailable"}
+      - alert: ScaleVaultDatabaseMetricsUnavailable
+        expr: absent(up{job="scalevault-database-metrics"}) or up{job="scalevault-database-metrics"} == 0 or kivra_memory_database_collector_up == 0
+        for: 2m
+        labels: {severity: critical, category: monitoring}
+        annotations: {summary: "ScaleVault database aggregate metrics are unavailable", response: "database_metrics_unavailable"}
       - alert: ScaleVaultOperationalTelemetryMissing
         expr: up{job="scalevault-memory-node"} == 1 and on() (absent(kivra_memory_backup_age_seconds{kind="base"}) or absent(kivra_memory_wal_oldest_age_seconds) or absent(kivra_memory_storage_free_ratio))
         for: 5m

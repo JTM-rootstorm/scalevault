@@ -38,10 +38,12 @@ class FakeSession:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
 
-    async def execute(self, statement: object, parameters: dict[str, object]) -> FakeResult:
+    async def execute(
+        self, statement: object, parameters: dict[str, object] | None = None
+    ) -> FakeResult:
         query = str(statement)
-        self.calls.append((query, parameters))
-        if "AS check_name" in query:
+        self.calls.append((query, parameters or {}))
+        if "scalevault_operator_report_consistency" in query:
             return FakeResult([{"check_name": "memory_last_event", "state": "ok"}])
         return FakeResult([])
 
@@ -64,9 +66,9 @@ def test_report_queries_have_explicit_payload_silent_column_lists() -> None:
         assert "select *" not in statement
         identifiers = set(re.findall(r"[a-z][a-z0-9_]*", statement))
         assert identifiers.isdisjoint(FORBIDDEN_REPORT_COLUMNS), query.name
-        assert query.tenant_qualifiers
-        for qualifier in query.tenant_qualifiers:
-            assert f"{qualifier} = :tenant_id" in statement, query.name
+        assert query.tenant_qualifiers == (":tenant_id",)
+        assert ":tenant_id" in statement, query.name
+        assert " from public.scalevault_operator_report_" in " ".join(statement.split())
 
 
 @pytest.mark.asyncio
@@ -83,9 +85,11 @@ async def test_report_is_tenant_scoped_bounded_and_content_free() -> None:
         "backup": "status_artifact_required",
         "recovery": "status_artifact_required",
     }
-    assert len(session.calls) == len(REPORT_QUERIES)
-    assert all(parameters["limit"] == MAX_REPORT_ROWS for _, parameters in session.calls)
-    assert all(parameters["tenant_id"] == TENANT_ID for _, parameters in session.calls)
+    assert session.calls[0] == ("SET LOCAL ROLE kivra_memory_operator_report", {})
+    function_calls = session.calls[1:]
+    assert len(function_calls) == len(REPORT_QUERIES)
+    assert all(parameters["limit"] == MAX_REPORT_ROWS for _, parameters in function_calls)
+    assert all(parameters["tenant_id"] == TENANT_ID for _, parameters in function_calls)
 
 
 @pytest.mark.asyncio

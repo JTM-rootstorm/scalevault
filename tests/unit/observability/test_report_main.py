@@ -46,10 +46,11 @@ def test_database_url_comes_only_from_fixed_systemd_credential(
     _credential(
         monkeypatch,
         tmp_path / "credentials",
-        "postgresql+psycopg://kivra_memory_api:secret@127.0.0.1/kivra_memory",
+        "postgresql+psycopg://kivra_memory_operator_report_login:secret@127.0.0.1/kivra_memory",
     )
-    with pytest.raises(ValueError, match="database_boundary_unavailable"):
+    assert "kivra_memory_operator_report_login" in (
         report_main._database_url_from_systemd_credential()
+    )
 
 
 @pytest.mark.parametrize(
@@ -62,11 +63,11 @@ def test_database_url_comes_only_from_fixed_systemd_credential(
         "sqlite:///tmp/kivra-memory.db",
     ],
 )
-def test_database_boundary_rejects_every_current_role_and_coordinate(
+def test_database_boundary_rejects_other_roles_and_remote_coordinates(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, database_url: str
 ) -> None:
     _credential(monkeypatch, tmp_path / "credentials", database_url)
-    with pytest.raises(ValueError, match="database_boundary_unavailable"):
+    with pytest.raises(ValueError, match="database_credential_invalid"):
         report_main._database_url_from_systemd_credential()
 
 
@@ -131,7 +132,7 @@ def test_successful_cli_writes_only_to_protected_destination(
     monkeypatch.setattr(
         report_main,
         "_database_url_from_systemd_credential",
-        lambda: "postgresql+psycopg://kivra_memory_api@127.0.0.1/kivra_memory",
+        lambda: "postgresql+psycopg://kivra_memory_operator_report_login@127.0.0.1/kivra_memory",
     )
     monkeypatch.setattr(report_main, "_render", render)
     monkeypatch.setattr(

@@ -88,6 +88,11 @@ class BoundedMetric:
 
         self._validate_labels(labels)
 
+    def clear(self) -> None:
+        """Remove previously published labelled samples."""
+
+        self._collector.clear()
+
     def inc(self, *, amount: float = 1.0, **labels: str) -> None:
         child = self._child(labels)
         if self.spec.kind not in {"counter", "gauge"}:
@@ -442,6 +447,21 @@ METRIC_SPECS = (
         "gauge",
         ("component",),
         _allowed(component=("backup", "database", "monitoring", "wal")),
+    ),
+    MetricSpec(
+        "kivra_memory_database_collector_up",
+        "Whether the least-privilege database snapshot collector last succeeded.",
+        "gauge",
+    ),
+    MetricSpec(
+        "kivra_memory_database_collector_failures_total",
+        "Least-privilege database snapshot collection failures.",
+        "counter",
+    ),
+    MetricSpec(
+        "kivra_memory_database_collector_last_success_unixtime",
+        "Unix time of the last successful least-privilege database snapshot.",
+        "gauge",
     ),
 )
 

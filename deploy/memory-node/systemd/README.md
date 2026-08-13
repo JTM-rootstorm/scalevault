@@ -14,6 +14,8 @@ groupadd --system kivra-memory
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-api
 useradd --system --user-group --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin memory-metrics
+useradd --system --user-group --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin memory-tunnel
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid kivra-memory memory-worker
@@ -52,6 +54,7 @@ systemd credential source:
 | Consumer | Source file | Credential name |
 |---|---|---|
 | canonical API and Codex ingress | `/etc/kivra-memory/memory-api-database-url` | `database-url` |
+| database metrics exporter | `/etc/kivra-memory/credentials/metrics-database-url` | `database-url` |
 | embedding worker | `/etc/kivra-memory/memory-worker-database-url` | `database-url` |
 | lifecycle worker | `/etc/kivra-memory/memory-lifecycle-worker-database-url` | `database-url` |
 | sealed purge worker | `/etc/kivra-memory/memory-sealed-worker-database-url` | `database-url` |
@@ -62,6 +65,20 @@ systemd credential source:
 Each file contains one local, percent-encoded PostgreSQL URL for exactly the
 unit's role, without a trailing newline. Private keys and API keys also use
 systemd credentials rather than environment files.
+
+The metrics URL must use only the `kivra_memory_metrics` login. Install the
+single authorized UUIDv7 tenant scope at `/etc/kivra-memory/metrics-tenant-id`.
+Both source files are root-owned mode `0600`; systemd exposes private copies to
+`memory-metrics`. Install and activate the loopback-only exporter after both
+credentials and the reviewed observability functions exist:
+
+```sh
+install -o root -g root -m 0644 \
+  deploy/memory-node/systemd/kivra-memory-metrics-exporter.service \
+  /etc/systemd/system/kivra-memory-metrics-exporter.service
+systemd-analyze verify /etc/systemd/system/kivra-memory-metrics-exporter.service
+systemctl enable --now kivra-memory-metrics-exporter.service
+```
 
 The Milestone 6 services have separate Unix users and PostgreSQL roles. The
 exporter uses `kivra_memory_exporter`. GitHub discovery and validation use

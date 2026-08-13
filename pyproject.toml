@@ -62,6 +62,7 @@ kivra-memory-archive-recovery = "kivra_memory.tools.archive_recovery:main"
 kivra-memory-scan-public-artifact = "kivra_memory.security.leakage_scanner:main"
 kivra-memory-operator-report = "kivra_memory.observability.report_main:main"
 kivra-memory-operator-report-run = "kivra_memory.observability.report_runner:main"
+kivra-memory-metrics-exporter = "kivra_memory.observability.metrics_exporter:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["services/memory-node/src/kivra_memory"]

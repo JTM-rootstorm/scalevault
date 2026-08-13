@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Final
 from uuid import UUID
 
+from sqlalchemy.engine import make_url
+
 from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.observability.reports import OperatorReportRepository
 from kivra_memory.security.credential_files import read_systemd_credential_text
@@ -35,21 +37,26 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _database_url_from_systemd_credential() -> str:
-    """Fail closed until the reviewed operator-report database boundary exists."""
+    """Load only the local, dedicated operator-report login credential."""
 
     try:
-        # Still validate that deployment supplied a protected credential; do
-        # not authorize any current database role to use it.  The reviewed M10
-        # migration must replace this activation gate only together with role,
-        # grant, SECURITY DEFINER, cross-tenant, and payload-denial tests.
-        read_systemd_credential_text(
+        value = read_systemd_credential_text(
             DATABASE_CREDENTIAL_NAME,
             minimum_bytes=1,
             maximum_bytes=_DATABASE_URL_MAXIMUM_BYTES,
         )
+        url = make_url(value)
+        if (
+            url.drivername not in {"postgresql", "postgresql+psycopg"}
+            or url.username != "kivra_memory_operator_report_login"
+            or url.database != "kivra_memory"
+            or url.host not in {None, "localhost", "127.0.0.1", "::1"}
+            or set(url.query) & {"host", "hostaddr", "service", "servicefile"}
+        ):
+            raise ValueError
     except (OSError, ValueError):
         raise ValueError("operator_report_database_credential_invalid") from None
-    raise ValueError("operator_report_database_boundary_unavailable")
+    return value
 
 
 async def _render(arguments: argparse.Namespace, database_url: str) -> bytes:

@@ -52,7 +52,11 @@ BEGIN
             ('kivra_memory_worker', true),
             ('kivra_memory_purge', true),
             ('kivra_memory_ingress', true),
-            ('kivra_memory_exporter', true)
+            ('kivra_memory_exporter', true),
+            ('kivra_memory_observability', false),
+            ('kivra_memory_metrics', true),
+            ('kivra_memory_operator_report', false),
+            ('kivra_memory_operator_report_login', true)
         ) AS roles(name, can_login)
     LOOP
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = role_name) THEN
@@ -86,6 +90,47 @@ ALTER ROLE kivra_memory_ingress
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 ALTER ROLE kivra_memory_exporter
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE kivra_memory_observability
+    NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE kivra_memory_metrics
+    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE kivra_memory_operator_report
+    NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+ALTER ROLE kivra_memory_operator_report_login
+    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
+
+-- Converge capability membership before granting the two intended SET-only
+-- wrapper relationships.  This removes stale memberships on bootstrap reruns.
+REVOKE kivra_memory_observability FROM
+    kivra_memory_owner,
+    kivra_memory_migrator,
+    kivra_memory_credential_admin,
+    kivra_memory_api,
+    kivra_memory_policy,
+    kivra_memory_genesis_importer,
+    kivra_memory_worker,
+    kivra_memory_purge,
+    kivra_memory_ingress,
+    kivra_memory_exporter,
+    kivra_memory_operator_report,
+    kivra_memory_operator_report_login;
+REVOKE kivra_memory_operator_report FROM
+    kivra_memory_owner,
+    kivra_memory_migrator,
+    kivra_memory_credential_admin,
+    kivra_memory_api,
+    kivra_memory_policy,
+    kivra_memory_genesis_importer,
+    kivra_memory_worker,
+    kivra_memory_purge,
+    kivra_memory_ingress,
+    kivra_memory_exporter,
+    kivra_memory_observability,
+    kivra_memory_metrics;
+GRANT kivra_memory_observability TO kivra_memory_metrics
+    WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
+GRANT kivra_memory_operator_report TO kivra_memory_operator_report_login
+    WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 
 REVOKE kivra_memory_owner FROM
     kivra_memory_credential_admin,
@@ -95,7 +140,9 @@ REVOKE kivra_memory_owner FROM
     kivra_memory_worker,
     kivra_memory_purge,
     kivra_memory_ingress,
-    kivra_memory_exporter;
+    kivra_memory_exporter,
+    kivra_memory_metrics,
+    kivra_memory_operator_report_login;
 REVOKE kivra_memory_migrator FROM
     kivra_memory_credential_admin,
     kivra_memory_api,
@@ -104,7 +151,9 @@ REVOKE kivra_memory_migrator FROM
     kivra_memory_worker,
     kivra_memory_purge,
     kivra_memory_ingress,
-    kivra_memory_exporter;
+    kivra_memory_exporter,
+    kivra_memory_metrics,
+    kivra_memory_operator_report_login;
 GRANT kivra_memory_owner TO kivra_memory_migrator
     WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 
@@ -123,6 +172,16 @@ BEGIN
         pg_catalog.current_database(),
         'kivra_memory_owner'
     );
+    EXECUTE format(
+        'ALTER ROLE kivra_memory_metrics IN DATABASE %I SET role = %L',
+        pg_catalog.current_database(),
+        'kivra_memory_observability'
+    );
+    EXECUTE format(
+        'ALTER ROLE kivra_memory_operator_report_login IN DATABASE %I SET role = %L',
+        pg_catalog.current_database(),
+        'kivra_memory_operator_report'
+    );
 END
 $bootstrap$;
 
@@ -139,7 +198,8 @@ BEGIN
         'kivra_memory_credential_admin, '
         'kivra_memory_api, kivra_memory_worker, kivra_memory_ingress, '
         'kivra_memory_exporter, kivra_memory_policy, kivra_memory_purge, '
-        'kivra_memory_genesis_importer',
+        'kivra_memory_genesis_importer, kivra_memory_metrics, '
+        'kivra_memory_operator_report_login',
         pg_catalog.current_database()
     );
 END
@@ -154,7 +214,11 @@ REVOKE ALL ON SCHEMA public FROM
     kivra_memory_worker,
     kivra_memory_purge,
     kivra_memory_ingress,
-    kivra_memory_exporter;
+    kivra_memory_exporter,
+    kivra_memory_observability,
+    kivra_memory_metrics,
+    kivra_memory_operator_report,
+    kivra_memory_operator_report_login;
 GRANT USAGE ON SCHEMA public TO
     kivra_memory_migrator,
     kivra_memory_credential_admin,
@@ -164,7 +228,9 @@ GRANT USAGE ON SCHEMA public TO
     kivra_memory_worker,
     kivra_memory_purge,
     kivra_memory_ingress,
-    kivra_memory_exporter;
+    kivra_memory_exporter,
+    kivra_memory_observability,
+    kivra_memory_operator_report;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM
     kivra_memory_credential_admin,
@@ -174,7 +240,11 @@ REVOKE ALL ON ALL TABLES IN SCHEMA public FROM
     kivra_memory_worker,
     kivra_memory_purge,
     kivra_memory_ingress,
-    kivra_memory_exporter;
+    kivra_memory_exporter,
+    kivra_memory_observability,
+    kivra_memory_metrics,
+    kivra_memory_operator_report,
+    kivra_memory_operator_report_login;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM
     kivra_memory_credential_admin,
     kivra_memory_api,
@@ -183,7 +253,11 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM
     kivra_memory_worker,
     kivra_memory_purge,
     kivra_memory_ingress,
-    kivra_memory_exporter;
+    kivra_memory_exporter,
+    kivra_memory_observability,
+    kivra_memory_metrics,
+    kivra_memory_operator_report,
+    kivra_memory_operator_report_login;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC;
 
@@ -834,6 +908,56 @@ BEGIN
             'FOR EACH ROW '
             'EXECUTE FUNCTION public.scalevault_enforce_ingress_validation_write()';
     END IF;
+END
+$bootstrap$;
+
+DO $bootstrap$
+DECLARE
+    function_signature text;
+BEGIN
+    IF pg_catalog.to_regprocedure(
+        'public.scalevault_observability_snapshot(uuid)'
+    ) IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION public.scalevault_observability_snapshot(uuid)
+            FROM PUBLIC, kivra_memory_migrator, kivra_memory_credential_admin,
+            kivra_memory_api, kivra_memory_policy,
+            kivra_memory_genesis_importer, kivra_memory_worker,
+            kivra_memory_purge, kivra_memory_ingress,
+            kivra_memory_exporter, kivra_memory_metrics,
+            kivra_memory_operator_report, kivra_memory_operator_report_login;
+        GRANT EXECUTE ON FUNCTION public.scalevault_observability_snapshot(uuid)
+            TO kivra_memory_observability;
+    END IF;
+    FOREACH function_signature IN ARRAY ARRAY[
+        'scalevault_operator_report_selection(uuid,timestamp with time zone,integer)',
+        'scalevault_operator_report_writes(uuid,timestamp with time zone,integer)',
+        'scalevault_operator_report_conflicts(uuid,integer)',
+        'scalevault_operator_report_memories(uuid,integer)',
+        'scalevault_operator_report_branches(uuid,integer)',
+        'scalevault_operator_report_credentials(uuid,timestamp with time zone,integer)',
+        'scalevault_operator_report_queues(uuid,integer)',
+        'scalevault_operator_report_archive(uuid,integer)',
+        'scalevault_operator_report_consistency(uuid)'
+    ]
+    LOOP
+        IF pg_catalog.to_regprocedure('public.' || function_signature) IS NOT NULL THEN
+            EXECUTE format(
+                'REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, '
+                'kivra_memory_migrator, kivra_memory_credential_admin, '
+                'kivra_memory_api, kivra_memory_policy, '
+                'kivra_memory_genesis_importer, kivra_memory_worker, '
+                'kivra_memory_purge, kivra_memory_ingress, '
+                'kivra_memory_exporter, kivra_memory_observability, '
+                'kivra_memory_metrics, kivra_memory_operator_report_login',
+                function_signature
+            );
+            EXECUTE format(
+                'GRANT EXECUTE ON FUNCTION public.%s '
+                'TO kivra_memory_operator_report',
+                function_signature
+            );
+        END IF;
+    END LOOP;
 END
 $bootstrap$;
 

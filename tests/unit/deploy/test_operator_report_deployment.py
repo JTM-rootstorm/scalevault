@@ -23,7 +23,7 @@ def test_operator_report_template_supplies_both_protected_credentials() -> None:
     assert "EnvironmentFile=" not in unit
 
 
-def test_operator_report_database_boundary_is_explicitly_inactive_without_migration() -> None:
+def test_operator_report_database_boundary_requires_dedicated_login() -> None:
     source = (
         REPOSITORY_ROOT
         / "services"
@@ -33,7 +33,7 @@ def test_operator_report_database_boundary_is_explicitly_inactive_without_migrat
         / "observability"
         / "report_main.py"
     ).read_text()
-    assert 'raise ValueError("operator_report_database_boundary_unavailable")' in source
+    assert 'url.username != "kivra_memory_operator_report_login"' in source
     assert 'url.username != "kivra_memory_api"' not in source
 
 

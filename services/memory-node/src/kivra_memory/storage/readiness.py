@@ -8,7 +8,7 @@ from typing import Literal
 from psycopg import AsyncConnection
 from pydantic import PostgresDsn
 
-EXPECTED_ALEMBIC_HEAD = "0010_ingress_provider_heads"
+EXPECTED_ALEMBIC_HEAD = "0011_observability_aggregates"
 MINIMUM_EXTENSION_VERSIONS = {
     "citext": "1.6",
     "pg_trgm": "1.6",

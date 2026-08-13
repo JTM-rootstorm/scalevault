@@ -47,6 +47,12 @@ RUNTIME_ROLES = (
     "kivra_memory_purge",
     "kivra_memory_ingress",
     "kivra_memory_exporter",
+    "kivra_memory_metrics",
+    "kivra_memory_operator_report_login",
+)
+CAPABILITY_ROLES = (
+    "kivra_memory_observability",
+    "kivra_memory_operator_report",
 )
 TENANT_A = UUID("01936d5a-8c4e-7b12-ae6c-4a41a22835c1")
 TENANT_B = UUID("01936d5a-8c4e-7b12-ae6c-4a41a22835c2")
@@ -115,7 +121,7 @@ def test_role_bootstrap_refuses_an_unexpected_database_before_mutation(
     with alembic_runner.engine.begin() as connection:
         created_roles = connection.execute(
             text("SELECT count(*) FROM pg_roles WHERE rolname = ANY(:roles)"),
-            {"roles": [OWNER_ROLE, MIGRATOR_ROLE, *RUNTIME_ROLES]},
+            {"roles": [OWNER_ROLE, MIGRATOR_ROLE, *RUNTIME_ROLES, *CAPABILITY_ROLES]},
         ).scalar_one()
 
     assert created_roles == 0
@@ -183,7 +189,7 @@ def test_role_bootstrap_upgrades_m1_ownership_and_is_idempotent(
                 "rolreplication, rolinherit, rolbypassrls FROM pg_roles "
                 "WHERE rolname = ANY(:roles) ORDER BY rolname"
             ),
-            {"roles": [OWNER_ROLE, MIGRATOR_ROLE, *RUNTIME_ROLES]},
+            {"roles": [OWNER_ROLE, MIGRATOR_ROLE, *RUNTIME_ROLES, *CAPABILITY_ROLES]},
         )
         role_rows: list[tuple[str, bool, bool, bool, bool, bool, bool, bool]] = [
             (
@@ -241,7 +247,29 @@ def test_role_bootstrap_upgrades_m1_ownership_and_is_idempotent(
         ("kivra_memory_exporter", True, False, False, False, False, False, False),
         ("kivra_memory_genesis_importer", True, False, False, False, False, False, False),
         ("kivra_memory_ingress", True, False, False, False, False, False, False),
+        ("kivra_memory_metrics", True, False, False, False, False, False, False),
         ("kivra_memory_migrator", True, False, False, False, False, False, False),
+        ("kivra_memory_observability", False, False, False, False, False, False, False),
+        (
+            "kivra_memory_operator_report",
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+        ),
+        (
+            "kivra_memory_operator_report_login",
+            True,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+        ),
         ("kivra_memory_owner", False, False, False, False, False, False, False),
         ("kivra_memory_policy", True, False, False, False, False, False, False),
         ("kivra_memory_purge", True, False, False, False, False, False, False),
@@ -291,7 +319,7 @@ def test_role_bootstrap_is_safe_before_migrating_an_existing_0004_database(
 
     with alembic_runner.engine.begin() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0010_ingress_provider_heads"
+            "0011_observability_aggregates"
         )
         assert connection.execute(
             text(
@@ -339,12 +367,12 @@ def test_migrations_run_as_nonlogin_owner_and_api_owns_nothing(
                 text("SELECT has_schema_privilege(:role, 'public', 'CREATE')"),
                 {"role": role},
             ).scalar_one()
-            for role in RUNTIME_ROLES
+            for role in (*RUNTIME_ROLES, *CAPABILITY_ROLES)
         }
 
     assert application_owners == {OWNER_ROLE}
     assert api_owned_objects == 0
-    assert schema_create == dict.fromkeys(RUNTIME_ROLES, False)
+    assert schema_create == dict.fromkeys((*RUNTIME_ROLES, *CAPABILITY_ROLES), False)
 
 
 @pytest.mark.parametrize(
@@ -1695,9 +1723,137 @@ def test_migrator_login_uses_database_local_owner_default_without_secret_output(
             ).one()
     finally:
         engine.dispose()
-
     assert session_user == MIGRATOR_ROLE
     assert current_user == OWNER_ROLE
+
+
+def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
+    postgresql_server: PostgreSQLTestServer,
+    role_secured_database: AlembicRunner,
+) -> None:
+    metrics_password = secrets.token_urlsafe(32)
+    report_password = secrets.token_urlsafe(32)
+    _set_role_password(postgresql_server, "kivra_memory_metrics", metrics_password)
+    _set_role_password(postgresql_server, "kivra_memory_operator_report_login", report_password)
+    jobs = (
+        (TENANT_A, new_uuid7(), "tenant-a"),
+        (TENANT_B, new_uuid7(), "tenant-b"),
+    )
+    with role_secured_database.engine.begin() as connection:
+        for tenant_id, slug in ((TENANT_A, "observability-a"), (TENANT_B, "observability-b")):
+            connection.execute(
+                text(
+                    "INSERT INTO tenants (tenant_id, slug, display_name) "
+                    "VALUES (:tenant_id, :slug, :slug)"
+                ),
+                {"tenant_id": tenant_id, "slug": slug},
+            )
+        for tenant_id, job_uuid, key in jobs:
+            connection.execute(
+                text(
+                    "INSERT INTO outbox_jobs "
+                    "(job_uuid, tenant_id, job_type, deduplication_key, "
+                    "aggregate_type, payload, state) VALUES "
+                    "(:job_uuid, :tenant_id, 'check_duplicates', :key, "
+                    "'memory', '{}'::jsonb, 'pending')"
+                ),
+                {"job_uuid": job_uuid, "tenant_id": tenant_id, "key": key},
+            )
+
+    metrics_engine = _login_engine(postgresql_server, "kivra_memory_metrics", metrics_password)
+    report_engine = _login_engine(
+        postgresql_server, "kivra_memory_operator_report_login", report_password
+    )
+    try:
+        with metrics_engine.begin() as connection:
+            assert connection.execute(text("SELECT current_user")).scalar_one() == (
+                "kivra_memory_observability"
+            )
+            rows = connection.execute(
+                text(
+                    "SELECT metric_name, label_one, label_two, metric_value "
+                    "FROM public.scalevault_observability_snapshot(:tenant_id) "
+                    "WHERE metric_name = 'queue_depth'"
+                ),
+                {"tenant_id": TENANT_A},
+            ).all()
+            assert rows == [("queue_depth", "lifecycle", "pending", 1.0)]
+            with pytest.raises(DBAPIError) as denied, connection.begin_nested():
+                connection.execute(text("SELECT payload FROM public.outbox_jobs"))
+            assert _sqlstate(denied.value) == "42501"
+        with report_engine.begin() as connection:
+            assert connection.execute(text("SELECT current_user")).scalar_one() == (
+                "kivra_memory_operator_report"
+            )
+            rows = connection.execute(
+                text(
+                    "SELECT job_type, state, count "
+                    "FROM public.scalevault_operator_report_queues(:tenant_id, 500)"
+                ),
+                {"tenant_id": TENANT_A},
+            ).all()
+            assert rows == [("check_duplicates", "pending", 1)]
+            with pytest.raises(DBAPIError) as denied, connection.begin_nested():
+                connection.execute(text("SELECT statement FROM public.memories"))
+            assert _sqlstate(denied.value) == "42501"
+    finally:
+        metrics_engine.dispose()
+        report_engine.dispose()
+
+
+def test_bootstrap_removes_observability_privilege_and_membership_drift(
+    postgresql_server: PostgreSQLTestServer,
+    role_secured_database: AlembicRunner,
+) -> None:
+    with role_secured_database.engine.begin() as connection:
+        connection.execute(text("GRANT kivra_memory_owner TO kivra_memory_metrics"))
+        connection.execute(
+            text("GRANT kivra_memory_migrator TO kivra_memory_operator_report_login")
+        )
+        connection.execute(text("GRANT kivra_memory_observability TO kivra_memory_worker"))
+        connection.execute(text("GRANT kivra_memory_operator_report TO kivra_memory_api"))
+        connection.execute(
+            text(
+                "GRANT EXECUTE ON FUNCTION "
+                "public.scalevault_observability_snapshot(uuid) TO kivra_memory_api"
+            )
+        )
+        connection.execute(
+            text(
+                "GRANT EXECUTE ON FUNCTION "
+                "public.scalevault_operator_report_queues(uuid,integer) "
+                "TO kivra_memory_worker"
+            )
+        )
+
+    run_operator_sql_file(postgresql_server, ROLE_BOOTSTRAP)
+
+    with role_secured_database.engine.begin() as connection:
+        stale_memberships = connection.execute(
+            text(
+                "SELECT granted.rolname, member.rolname FROM pg_auth_members AS membership "
+                "JOIN pg_roles AS granted ON granted.oid = membership.roleid "
+                "JOIN pg_roles AS member ON member.oid = membership.member "
+                "WHERE (granted.rolname, member.rolname) IN "
+                "(('kivra_memory_owner','kivra_memory_metrics'), "
+                "('kivra_memory_migrator','kivra_memory_operator_report_login'), "
+                "('kivra_memory_observability','kivra_memory_worker'), "
+                "('kivra_memory_operator_report','kivra_memory_api'))"
+            )
+        ).all()
+        assert stale_memberships == []
+        assert not connection.execute(
+            text(
+                "SELECT has_function_privilege('kivra_memory_api', "
+                "'public.scalevault_observability_snapshot(uuid)', 'EXECUTE')"
+            )
+        ).scalar_one()
+        assert not connection.execute(
+            text(
+                "SELECT has_function_privilege('kivra_memory_worker', "
+                "'public.scalevault_operator_report_queues(uuid,integer)', 'EXECUTE')"
+            )
+        ).scalar_one()
 
 
 def test_ingress_validation_trigger_and_api_processing_dml(

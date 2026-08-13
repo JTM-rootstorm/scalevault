@@ -20,6 +20,7 @@ EXPECTED_ALERTS = {
     "ScaleVaultBackupVerificationFailure",
     "ScaleVaultDatabasePoolSaturationCritical",
     "ScaleVaultDatabasePoolSaturationWarning",
+    "ScaleVaultDatabaseMetricsUnavailable",
     "ScaleVaultDirectCredentialExpiryCritical",
     "ScaleVaultDirectCredentialExpiryWarning",
     "ScaleVaultFullRecoveryDrillOverdue",
