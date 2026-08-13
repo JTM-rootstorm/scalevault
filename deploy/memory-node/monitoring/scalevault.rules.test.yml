@@ -245,38 +245,11 @@ tests:
       - eval_time: 3m
         alertname: ScaleVaultDatabaseMetricsUnavailable
         exp_alerts: []
-
-  - name: database-collector-stale-success-is-fail-visible
-    interval: 1m
-    input_series:
-      - series: 'up{job="scalevault-database-metrics",instance="loopback"}'
-        values: '1x7'
-      - series: 'kivra_memory_database_collector_up'
-        values: '1x7'
-      - series: 'kivra_memory_database_collector_last_success_unixtime'
-        values: '0x6 360'
-    alert_rule_test:
-      - eval_time: 3m
-        alertname: ScaleVaultDatabaseMetricsUnavailable
-        exp_alerts: []
-      - eval_time: 4m
-        alertname: ScaleVaultDatabaseMetricsUnavailable
-        exp_alerts:
-          - exp_labels: {severity: critical, category: monitoring}
-            exp_annotations: {summary: "ScaleVault database aggregate metrics are unavailable", response: "database_metrics_unavailable"}
-      - eval_time: 6m
-        alertname: ScaleVaultDatabaseMetricsUnavailable
-        exp_alerts: []
       - eval_time: 2m
         alertname: ScaleVaultPostgreSQLUnavailable
         exp_alerts:
           - exp_labels: {severity: critical, category: database, job: scalevault-postgresql, instance: loopback}
             exp_annotations: {summary: "ScaleVault PostgreSQL is unavailable", response: "database_unavailable"}
-      - eval_time: 2m
-        alertname: ScaleVaultDatabaseMetricsUnavailable
-        exp_alerts:
-          - exp_labels: {severity: critical, category: monitoring}
-            exp_annotations: {summary: "ScaleVault database aggregate metrics are unavailable", response: "database_metrics_unavailable"}
       - eval_time: 3m
         alertname: ScaleVaultPostgreSQLUnavailable
         exp_alerts: []
@@ -300,18 +273,55 @@ tests:
         alertname: ScaleVaultTunnelTelemetryMissing
         exp_alerts: []
 
+  - name: database-collector-stale-success-is-fail-visible
+    interval: 1m
+    input_series:
+      - series: 'up{job="scalevault-database-metrics",instance="loopback"}'
+        values: '1x7'
+      - series: 'kivra_memory_database_collector_up'
+        values: '1x7'
+      - series: 'kivra_memory_database_collector_last_success_unixtime'
+        values: '0x5 360'
+      - series: 'up{job="scalevault-memory-node",instance="loopback"}'
+        values: '1x7'
+      - series: 'up{job="scalevault-postgresql",instance="loopback"}'
+        values: '1x7'
+      - series: 'kivra_memory_backup_age_seconds{kind="base"}'
+        values: '0x7'
+      - series: 'kivra_memory_wal_oldest_age_seconds'
+        values: '0x7'
+      - series: 'kivra_memory_storage_free_ratio{component="database"}'
+        values: '0.5x7'
+      - series: 'kivra_memory_tunnel_connected'
+        values: '1x7'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, category: monitoring}
+            exp_annotations: {summary: "ScaleVault database aggregate metrics are unavailable", response: "database_metrics_unavailable"}
+      - eval_time: 6m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts: []
+
   - name: entirely-absent-required-scrapes-still-alert
     interval: 1m
     alert_rule_test:
       - eval_time: 2m
         alertname: ScaleVaultMemoryNodeScrapeUnavailable
         exp_alerts:
-          - exp_labels: {severity: critical, category: monitoring}
+          - exp_labels: {severity: critical, category: monitoring, job: scalevault-memory-node}
             exp_annotations: {summary: "ScaleVault Memory Node metrics are unavailable", response: "monitoring_unavailable"}
       - eval_time: 2m
         alertname: ScaleVaultPostgreSQLUnavailable
         exp_alerts:
-          - exp_labels: {severity: critical, category: database}
+          - exp_labels: {severity: critical, category: database, job: scalevault-postgresql}
             exp_annotations: {summary: "ScaleVault PostgreSQL is unavailable", response: "database_unavailable"}
 
   - name: optional-github-partial-telemetry-is-visible
