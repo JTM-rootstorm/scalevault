@@ -685,7 +685,7 @@ def main(arguments: Sequence[str] | None = None) -> None:
                 scratch_directory=parsed.scratch_directory,
                 branch_name=settings.branch_name,
                 expected_head=settings.expected_head,
-                signer_epochs=settings.epochs_for(parsed.output_repository),
+                signer_epochs_for_repository=settings.epochs_for,
             )
             output = _summary(_verified(settings, repository=source.repository))
         elif parsed.command == "restore-database":

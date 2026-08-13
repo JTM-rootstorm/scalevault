@@ -8,6 +8,7 @@ import re
 import secrets
 import stat
 import tempfile
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -174,7 +175,7 @@ class EncryptedArchiveBundle:
         scratch_directory: Path,
         branch_name: str,
         expected_head: str,
-        signer_epochs: tuple[ArchiveSignerEpoch, ...],
+        signer_epochs_for_repository: Callable[[Path], tuple[ArchiveSignerEpoch, ...]],
     ) -> GitRecoverySource:
         """Decrypt a bundle with separately supplied identity and clone exact history."""
 
@@ -252,7 +253,10 @@ class EncryptedArchiveBundle:
                 git_executable=self._config.git_executable,
             )
             commits = ReadOnlyGitArchive(source).read()
-            verify_signed_archive_epochs(commits, signer_epochs)
+            verify_signed_archive_epochs(
+                commits,
+                signer_epochs_for_repository(materialized),
+            )
             try:
                 os.rename(materialized, output_repository)
             except OSError:

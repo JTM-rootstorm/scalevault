@@ -72,8 +72,64 @@ def test_materialize_requires_separately_protected_identity(tmp_path: Path) -> N
             scratch_directory=tmp_path,
             branch_name="main",
             expected_head="a" * 40,
-            signer_epochs=(),
+            signer_epochs_for_repository=lambda _repository: (),
         )
+
+
+def test_materialize_binds_verifier_to_unpublished_clone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encrypted = tmp_path / "archive.age"
+    encrypted.write_bytes(b"ciphertext")
+    identity = tmp_path / "identity"
+    identity.write_bytes(b"AGE-SECRET-KEY-test")
+    identity.chmod(0o600)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    output = tmp_path / "restored"
+    expected_head = "a" * 40
+    observed: list[Path] = []
+
+    class MaterializeRunner:
+        def run(
+            self,
+            arguments: tuple[str, ...],
+            *,
+            stdin: bytes,
+            environment: dict[str, str],
+            timeout_seconds: int,
+            stdout_limit_bytes: int = 8 * 1024 * 1024,
+            stderr_limit_bytes: int = 256 * 1024,
+        ) -> ProcessResult:
+            del stdin, environment, timeout_seconds, stdout_limit_bytes, stderr_limit_bytes
+            if "--decrypt" in arguments:
+                Path(arguments[arguments.index("--output") + 1]).write_bytes(b"bundle")
+            elif ("init" in arguments and "--bare" in arguments) or "clone" in arguments:
+                Path(arguments[-1]).mkdir()
+            return ProcessResult(0)
+
+    monkeypatch.setattr("kivra_memory.archive.bundle.ReadOnlyGitArchive.read", lambda _reader: ())
+    monkeypatch.setattr(bundle_module, "verify_signed_archive_epochs", lambda *_args: None)
+
+    def epochs(repository: Path) -> tuple[object, ...]:
+        assert repository.is_dir()
+        assert repository != output
+        observed.append(repository)
+        return ()
+
+    source = EncryptedArchiveBundle(runner=MaterializeRunner()).materialize(
+        encrypted_bundle=encrypted,
+        expected_ciphertext_sha256=hashlib.sha256(b"ciphertext").hexdigest(),
+        identity_file=identity,
+        output_repository=output,
+        scratch_directory=scratch,
+        branch_name="main",
+        expected_head=expected_head,
+        signer_epochs_for_repository=epochs,  # type: ignore[arg-type]
+    )
+
+    assert observed and source.repository == output and output.is_dir()
 
 
 def test_bundle_creation_pins_exact_object_when_source_branch_advances(
