@@ -32,6 +32,7 @@ or output into repository files.
 | Future Forgejo archive/remote divergence (excluded from M10) | [Archive divergence](archive-divergence.md) |
 | Alert, outage, suspected compromise, or privacy event | [Incident and alert response](incident-alerts.md) |
 | PostgreSQL point-in-time recovery | [PostgreSQL PITR](postgresql-pitr.md) |
+| Backup-aware synthetic hard-forget recovery | [Hard-forget recovery](hard-forget-recovery.md) |
 | M10 recovery from the encrypted local Git bundle | [Secondary-bundle recovery](secondary-bundle-recovery.md) |
 | Future Forgejo provider recovery (excluded from M10) | [Forgejo recovery](forgejo-recovery.md) |
 | NPM edit/upgrade or external-exposure alarm | [NPM drift](npm-drift.md) |

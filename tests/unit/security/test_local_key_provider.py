@@ -7,6 +7,7 @@ import io
 import json
 import multiprocessing
 import os
+import shutil
 import time
 from collections.abc import Callable, Coroutine, Sequence
 from multiprocessing.process import BaseProcess
@@ -23,6 +24,14 @@ from kivra_memory.domain.identifiers import new_uuid7
 from kivra_memory.security.destruction_ledger import (
     DestructionLedgerEntry,
     initialize_empty_destruction_ledger_anchor,
+)
+from kivra_memory.security.hard_forget_drill import (
+    HardForgetDrillError,
+    HardForgetDrillManifest,
+    create_hard_forget_drill_manifest,
+    inventory_provider_backup,
+    synthetic_correlation_digest,
+    verify_hard_forget_drill_manifest,
 )
 from kivra_memory.security.keys import (
     ContentKeyReference,
@@ -812,3 +821,102 @@ def test_root_must_be_absolute_setgid_layout_without_symlink(tmp_path: Path) -> 
     link.symlink_to(root, target_is_directory=True)
     with pytest.raises(KeyProviderError):
         LocalDirectoryKeyProvider(link)
+
+
+@pytest.mark.asyncio
+async def test_synthetic_provider_backup_manifest_is_content_free_and_exact(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    provider, root, _control, material = _provider(source_root)
+    identity = _identity()
+    reference = await provider.provision_key(**identity)  # type: ignore[arg-type]
+    secret = material.joinpath(f"key-{reference.content_key_id}.bin").read_bytes()
+    backup_root = tmp_path / "backup" / "keys"
+    backup_root.parent.mkdir()
+    shutil.copytree(root, backup_root)
+
+    correlation = synthetic_correlation_digest(
+        ciphertext=b"synthetic-ciphertext",
+        provider_key_reference=reference.provider_key_reference,
+        drill_generation="phase-2-generation",
+    )
+    manifest = create_hard_forget_drill_manifest(
+        backup_root,
+        base_backup_sha256="a" * 64,
+        wal_window_sha256="b" * 64,
+        recovery_target_sha256="c" * 64,
+        synthetic_correlation_sha256=correlation,
+    )
+    parsed = HardForgetDrillManifest.from_bytes(manifest.canonical_bytes())
+    verified = verify_hard_forget_drill_manifest(
+        parsed,
+        backup_root,
+        base_backup_sha256="a" * 64,
+        wal_window_sha256="b" * 64,
+        recovery_target_sha256="c" * 64,
+        synthetic_correlation_sha256=correlation,
+    )
+
+    assert verified == inventory_provider_backup(backup_root)
+    rendered = manifest.canonical_bytes()
+    assert set(manifest.as_dict()) == {
+        "version",
+        "provider_backup",
+        "base_backup_sha256",
+        "wal_window_sha256",
+        "recovery_target_sha256",
+        "synthetic_correlation_sha256",
+    }
+    assert str(reference.content_key_id).encode() not in rendered
+    assert reference.provider_key_reference.encode() not in rendered
+    assert secret not in rendered
+    assert len(rendered) < 768
+
+
+@pytest.mark.asyncio
+async def test_provider_backup_manifest_rejects_drift_and_non_provider_state(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    provider, root, _control, _material = _provider(source_root)
+    identity = _identity()
+    reference = await provider.provision_key(**identity)  # type: ignore[arg-type]
+    backup_root = tmp_path / "backup" / "keys"
+    backup_root.parent.mkdir()
+    shutil.copytree(root, backup_root)
+    manifest = create_hard_forget_drill_manifest(
+        backup_root,
+        base_backup_sha256="a" * 64,
+        wal_window_sha256="b" * 64,
+        recovery_target_sha256="c" * 64,
+        synthetic_correlation_sha256="d" * 64,
+    )
+
+    with pytest.raises(HardForgetDrillError, match="hard_forget_drill_mismatch"):
+        verify_hard_forget_drill_manifest(
+            manifest,
+            backup_root,
+            base_backup_sha256="e" * 64,
+            wal_window_sha256="b" * 64,
+            recovery_target_sha256="c" * 64,
+            synthetic_correlation_sha256="d" * 64,
+        )
+
+    material_path = backup_root / MATERIAL_DIRECTORY_NAME / f"key-{reference.content_key_id}.bin"
+    material_path.write_bytes(b"z" * 32)
+    with pytest.raises(HardForgetDrillError, match="hard_forget_drill_mismatch"):
+        verify_hard_forget_drill_manifest(
+            manifest,
+            backup_root,
+            base_backup_sha256="a" * 64,
+            wal_window_sha256="b" * 64,
+            recovery_target_sha256="c" * 64,
+            synthetic_correlation_sha256="d" * 64,
+        )
+
+    (backup_root / "destruction-ledger").mkdir()
+    with pytest.raises(HardForgetDrillError, match="provider_backup_inventory_invalid"):
+        inventory_provider_backup(backup_root)

@@ -73,7 +73,10 @@ External alert delivery is not required for M10.
 
 Apply the complete [NPM drift gate](npm-drift.md), active-provider revocation
 gates when provisioned, the installed [PITR](postgresql-pitr.md) drill, local
-signed-history restoration, and the
+signed-history restoration, the
+[hard-forget recovery](hard-forget-recovery.md) drill bound to the exact
+provider-backup inventory, base backup, WAL window, recovery target, and
+synthetic ciphertext correlation, and the
 [secondary-bundle](secondary-bundle-recovery.md) clean database restore bound
 to the exact same head, manifest, high-water mark, signer policy, and object
 bytes. Record required categories as `pass`, `fail`, or `pending`; absence of

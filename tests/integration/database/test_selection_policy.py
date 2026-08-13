@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from collections import Counter
 from collections.abc import AsyncIterator
@@ -47,15 +48,23 @@ from kivra_memory.policy import (
     NominationProposal,
     SelectionBasis,
 )
+from kivra_memory.security.destruction_broker import reconcile_destruction_requests
 from kivra_memory.security.destruction_ledger import (
     LocalDestructionLedger,
     initialize_empty_destruction_ledger_anchor,
+)
+from kivra_memory.security.hard_forget_drill import (
+    create_hard_forget_drill_manifest,
+    synthetic_correlation_digest,
+    verify_hard_forget_drill_manifest,
 )
 from kivra_memory.security.keys import ContentKeyReference, KeyProviderError
 from kivra_memory.security.local_key_provider import (
     CONTROL_DIRECTORY_NAME,
     MATERIAL_DIRECTORY_NAME,
     LocalDirectoryKeyProvider,
+    LocalDirectoryKeyPurgeRequester,
+    reconcile_restored_local_key_provider,
 )
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import (
@@ -70,12 +79,12 @@ from kivra_memory.storage.models import (
     SelectionDecision,
     TransportBinding,
 )
-from kivra_memory.storage.outbox_worker import claim_outbox_jobs
+from kivra_memory.storage.outbox_worker import acknowledge_outbox_job, claim_outbox_jobs
 from kivra_memory.storage.selection_history import (
     SelectionHistoryFilters,
     SelectionHistoryRepository,
 )
-from kivra_memory.workers.sealed_content import handle_purge_payload_job
+from kivra_memory.workers.sealed_content import SealedContentPurgeError, handle_purge_payload_job
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -552,7 +561,7 @@ async def _return(value: Any) -> Any:
     return value
 
 
-def _sealed_provider_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _sealed_provider_layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     provider_root = tmp_path / "keys"
     provider_root.mkdir(mode=0o710)
@@ -569,7 +578,10 @@ def _sealed_provider_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     anchor_parent.chmod(0o2770)
     anchor_path = anchor_parent / "current.json"
     initialize_empty_destruction_ledger_anchor(ledger_root, anchor_path)
-    return provider_root, ledger_root, anchor_path
+    request_root = tmp_path / "purge-requests"
+    request_root.mkdir(mode=0o770)
+    request_root.chmod(0o2770)
+    return provider_root, ledger_root, anchor_path, request_root
 
 
 async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_dek(
@@ -595,7 +607,9 @@ async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_d
             )
         }
     )
-    provider_root, ledger_root, anchor_path = _sealed_provider_layout(tmp_path / "live")
+    provider_root, ledger_root, anchor_path, request_root = _sealed_provider_layout(
+        tmp_path / "live"
+    )
     provider = LocalDirectoryKeyProvider(
         provider_root,
         destruction_ledger_root=ledger_root,
@@ -620,7 +634,9 @@ async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_d
             assert row.statement is None
             assert row.reason_to_remember is None
             assert row.content_key_id is not None
+            assert row.sealed_ciphertext is not None
             content_key_id = row.content_key_id
+            sealed_ciphertext = row.sealed_ciphertext
             key_row = await session.get(MemoryContentKey, content_key_id)
             assert key_row is not None
             provider_reference = (
@@ -633,6 +649,21 @@ async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_d
         backup_root = tmp_path / "pre-forget-backup" / "keys"
         backup_root.parent.mkdir()
         shutil.copytree(provider_root, backup_root)
+        synthetic_correlation = synthetic_correlation_digest(
+            ciphertext=sealed_ciphertext,
+            provider_key_reference=provider_reference[1],
+            drill_generation="synthetic-phase-2-generation",
+        )
+        base_backup_digest = hashlib.sha256(b"synthetic-base-backup").hexdigest()
+        wal_window_digest = hashlib.sha256(b"synthetic-wal-window").hexdigest()
+        recovery_target_digest = hashlib.sha256(b"synthetic-recovery-target").hexdigest()
+        drill_manifest = create_hard_forget_drill_manifest(
+            backup_root,
+            base_backup_sha256=base_backup_digest,
+            wal_window_sha256=wal_window_digest,
+            recovery_target_sha256=recovery_target_digest,
+            synthetic_correlation_sha256=synthetic_correlation,
+        )
 
         mutation = MutationEngine(factory)
         forgotten = await mutation.execute(
@@ -656,11 +687,83 @@ async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_d
         purge_principal = principal.model_copy(
             update={"scopes": frozenset({"memory.lifecycle.purge"})}
         )
+        accepted_empty = LocalDestructionLedger(
+            ledger_root,
+            anchor_path=anchor_path,
+        ).anchor()
+        requester = LocalDirectoryKeyPurgeRequester(
+            provider_root,
+            destruction_request_root=request_root,
+            destruction_ledger_root=ledger_root,
+            destruction_ledger_anchor_path=anchor_path,
+            expected_destruction_ledger_anchor=accepted_empty,
+        )
+        with pytest.raises(SealedContentPurgeError, match="dependency_unavailable"):
+            async with database.tenant_session(principal.tenant_id) as session:
+                jobs = await claim_outbox_jobs(
+                    session,
+                    tenant_id=principal.tenant_id,
+                    worker_owner="sealed-backup-requester",
+                    job_types=("purge_payload",),
+                )
+                assert len(jobs) == 1
+                await handle_purge_payload_job(
+                    session,
+                    job=jobs[0],
+                    principal=purge_principal,
+                    key_destroyer=requester,
+                )
+
+        async with database.tenant_session(principal.tenant_id) as session:
+            row = await session.get(Memory, selected.memory_id)
+            key_row = await session.get(MemoryContentKey, content_key_id)
+            assert row is not None and row.content_protection == "envelope_encrypted"
+            assert key_row is not None and key_row.state == "destruction_requested"
+
+        assert (
+            await reconcile_destruction_requests(
+                provider_root=provider_root,
+                request_root=request_root,
+                ledger_root=ledger_root,
+                anchor_path=anchor_path,
+                expected_anchor=accepted_empty,
+            )
+            == 1
+        )
+        assert not list(request_root.iterdir())
+
+        with pytest.raises(SealedContentPurgeError, match="dependency_unavailable"):
+            async with database.tenant_session(principal.tenant_id) as session:
+                jobs = await claim_outbox_jobs(
+                    session,
+                    tenant_id=principal.tenant_id,
+                    worker_owner="sealed-backup-stale-anchor",
+                    job_types=("purge_payload",),
+                )
+                assert len(jobs) == 1
+                await handle_purge_payload_job(
+                    session,
+                    job=jobs[0],
+                    principal=purge_principal,
+                    key_destroyer=requester,
+                )
+
+        accepted_current = LocalDestructionLedger(
+            ledger_root,
+            anchor_path=anchor_path,
+        ).anchor()
+        acknowledged_requester = LocalDirectoryKeyPurgeRequester(
+            provider_root,
+            destruction_request_root=request_root,
+            destruction_ledger_root=ledger_root,
+            destruction_ledger_anchor_path=anchor_path,
+            expected_destruction_ledger_anchor=accepted_current,
+        )
         async with database.tenant_session(principal.tenant_id) as session:
             jobs = await claim_outbox_jobs(
                 session,
                 tenant_id=principal.tenant_id,
-                worker_owner="sealed-backup-acceptance",
+                worker_owner="sealed-backup-acknowledged",
                 job_types=("purge_payload",),
             )
             assert len(jobs) == 1
@@ -668,9 +771,15 @@ async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_d
                 session,
                 job=jobs[0],
                 principal=purge_principal,
-                key_destroyer=provider,
+                key_destroyer=acknowledged_requester,
             )
             assert purged.outcome == "purged"
+            await acknowledge_outbox_job(
+                session,
+                tenant_id=principal.tenant_id,
+                job_id=jobs[0].job_id,
+                lease_token=jobs[0].lease_token,
+            )
 
         async with database.tenant_session(principal.tenant_id) as session:
             row = await session.get(Memory, selected.memory_id)
@@ -680,21 +789,56 @@ async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_d
             assert key_row.destruction_receipt_sha256 is not None
             event_payloads = (await session.scalars(select(MemoryEvent.payload))).all()
             assert canary not in str(event_payloads)
+            assert row.sealed_ciphertext is not None
+            assert (
+                synthetic_correlation_digest(
+                    ciphertext=row.sealed_ciphertext,
+                    provider_key_reference=provider_reference[1],
+                    drill_generation="synthetic-phase-2-generation",
+                )
+                == synthetic_correlation
+            )
 
+        verify_hard_forget_drill_manifest(
+            drill_manifest,
+            backup_root,
+            base_backup_sha256=base_backup_digest,
+            wal_window_sha256=wal_window_digest,
+            recovery_target_sha256=recovery_target_digest,
+            synthetic_correlation_sha256=synthetic_correlation,
+        )
         restored_root = tmp_path / "restore" / "keys"
         restored_root.parent.mkdir()
         shutil.copytree(backup_root, restored_root)
         stale_material = restored_root / MATERIAL_DIRECTORY_NAME / f"key-{content_key_id}.bin"
         assert stale_material.is_file()
-        ledger = LocalDestructionLedger(ledger_root, anchor_path=anchor_path)
-        current_anchor = ledger.anchor()
-        ledger.require_anchor(current_anchor)
+        ledger = LocalDestructionLedger(
+            ledger_root,
+            anchor_path=anchor_path,
+            expected_anchor=accepted_current,
+        )
+        ledger.require_anchor(accepted_current)
+        reconcile_restored_local_key_provider(
+            restored_root,
+            destruction_ledger_root=ledger_root,
+            destruction_ledger_anchor_path=anchor_path,
+            expected_destruction_ledger_anchor=accepted_current,
+        )
+        assert not stale_material.exists()
+        assert not restored_root.joinpath(
+            CONTROL_DIRECTORY_NAME,
+            f"active-{content_key_id}.json",
+        ).exists()
+        assert restored_root.joinpath(
+            CONTROL_DIRECTORY_NAME,
+            f"destroyed-{content_key_id}.json",
+        ).is_file()
         restored = LocalDirectoryKeyProvider(
             restored_root,
             destruction_ledger_root=ledger_root,
             destruction_ledger_anchor_path=anchor_path,
+            expected_destruction_ledger_anchor=accepted_current,
         )
-        assert not stale_material.exists()
         restored_reference = ContentKeyReference(
             content_key_id=content_key_id,
             provider_name=provider_reference[0],
