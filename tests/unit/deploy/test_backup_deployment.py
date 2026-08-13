@@ -671,6 +671,8 @@ def test_examples_and_runbook_freeze_recovery_invariants() -> None:
     assert "eight-daily/five-weekly policy is an activation target" in prose
     assert "deletes nothing" in prose
     assert "no_prune_dependency_watermark_absent" in prose
+    assert "public age recipient does not authenticate the producer" in prose
+    assert "Repository-generated or merely age-encrypted" in prose
     assert "private age identity" in prose
     assert "do not enable the verification timer on the routine node" in prose.lower()
     assert "does not start PostgreSQL" in prose

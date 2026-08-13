@@ -185,6 +185,16 @@ base, WAL segment, backup-history file, timeline-history file, restore point,
 and hold remains potentially required. The command validates names, manifests,
 markers, and holds, then reports `no_prune_dependency_watermark_absent`.
 
+The public age recipient does not authenticate the producer of a drill record:
+any holder of that public value can create ciphertext for the recovery identity.
+ADR 0027 does not define a recovery-evidence signing identity, allowed signer,
+rollback anchor, or operator-attested catalog format, and the archive signing
+key has a separate authority that must not be reused here. Repository-generated
+or merely age-encrypted `PITR-VERIFIED`, dependency, restore-point, or hold files
+therefore cannot authorize deletion. Activation requires an accepted trust
+contract plus content-free evidence from an actual isolated PostgreSQL 17 PITR
+run; repository tests and `pg_verifybackup` alone are insufficient.
+
 The eight-daily/five-weekly policy is an activation target, not deletion
 authority. Implementing it requires the authenticated dependency catalog and
 real isolated-start/PITR proof first. Capacity pressure is a stop condition;

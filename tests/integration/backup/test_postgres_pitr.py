@@ -34,6 +34,27 @@ def _binary(name: str) -> Path:
     return Path(found)
 
 
+def _postgresql_17_tools() -> dict[str, Path]:
+    names = (
+        "initdb",
+        "pg_basebackup",
+        "pg_controldata",
+        "pg_ctl",
+        "pg_verifybackup",
+        "postgres",
+        "psql",
+    )
+    tools = {name: _binary(name) for name in names}
+    resolved_bindirs = {path.resolve().parent for path in tools.values()}
+    if len(resolved_bindirs) != 1:
+        _unavailable("the encrypted PITR gate requires one coherent PostgreSQL 17 binary directory")
+    for path in tools.values():
+        version = _run([str(path), "--version"])
+        if not re.search(r"PostgreSQL\) 17(?:\.|$)", version):
+            _unavailable("the encrypted PITR gate requires PostgreSQL 17 exactly")
+    return tools
+
+
 def _load() -> Any:
     specification = importlib.util.spec_from_loader(
         "postgres_backup_integration", SourceFileLoader("postgres_backup_integration", str(SCRIPT))
@@ -84,19 +105,16 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
 
     if os.environ.get("SCALEVAULT_REQUIRE_BACKUP_TESTS") != "1":
         pytest.skip("set SCALEVAULT_REQUIRE_BACKUP_TESTS=1 for the durable PITR gate")
-    initdb = _binary("initdb")
-    pg_ctl = _binary("pg_ctl")
-    psql = _binary("psql")
+    postgres_tools = _postgresql_17_tools()
+    initdb = postgres_tools["initdb"]
+    pg_ctl = postgres_tools["pg_ctl"]
+    psql = postgres_tools["psql"]
     age_path = shutil.which("age")
     age_keygen_path = shutil.which("age-keygen")
     if age_path is None or age_keygen_path is None:
         _unavailable("age and age-keygen are required for the encrypted PITR gate")
     age = Path(age_path)
     age_keygen = Path(age_keygen_path)
-    version = _run([str(initdb), "--version"])
-    if not re.search(r"PostgreSQL\) 17(?:\.|$)", version):
-        _unavailable("the encrypted PITR gate requires PostgreSQL 17 exactly")
-
     module = _load()
     data = tmp_path / "source-data"
     socket_dir = tmp_path / "source-socket"
