@@ -56,7 +56,7 @@ def _scope() -> str:
 
 def _limit() -> str:
     return (
-        "IF p_limit < 1 OR p_limit > 500 THEN "
+        "IF p_limit IS NULL OR p_limit < 1 OR p_limit > 500 THEN "
         "RAISE EXCEPTION 'invalid operator report limit' USING ERRCODE = '22023'; END IF; "
     )
 

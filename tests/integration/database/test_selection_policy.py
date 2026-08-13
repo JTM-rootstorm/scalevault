@@ -553,6 +553,7 @@ async def _return(value: Any) -> Any:
 
 
 def _sealed_provider_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     provider_root = tmp_path / "keys"
     provider_root.mkdir(mode=0o710)
     provider_root.chmod(0o2710)

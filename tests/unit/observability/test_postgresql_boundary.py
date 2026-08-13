@@ -20,6 +20,7 @@ def test_security_definer_functions_validate_preexisting_tenant_scope() -> None:
     assert source.count("_scope()") == 11  # definition plus all ten function bodies
     for sql_syntax in ("extract", "coalesce", "greatest"):
         assert f"pg_catalog.{sql_syntax}" not in source
+    assert "IF p_limit IS NULL OR p_limit < 1 OR p_limit > 500 THEN" in source
 
 
 def test_binding_activation_is_owner_only_and_fixed_to_wrapper_logins() -> None:

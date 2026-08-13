@@ -1857,6 +1857,32 @@ def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
             assert len(rows) == 1
             assert rows[0][:3] == ("check_duplicates", "pending", 1)
             assert rows[0][3] is not None
+            valid_calls = (
+                "scalevault_operator_report_selection(:tenant_id, now(), 500)",
+                "scalevault_operator_report_writes(:tenant_id, now(), 500)",
+                "scalevault_operator_report_conflicts(:tenant_id, 500)",
+                "scalevault_operator_report_memories(:tenant_id, 500)",
+                "scalevault_operator_report_branches(:tenant_id, 500)",
+                "scalevault_operator_report_credentials(:tenant_id, now(), 500)",
+                "scalevault_operator_report_queues(:tenant_id, 500)",
+                "scalevault_operator_report_archive(:tenant_id, 500)",
+                "scalevault_operator_report_consistency(:tenant_id)",
+            )
+            for function_call in valid_calls:
+                connection.execute(
+                    text(f"SELECT * FROM public.{function_call}"),
+                    {"tenant_id": TENANT_A},
+                ).all()
+            for invalid_limit in (None, 0, 501):
+                with pytest.raises(DBAPIError) as invalid, connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "SELECT * FROM public.scalevault_operator_report_queues("
+                            ":tenant_id, :report_limit)"
+                        ),
+                        {"tenant_id": TENANT_A, "report_limit": invalid_limit},
+                    )
+                assert _sqlstate(invalid.value) == "22023"
             with pytest.raises(DBAPIError) as denied, connection.begin_nested():
                 connection.execute(text("SELECT statement FROM public.memories"))
             assert _sqlstate(denied.value) == "42501"
