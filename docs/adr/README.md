@@ -39,7 +39,9 @@ documentation and do not change these decisions implicitly.
 | [0031](0031-private-observability-and-operator-audit.md) | Accepted | Keep telemetry private and bounded, payload-blind aggregate collection least-privileged, and identity-specific reports root-local. |
 | [0032](0032-offline-public-artifact-leakage-scanner.md) | Accepted | Fail closed with a pure bounded offline scanner before any future public artifact can be signed or published. |
 | [0033](0033-operator-managed-offsite-and-local-alert-acceptance.md) | Accepted | Keep Backblaze transfer operator-managed and make private local alert evaluation, rather than external notification delivery, the M10 acceptance boundary. |
+| [0034](0034-local-signed-archive-m10-acceptance.md) | Accepted | Accept local provider-independent signed-archive and encrypted-bundle recovery for M10 while leaving Forgejo recovery and continuation excluded and unverified. |
+| [0035](0035-no-prune-recovery-retention.md) | Accepted | Give M10 retention zero deletion authority and require validated inventory, capacity alerts, and an exact no-prune result. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
-it. Implementation changes must preserve the security and authority boundaries
-recorded here.
+or amends it. Implementation changes must preserve the security and authority
+boundaries recorded here.
