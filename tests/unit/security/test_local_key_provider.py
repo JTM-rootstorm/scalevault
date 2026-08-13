@@ -13,11 +13,17 @@ from multiprocessing.process import BaseProcess
 from pathlib import Path
 from queue import Empty
 from typing import Any, Protocol, cast
+from unittest.mock import MagicMock
 from uuid import UUID
 
 import kivra_memory.security.local_key_provider as local_key_provider_module
 import pytest
+from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.identifiers import new_uuid7
+from kivra_memory.security.destruction_ledger import (
+    DestructionLedgerEntry,
+    initialize_empty_destruction_ledger_anchor,
+)
 from kivra_memory.security.keys import (
     ContentKeyReference,
     KeyDestroyer,
@@ -34,6 +40,42 @@ from kivra_memory.security.local_key_provider import (
 
 type _ProcessIdentity = tuple[UUID, UUID, UUID, UUID]
 type _ProcessResult = tuple[str, str, str, str, str]
+
+
+def test_consistency_validation_scales_with_one_ledger_traversal(tmp_path: Path) -> None:
+    control = tmp_path / "control-scale"
+    control.mkdir(mode=0o770)
+    control.chmod(0o2770)
+    entries = []
+    for _ in range(501):
+        entry = DestructionLedgerEntry(
+            content_key_id=new_uuid7(),
+            tenant_id=new_uuid7(),
+            lineage_id=new_uuid7(),
+            memory_id=new_uuid7(),
+            receipt=b"r" * 32,
+        )
+        entries.append(entry)
+        identity = local_key_provider_module._entry_identity(entry)
+        record = local_key_provider_module._control_record(
+            state="destroyed",
+            identity=identity,
+            receipt=entry.receipt,
+        )
+        destination = control / f"destroyed-{entry.content_key_id}.json"
+        destination.write_bytes(canonical_json_bytes(record))
+        destination.chmod(0o660)
+
+    ledger = MagicMock()
+    ledger.entries.return_value = tuple(entries)
+    ledger.lookup.side_effect = AssertionError("per-entry lookup is quadratic")
+    local_key_provider_module._validate_provider_destruction_consistency(
+        control=control,
+        ledger=ledger,
+    )
+
+    ledger.entries.assert_called_once_with()
+    ledger.lookup.assert_not_called()
 
 
 class _ProcessEvent(Protocol):
@@ -61,6 +103,13 @@ def _key_root(tmp_path: Path) -> tuple[Path, Path, Path]:
     ledger = root.parent / "destruction-ledger"
     ledger.mkdir(mode=0o770)
     ledger.chmod(0o2770)
+    anchor_parent = root.parent / "destruction-anchor"
+    anchor_parent.mkdir(mode=0o770)
+    anchor_parent.chmod(0o2770)
+    initialize_empty_destruction_ledger_anchor(
+        ledger,
+        anchor_parent / "current.json",
+    )
     return root, control, material
 
 
@@ -752,6 +801,13 @@ def test_root_must_be_absolute_setgid_layout_without_symlink(tmp_path: Path) -> 
     ledger = root.parent / "destruction-ledger"
     ledger.mkdir(mode=0o770)
     ledger.chmod(0o2770)
+    anchor_parent = root.parent / "destruction-anchor"
+    anchor_parent.mkdir(mode=0o770)
+    anchor_parent.chmod(0o2770)
+    initialize_empty_destruction_ledger_anchor(
+        ledger,
+        anchor_parent / "current.json",
+    )
     link = tmp_path / "key-link"
     link.symlink_to(root, target_is_directory=True)
     with pytest.raises(KeyProviderError):

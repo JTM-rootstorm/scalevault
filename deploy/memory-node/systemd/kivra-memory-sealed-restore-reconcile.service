@@ -1,29 +1,25 @@
 [Unit]
-Description=ScaleVault sealed-content purge worker
-After=postgresql@17-main.service
-Requires=postgresql@17-main.service
+Description=ScaleVault offline sealed-provider restore reconciliation
+After=local-fs.target
+Before=kivra-memory-api.service kivra-memory-codex-ingress.service
 ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys/control
 ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys/material
 ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/destruction-ledger
 ConditionPathIsDirectory=/var/lib/kivra-memory-destruction-anchor
-ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/purge-requests
+ConditionPathIsRegularFile=/etc/kivra-memory/destruction-ledger-anchor
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
-Type=simple
-User=memory-purge
-Group=memory-purge
-SupplementaryGroups=kivra-memory kivra-sealed kivra-destruction-ledger kivra-destruction-request
+Type=oneshot
+User=memory-destruction
+Group=memory-destruction
+SupplementaryGroups=kivra-sealed kivra-destruction-ledger
 WorkingDirectory=/opt/kivra-memory/app
-Environment=KIVRA_MEMORY_ENVIRONMENT=production
-EnvironmentFile=/etc/kivra-memory/memory-sealed-worker.env
-LoadCredential=database-url:/etc/kivra-memory/memory-sealed-worker-database-url
 LoadCredential=destruction-ledger-anchor:/etc/kivra-memory/destruction-ledger-anchor
 UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
-ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-sealed-worker
-Restart=on-failure
-RestartSec=5s
+ExecStart=/opt/kivra-memory/app/.venv/bin/kivra-memory-sealed-restore-reconcile
+TimeoutStartSec=60s
 TimeoutStopSec=30s
 UMask=0007
 LimitCORE=0
@@ -49,15 +45,10 @@ KeyringMode=private
 SystemCallArchitectures=native
 LockPersonality=true
 MemoryDenyWriteExecute=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX
 IPAddressDeny=any
-IPAddressAllow=localhost
 CapabilityBoundingSet=
-ReadOnlyPaths=/var/lib/kivra-memory-sealed/keys/control
-ReadOnlyPaths=/var/lib/kivra-memory-sealed/keys/material
+ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control
+ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material
 ReadOnlyPaths=/var/lib/kivra-memory-sealed/destruction-ledger
 ReadOnlyPaths=/var/lib/kivra-memory-destruction-anchor
-ReadWritePaths=/var/lib/kivra-memory-sealed/purge-requests
-
-[Install]
-WantedBy=multi-user.target

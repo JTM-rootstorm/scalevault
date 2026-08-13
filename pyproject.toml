@@ -54,8 +54,14 @@ kivra-memory-github-ingress = "kivra_memory.workers.github_ingress_main:main"
 kivra-memory-worker = "kivra_memory.workers.main:main"
 kivra-memory-lifecycle-worker = "kivra_memory.workers.lifecycle_main:main"
 kivra-memory-sealed-worker = "kivra_memory.workers.sealed_main:main"
+kivra-memory-destruction-broker = "kivra_memory.security.destruction_broker:main"
+kivra-memory-sealed-restore-reconcile = "kivra_memory.security.destruction_broker:restore_reconcile_main"
 kivra-memory-diagnose = "kivra_memory.tools.diagnostics:main"
 kivra-memory-credential-admin = "kivra_memory.admin.credentials_main:main"
+kivra-memory-archive-recovery = "kivra_memory.tools.archive_recovery:main"
+kivra-memory-scan-public-artifact = "kivra_memory.security.leakage_scanner:main"
+kivra-memory-operator-report = "kivra_memory.observability.report_main:main"
+kivra-memory-operator-report-run = "kivra_memory.observability.report_runner:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["services/memory-node/src/kivra_memory"]

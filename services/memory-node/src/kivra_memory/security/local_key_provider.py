@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import errno
+import fcntl
 import hashlib
 import os
 import stat
@@ -17,8 +18,10 @@ from uuid import UUID
 from kivra_memory.domain.canonical_json import canonical_json_bytes, parse_json_strict
 from kivra_memory.domain.identifiers import require_uuid7
 from kivra_memory.security.destruction_ledger import (
+    DestructionLedgerAnchor,
     DestructionLedgerEntry,
     LocalDestructionLedger,
+    LocalDestructionLedgerWriter,
 )
 from kivra_memory.security.keys import (
     CONTENT_KEY_BYTES,
@@ -30,8 +33,10 @@ from kivra_memory.security.keys import (
 
 LOCAL_KEY_PROVIDER_NAME: Final = "local-directory-v1"
 LOCAL_KEY_PROVIDER_ROOT: Final = Path("/var/lib/kivra-memory-sealed/keys")
+LOCAL_DESTRUCTION_REQUEST_ROOT: Final = Path("/var/lib/kivra-memory-sealed/purge-requests")
 CONTROL_DIRECTORY_NAME: Final = "control"
 MATERIAL_DIRECTORY_NAME: Final = "material"
+DESTRUCTION_REQUEST_DIRECTORY_NAME: Final = "purge-requests"
 _REFERENCE_PREFIX: Final = f"{LOCAL_KEY_PROVIDER_NAME}:"
 _RECORD_VERSION: Final = 1
 _RECEIPT_BYTES: Final = 32
@@ -59,6 +64,8 @@ class LocalDirectoryKeyDestroyer:
         root: Path,
         *,
         destruction_ledger_root: Path | None = None,
+        destruction_ledger_anchor_path: Path | None = None,
+        expected_destruction_ledger_anchor: DestructionLedgerAnchor | None = None,
         required_owner_uid: int | None = None,
         material_file_owner_uid: int | None = None,
     ) -> None:
@@ -68,8 +75,14 @@ class LocalDirectoryKeyDestroyer:
         self._ledger_root = Path(
             destruction_ledger_root or self._root.parent / "destruction-ledger"
         )
+        self._ledger_anchor_path = Path(
+            destruction_ledger_anchor_path
+            or self._ledger_root.parent / "destruction-anchor" / "current.json"
+        )
         try:
             _require_separate_recovery_roots(self._root, self._ledger_root)
+            _require_separate_recovery_roots(self._root, self._ledger_anchor_path.parent)
+            _require_separate_recovery_roots(self._ledger_root, self._ledger_anchor_path.parent)
             _validate_layout(
                 self._root,
                 self._control,
@@ -78,8 +91,10 @@ class LocalDirectoryKeyDestroyer:
                 material_file_owner_uid=material_file_owner_uid,
                 destruction_only=True,
             )
-            self._ledger = LocalDestructionLedger(
+            self._ledger = LocalDestructionLedgerWriter(
                 self._ledger_root,
+                anchor_path=self._ledger_anchor_path,
+                expected_anchor=expected_destruction_ledger_anchor,
                 required_owner_uid=required_owner_uid,
             )
             _reconcile_destruction_ledger(
@@ -95,6 +110,23 @@ class LocalDirectoryKeyDestroyer:
             raise KeyProviderError() from None
 
     async def destroy_key(self, reference: ContentKeyReference) -> KeyDestructionReceipt:
+        return await self._destroy_key(reference, expected_request=None)
+
+    async def destroy_requested_key(
+        self,
+        reference: ContentKeyReference,
+        expected_request: DestructionLedgerEntry,
+    ) -> KeyDestructionReceipt:
+        """Destroy only when the immutable active record exactly authorizes a request."""
+
+        return await self._destroy_key(reference, expected_request=expected_request)
+
+    async def _destroy_key(
+        self,
+        reference: ContentKeyReference,
+        *,
+        expected_request: DestructionLedgerEntry | None,
+    ) -> KeyDestructionReceipt:
         try:
             content_key_id = _reference_id(reference)
             active_name = _active_name(content_key_id)
@@ -103,8 +135,10 @@ class LocalDirectoryKeyDestroyer:
                 _directory_fd(self._control) as control_fd,
                 _directory_fd(self._material) as material_fd,
             ):
+                fcntl.flock(control_fd, fcntl.LOCK_EX)
                 ledger_entry = self._ledger.lookup(content_key_id)
                 if ledger_entry is not None:
+                    _require_expected_request(ledger_entry, expected_request)
                     _apply_ledger_entry(
                         control_fd=control_fd,
                         material_fd=material_fd,
@@ -122,6 +156,7 @@ class LocalDirectoryKeyDestroyer:
                         destroyed.get("receipt"), expected_bytes=_RECEIPT_BYTES
                     ):
                         raise ValueError
+                    _require_expected_request(entry, expected_request)
                     _apply_ledger_entry(
                         control_fd=control_fd,
                         material_fd=material_fd,
@@ -133,7 +168,9 @@ class LocalDirectoryKeyDestroyer:
                 identity = _record_identity(active)
                 _require_control_record(active, state="active", identity=identity)
                 receipt = _canonical_base64(active.get("receipt"), expected_bytes=_RECEIPT_BYTES)
-                entry = self._ledger.record(_ledger_entry(identity=identity, receipt=receipt))
+                proposed = _ledger_entry(identity=identity, receipt=receipt)
+                _require_expected_request(proposed, expected_request)
+                entry = self._ledger.record(proposed)
                 tombstone = _control_record(
                     state="destroyed",
                     identity=identity,
@@ -159,6 +196,121 @@ class LocalDirectoryKeyDestroyer:
             raise KeyProviderError() from None
 
 
+class LocalDirectoryKeyPurgeRequester:
+    """Request root-broker destruction without ledger or material mutation authority."""
+
+    name = LOCAL_KEY_PROVIDER_NAME
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        destruction_request_root: Path,
+        destruction_ledger_root: Path,
+        destruction_ledger_anchor_path: Path,
+        expected_destruction_ledger_anchor: DestructionLedgerAnchor | None,
+        required_owner_uid: int | None = None,
+    ) -> None:
+        self._root = Path(root)
+        self._control = self._root / CONTROL_DIRECTORY_NAME
+        self._material = self._root / MATERIAL_DIRECTORY_NAME
+        self._requests = Path(destruction_request_root)
+        try:
+            if expected_destruction_ledger_anchor is None:
+                raise ValueError
+            self._expected_anchor = expected_destruction_ledger_anchor
+            for first, second in (
+                (self._root, self._requests),
+                (self._root, Path(destruction_ledger_root)),
+                (self._root, Path(destruction_ledger_anchor_path).parent),
+                (self._requests, Path(destruction_ledger_root)),
+                (self._requests, Path(destruction_ledger_anchor_path).parent),
+                (Path(destruction_ledger_root), Path(destruction_ledger_anchor_path).parent),
+            ):
+                _require_separate_recovery_roots(first, second)
+            _validate_directory(
+                self._control,
+                required_owner_uid=required_owner_uid,
+                required_access=os.R_OK | os.X_OK,
+            )
+            _validate_directory(
+                self._requests,
+                required_owner_uid=required_owner_uid,
+                required_access=os.R_OK | os.W_OK | os.X_OK,
+            )
+            _validate_directory(
+                self._material,
+                required_owner_uid=required_owner_uid,
+                required_access=os.X_OK,
+            )
+            self._ledger = LocalDestructionLedger(
+                destruction_ledger_root,
+                anchor_path=destruction_ledger_anchor_path,
+                expected_anchor=expected_destruction_ledger_anchor,
+                required_owner_uid=required_owner_uid,
+            )
+        except Exception:
+            raise KeyProviderError() from None
+
+    async def destroy_key(self, reference: ContentKeyReference) -> KeyDestructionReceipt:
+        try:
+            content_key_id = _reference_id(reference)
+            existing = self._ledger.lookup(content_key_id)
+            if existing is not None:
+                self._ledger.require_anchor(self._expected_anchor)
+                self._require_completed(existing)
+                return KeyDestructionReceipt(existing.receipt)
+            with _directory_fd(self._control) as control_fd:
+                fcntl.flock(control_fd, fcntl.LOCK_SH)
+                active = _read_control_record(control_fd, _active_name(content_key_id))
+                identity = _record_identity(active)
+                _require_control_record(active, state="active", identity=identity)
+                receipt = _canonical_base64(active.get("receipt"), expected_bytes=_RECEIPT_BYTES)
+            request = _control_record(state="destroyed", identity=identity, receipt=receipt)
+            with _directory_fd(self._requests) as request_fd:
+                _publish_once(
+                    request_fd,
+                    _destroyed_name(content_key_id),
+                    canonical_json_bytes(request),
+                    mode=_CONTROL_FILE_MODE,
+                )
+            existing = self._ledger.lookup(content_key_id)
+            if existing is None:
+                raise ValueError
+            self._ledger.require_anchor(self._expected_anchor)
+            self._require_completed(existing)
+            return KeyDestructionReceipt(existing.receipt)
+        except Exception:
+            raise KeyProviderError() from None
+
+    def _require_completed(self, entry: DestructionLedgerEntry) -> None:
+        with (
+            _directory_fd(self._control) as control_fd,
+            _directory_fd(self._material) as material_fd,
+        ):
+            fcntl.flock(control_fd, fcntl.LOCK_SH)
+            if _try_control_record(control_fd, _active_name(entry.content_key_id)) is not None:
+                raise ValueError
+            destroyed = _read_control_record(control_fd, _destroyed_name(entry.content_key_id))
+            identity = _record_identity(destroyed)
+            _require_control_record(destroyed, state="destroyed", identity=identity)
+            if (
+                _entry_identity(entry) != identity
+                or _canonical_base64(destroyed.get("receipt"), expected_bytes=_RECEIPT_BYTES)
+                != entry.receipt
+            ):
+                raise ValueError
+            try:
+                os.stat(
+                    _material_name(entry.content_key_id),
+                    dir_fd=material_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                return
+            raise ValueError
+
+
 class LocalDirectoryKeyProvider:
     """Provision and read DEKs while keeping secret material out of control records."""
 
@@ -169,6 +321,9 @@ class LocalDirectoryKeyProvider:
         root: Path,
         *,
         destruction_ledger_root: Path | None = None,
+        destruction_ledger_anchor_path: Path | None = None,
+        expected_destruction_ledger_anchor: DestructionLedgerAnchor | None = None,
+        read_only_destruction_authority: bool = False,
         required_owner_uid: int | None = None,
     ) -> None:
         self._root = Path(root)
@@ -177,9 +332,16 @@ class LocalDirectoryKeyProvider:
         self._ledger_root = Path(
             destruction_ledger_root or self._root.parent / "destruction-ledger"
         )
+        self._ledger_anchor_path = Path(
+            destruction_ledger_anchor_path
+            or self._ledger_root.parent / "destruction-anchor" / "current.json"
+        )
         self._material_file_owner_uid = os.geteuid()
+        self._read_only_ledger = read_only_destruction_authority
         try:
             _require_separate_recovery_roots(self._root, self._ledger_root)
+            _require_separate_recovery_roots(self._root, self._ledger_anchor_path.parent)
+            _require_separate_recovery_roots(self._ledger_root, self._ledger_anchor_path.parent)
             _validate_layout(
                 self._root,
                 self._control,
@@ -190,23 +352,30 @@ class LocalDirectoryKeyProvider:
             )
             self._ledger = LocalDestructionLedger(
                 self._ledger_root,
+                anchor_path=self._ledger_anchor_path,
+                expected_anchor=expected_destruction_ledger_anchor,
                 required_owner_uid=required_owner_uid,
             )
-            _reconcile_destruction_ledger(
-                control=self._control,
-                material=self._material,
-                ledger=self._ledger,
-            )
+            if not self._read_only_ledger:
+                _reconcile_destruction_ledger(
+                    control=self._control,
+                    material=self._material,
+                    ledger=self._ledger,
+                )
             _validate_provider_destruction_consistency(
                 control=self._control,
                 ledger=self._ledger,
             )
-            self._destroyer = LocalDirectoryKeyDestroyer(
-                self._root,
-                destruction_ledger_root=self._ledger_root,
-                required_owner_uid=required_owner_uid,
-                material_file_owner_uid=None,
-            )
+            self._destroyer = None
+            if not self._read_only_ledger:
+                self._destroyer = LocalDirectoryKeyDestroyer(
+                    self._root,
+                    destruction_ledger_root=self._ledger_root,
+                    destruction_ledger_anchor_path=self._ledger_anchor_path,
+                    expected_destruction_ledger_anchor=expected_destruction_ledger_anchor,
+                    required_owner_uid=required_owner_uid,
+                    material_file_owner_uid=None,
+                )
         except Exception:
             raise KeyProviderError() from None
 
@@ -240,13 +409,15 @@ class LocalDirectoryKeyProvider:
                 _directory_fd(self._control) as control_fd,
                 _directory_fd(self._material) as material_fd,
             ):
+                fcntl.flock(control_fd, fcntl.LOCK_EX)
                 ledger_entry = self._ledger.lookup(content_key_id)
                 if ledger_entry is not None:
-                    _apply_ledger_entry(
-                        control_fd=control_fd,
-                        material_fd=material_fd,
-                        entry=ledger_entry,
-                    )
+                    if not self._read_only_ledger:
+                        _apply_ledger_entry(
+                            control_fd=control_fd,
+                            material_fd=material_fd,
+                            entry=ledger_entry,
+                        )
                     raise ValueError
                 if _try_control_record(control_fd, destroyed_name) is not None:
                     raise ValueError
@@ -295,11 +466,12 @@ class LocalDirectoryKeyProvider:
                     raise ValueError
                 ledger_entry = self._ledger.lookup(content_key_id)
                 if ledger_entry is not None:
-                    _apply_ledger_entry(
-                        control_fd=control_fd,
-                        material_fd=material_fd,
-                        entry=ledger_entry,
-                    )
+                    if not self._read_only_ledger:
+                        _apply_ledger_entry(
+                            control_fd=control_fd,
+                            material_fd=material_fd,
+                            entry=ledger_entry,
+                        )
                     raise ValueError
                 return reference
         except Exception:
@@ -315,13 +487,15 @@ class LocalDirectoryKeyProvider:
                 _directory_fd(self._control) as control_fd,
                 _directory_fd(self._material) as material_fd,
             ):
+                fcntl.flock(control_fd, fcntl.LOCK_SH)
                 ledger_entry = self._ledger.lookup(content_key_id)
                 if ledger_entry is not None:
-                    _apply_ledger_entry(
-                        control_fd=control_fd,
-                        material_fd=material_fd,
-                        entry=ledger_entry,
-                    )
+                    if not self._read_only_ledger:
+                        _apply_ledger_entry(
+                            control_fd=control_fd,
+                            material_fd=material_fd,
+                            entry=ledger_entry,
+                        )
                     raise ValueError
                 if _try_control_record(control_fd, destroyed_name) is not None:
                     raise ValueError
@@ -337,18 +511,64 @@ class LocalDirectoryKeyProvider:
                     raise ValueError
                 ledger_entry = self._ledger.lookup(content_key_id)
                 if ledger_entry is not None:
-                    _apply_ledger_entry(
-                        control_fd=control_fd,
-                        material_fd=material_fd,
-                        entry=ledger_entry,
-                    )
+                    if not self._read_only_ledger:
+                        _apply_ledger_entry(
+                            control_fd=control_fd,
+                            material_fd=material_fd,
+                            entry=ledger_entry,
+                        )
                     raise ValueError
                 return ContentKeyMaterial(key)
         except Exception:
             raise KeyProviderError() from None
 
     async def destroy_key(self, reference: ContentKeyReference) -> KeyDestructionReceipt:
+        if self._destroyer is None:
+            raise KeyProviderError()
         return await self._destroyer.destroy_key(reference)
+
+
+def reconcile_restored_local_key_provider(
+    root: Path,
+    *,
+    destruction_ledger_root: Path,
+    destruction_ledger_anchor_path: Path,
+    expected_destruction_ledger_anchor: DestructionLedgerAnchor,
+    required_owner_uid: int | None = None,
+) -> None:
+    """Apply accepted destruction facts to a restored provider before activation."""
+
+    provider_root = Path(root)
+    control = provider_root / CONTROL_DIRECTORY_NAME
+    material = provider_root / MATERIAL_DIRECTORY_NAME
+    ledger_root = Path(destruction_ledger_root)
+    anchor_path = Path(destruction_ledger_anchor_path)
+    try:
+        _require_separate_recovery_roots(provider_root, ledger_root)
+        _require_separate_recovery_roots(provider_root, anchor_path.parent)
+        _require_separate_recovery_roots(ledger_root, anchor_path.parent)
+        _validate_layout(
+            provider_root,
+            control,
+            material,
+            required_owner_uid=required_owner_uid,
+            material_file_owner_uid=None,
+            destruction_only=True,
+        )
+        ledger = LocalDestructionLedger(
+            ledger_root,
+            anchor_path=anchor_path,
+            expected_anchor=expected_destruction_ledger_anchor,
+            required_owner_uid=required_owner_uid,
+        )
+        _reconcile_destruction_ledger(
+            control=control,
+            material=material,
+            ledger=ledger,
+        )
+        _validate_provider_destruction_consistency(control=control, ledger=ledger)
+    except Exception:
+        raise KeyProviderError() from None
 
 
 def _require_separate_recovery_roots(provider_root: Path, ledger_root: Path) -> None:
@@ -381,6 +601,14 @@ def _entry_identity(entry: DestructionLedgerEntry) -> dict[str, object]:
         lineage_id=entry.lineage_id,
         memory_id=entry.memory_id,
     )
+
+
+def _require_expected_request(
+    actual: DestructionLedgerEntry,
+    expected: DestructionLedgerEntry | None,
+) -> None:
+    if expected is not None and actual != expected:
+        raise ValueError
 
 
 def _apply_ledger_entry(
@@ -443,6 +671,7 @@ def _validate_provider_destruction_consistency(
 ) -> None:
     """Reject provider tombstones that are absent or different in authority."""
 
+    entries = {entry.content_key_id: entry for entry in ledger.entries()}
     with _directory_fd(control) as control_fd:
         for name in sorted(os.listdir(control_fd)):
             if not isinstance(name, str) or not name.startswith("destroyed-"):
@@ -451,7 +680,7 @@ def _validate_provider_destruction_consistency(
             identity = _record_identity(record)
             _require_control_record(record, state="destroyed", identity=identity)
             content_key_id = UUID(cast(str, identity["content_key_id"]))
-            entry = ledger.lookup(content_key_id)
+            entry = entries.get(content_key_id)
             if entry is None or _entry_identity(entry) != identity:
                 raise ValueError
             if (
@@ -778,9 +1007,13 @@ def _canonical_base64(value: object, *, expected_bytes: int) -> bytes:
 
 __all__ = [
     "CONTROL_DIRECTORY_NAME",
+    "DESTRUCTION_REQUEST_DIRECTORY_NAME",
+    "LOCAL_DESTRUCTION_REQUEST_ROOT",
     "LOCAL_KEY_PROVIDER_NAME",
     "LOCAL_KEY_PROVIDER_ROOT",
     "MATERIAL_DIRECTORY_NAME",
     "LocalDirectoryKeyDestroyer",
     "LocalDirectoryKeyProvider",
+    "LocalDirectoryKeyPurgeRequester",
+    "reconcile_restored_local_key_provider",
 ]

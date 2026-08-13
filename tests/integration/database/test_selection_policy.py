@@ -47,7 +47,10 @@ from kivra_memory.policy import (
     NominationProposal,
     SelectionBasis,
 )
-from kivra_memory.security.destruction_ledger import LocalDestructionLedger
+from kivra_memory.security.destruction_ledger import (
+    LocalDestructionLedger,
+    initialize_empty_destruction_ledger_anchor,
+)
 from kivra_memory.security.keys import ContentKeyReference, KeyProviderError
 from kivra_memory.security.local_key_provider import (
     CONTROL_DIRECTORY_NAME,
@@ -549,7 +552,7 @@ async def _return(value: Any) -> Any:
     return value
 
 
-def _sealed_provider_layout(tmp_path: Path) -> tuple[Path, Path]:
+def _sealed_provider_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     provider_root = tmp_path / "keys"
     provider_root.mkdir(mode=0o710)
     provider_root.chmod(0o2710)
@@ -560,7 +563,12 @@ def _sealed_provider_layout(tmp_path: Path) -> tuple[Path, Path]:
     ledger_root = tmp_path / "destruction-ledger"
     ledger_root.mkdir(mode=0o770)
     ledger_root.chmod(0o2770)
-    return provider_root, ledger_root
+    anchor_parent = tmp_path / "destruction-anchor"
+    anchor_parent.mkdir(mode=0o770)
+    anchor_parent.chmod(0o2770)
+    anchor_path = anchor_parent / "current.json"
+    initialize_empty_destruction_ledger_anchor(ledger_root, anchor_path)
+    return provider_root, ledger_root, anchor_path
 
 
 async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_dek(
@@ -586,10 +594,11 @@ async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_d
             )
         }
     )
-    provider_root, ledger_root = _sealed_provider_layout(tmp_path / "live")
+    provider_root, ledger_root, anchor_path = _sealed_provider_layout(tmp_path / "live")
     provider = LocalDirectoryKeyProvider(
         provider_root,
         destruction_ledger_root=ledger_root,
+        destruction_ledger_anchor_path=anchor_path,
     )
 
     async with _seeded_database(postgresql_server.database_url) as database:
@@ -676,12 +685,13 @@ async def test_real_sealed_purge_and_stale_key_backup_restore_never_resurrects_d
         shutil.copytree(backup_root, restored_root)
         stale_material = restored_root / MATERIAL_DIRECTORY_NAME / f"key-{content_key_id}.bin"
         assert stale_material.is_file()
-        ledger = LocalDestructionLedger(ledger_root)
+        ledger = LocalDestructionLedger(ledger_root, anchor_path=anchor_path)
         current_anchor = ledger.anchor()
         ledger.require_anchor(current_anchor)
         restored = LocalDirectoryKeyProvider(
             restored_root,
             destruction_ledger_root=ledger_root,
+            destruction_ledger_anchor_path=anchor_path,
         )
         assert not stale_material.exists()
         restored_reference = ContentKeyReference(

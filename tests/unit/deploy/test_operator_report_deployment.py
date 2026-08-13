@@ -47,7 +47,7 @@ def test_operator_report_template_owns_private_output_and_emits_no_report_stdout
     assert "StandardOutput=null" in unit
     assert "StandardError=journal" in unit
     assert "ProtectSystem=strict" in unit
-    assert "ProtectHome=yes" in unit
-    assert "NoNewPrivileges=yes" in unit
+    assert "ProtectHome=true" in unit
+    assert "NoNewPrivileges=true" in unit
     assert "LimitCORE=0" in unit
     assert "CapabilityBoundingSet=\n" in unit

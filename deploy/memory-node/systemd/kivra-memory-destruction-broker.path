@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch ScaleVault sealed-key destruction requests
+
+[Path]
+PathChanged=/var/lib/kivra-memory-sealed/purge-requests
+DirectoryNotEmpty=/var/lib/kivra-memory-sealed/purge-requests
+Unit=kivra-memory-destruction-broker.service
+
+[Install]
+WantedBy=multi-user.target

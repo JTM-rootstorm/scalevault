@@ -31,6 +31,7 @@ from kivra_memory.application.selection import (
 )
 from kivra_memory.config import Settings
 from kivra_memory.security.credential_files import read_protected_file
+from kivra_memory.security.destruction_ledger import DestructionLedgerAnchor
 from kivra_memory.security.keys import KeyProvider
 from kivra_memory.security.local_key_provider import LocalDirectoryKeyProvider
 from kivra_memory.storage.selection_history import SelectionHistoryRepository
@@ -53,13 +54,28 @@ class SealedRuntime:
             return cls(key_provider=None, digest_binder=None)
         root = settings.sealed_key_provider_root
         ledger_root = settings.sealed_destruction_ledger_root
+        ledger_anchor_path = settings.sealed_destruction_ledger_anchor_path
+        ledger_anchor_credential = settings.sealed_destruction_ledger_anchor_credential
         credential = settings.sealed_digest_binding_credential
-        if root is None or ledger_root is None or credential is None:
+        if root is None or ledger_root is None or ledger_anchor_path is None or credential is None:
             raise RuntimeError("invalid_sealed_content_configuration")
         try:
+            expected_anchor = (
+                _read_destruction_ledger_anchor(
+                    ledger_anchor_credential,
+                    required_owner_uid=os.geteuid(),
+                )
+                if ledger_anchor_credential is not None
+                else None
+            )
+            if settings.environment == "production" and expected_anchor is None:
+                raise ValueError
             provider = LocalDirectoryKeyProvider(
                 root,
                 destruction_ledger_root=ledger_root,
+                destruction_ledger_anchor_path=ledger_anchor_path,
+                expected_destruction_ledger_anchor=expected_anchor,
+                read_only_destruction_authority=True,
                 required_owner_uid=0 if settings.environment == "production" else None,
             )
             digest_binder = HmacSha256SealedDigestBinder(
@@ -123,6 +139,21 @@ def _read_digest_binding_secret(path: Path, *, required_owner_uid: int | None) -
         minimum_bytes=32,
         maximum_bytes=128,
         required_owner_uid=required_owner_uid,
+    )
+
+
+def _read_destruction_ledger_anchor(
+    path: Path,
+    *,
+    required_owner_uid: int | None,
+) -> DestructionLedgerAnchor:
+    return DestructionLedgerAnchor.from_bytes(
+        read_protected_file(
+            path,
+            minimum_bytes=1,
+            maximum_bytes=512,
+            required_owner_uid=required_owner_uid,
+        )
     )
 
 

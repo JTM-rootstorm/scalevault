@@ -128,6 +128,12 @@ def test_codex_private_ingress_uses_its_own_sealed_digest_boundary() -> None:
                 sealed_destruction_ledger_root=Path(
                     "/var/lib/kivra-memory-sealed/destruction-ledger"
                 ),
+                sealed_destruction_ledger_anchor_path=Path(
+                    "/var/lib/kivra-memory-destruction-anchor/current.json"
+                ),
+                sealed_destruction_ledger_anchor_credential=Path(
+                    "/run/credentials/kivra-memory-codex-ingress.service/destruction-ledger-anchor"
+                ),
                 sealed_digest_binding_credential=Path(
                     "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
                 ),
@@ -139,6 +145,12 @@ def test_codex_private_ingress_uses_its_own_sealed_digest_boundary() -> None:
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
             sealed_destruction_ledger_root=Path("/var/lib/kivra-memory-sealed/destruction-ledger"),
+            sealed_destruction_ledger_anchor_path=Path(
+                "/var/lib/kivra-memory-destruction-anchor/current.json"
+            ),
+            sealed_destruction_ledger_anchor_credential=Path(
+                "/run/credentials/kivra-memory-codex-ingress.service/destruction-ledger-anchor"
+            ),
             sealed_digest_binding_credential=Path(
                 "/run/credentials/kivra-memory-codex-ingress.service/sealed-digest-binding"
             ),
@@ -159,12 +171,14 @@ def test_sealed_content_requires_an_explicit_absolute_provider_root() -> None:
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/tmp/keys"),
             sealed_destruction_ledger_root=Path("/tmp/destruction-ledger"),
+            sealed_destruction_ledger_anchor_path=Path("/tmp/destruction-anchor/current.json"),
         )
     with pytest.raises(ValidationError, match="sealed_digest_binding_credential"):
         Settings(
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/tmp/keys"),
             sealed_destruction_ledger_root=Path("/tmp/destruction-ledger"),
+            sealed_destruction_ledger_anchor_path=Path("/tmp/destruction-anchor/current.json"),
             sealed_digest_binding_credential=Path("relative-binding"),
         )
     with pytest.raises(ValidationError, match="sealed_destruction_ledger_root"):
@@ -172,6 +186,14 @@ def test_sealed_content_requires_an_explicit_absolute_provider_root() -> None:
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/tmp/keys"),
             sealed_destruction_ledger_root=Path("relative-ledger"),
+            sealed_destruction_ledger_anchor_path=Path("/tmp/destruction-anchor/current.json"),
+            sealed_digest_binding_credential=Path("/tmp/binding"),
+        )
+    with pytest.raises(ValidationError, match="sealed_destruction_ledger_anchor_path"):
+        Settings(
+            sealed_content_enabled=True,
+            sealed_key_provider_root=Path("/tmp/keys"),
+            sealed_destruction_ledger_root=Path("/tmp/destruction-ledger"),
             sealed_digest_binding_credential=Path("/tmp/binding"),
         )
     with pytest.raises(ValidationError, match="outside the key provider root"):
@@ -179,6 +201,7 @@ def test_sealed_content_requires_an_explicit_absolute_provider_root() -> None:
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/tmp/keys"),
             sealed_destruction_ledger_root=Path("/tmp/keys/ledger"),
+            sealed_destruction_ledger_anchor_path=Path("/tmp/destruction-anchor/current.json"),
             sealed_digest_binding_credential=Path("/tmp/binding"),
         )
 
@@ -192,6 +215,12 @@ def test_production_sealed_content_uses_separate_local_key_boundary() -> None:
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/mnt/memory/kivra-memory/sealed-keys"),
             sealed_destruction_ledger_root=Path("/var/lib/kivra-memory-sealed/destruction-ledger"),
+            sealed_destruction_ledger_anchor_path=Path(
+                "/var/lib/kivra-memory-destruction-anchor/current.json"
+            ),
+            sealed_destruction_ledger_anchor_credential=Path(
+                "/run/credentials/kivra-memory-api.service/destruction-ledger-anchor"
+            ),
             sealed_digest_binding_credential=Path("/run/credentials/test/binding"),
             **PRODUCTION_AUTH,
         )
@@ -203,6 +232,12 @@ def test_production_sealed_content_uses_separate_local_key_boundary() -> None:
             sealed_content_enabled=True,
             sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
             sealed_destruction_ledger_root=Path("/var/lib/kivra-memory-sealed/destruction-ledger"),
+            sealed_destruction_ledger_anchor_path=Path(
+                "/var/lib/kivra-memory-destruction-anchor/current.json"
+            ),
+            sealed_destruction_ledger_anchor_credential=Path(
+                "/run/credentials/kivra-memory-api.service/destruction-ledger-anchor"
+            ),
             sealed_digest_binding_credential=Path("/etc/kivra-memory/binding"),
             **PRODUCTION_AUTH,
         )
@@ -213,12 +248,36 @@ def test_production_sealed_content_uses_separate_local_key_boundary() -> None:
         sealed_content_enabled=True,
         sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
         sealed_destruction_ledger_root=Path("/var/lib/kivra-memory-sealed/destruction-ledger"),
+        sealed_destruction_ledger_anchor_path=Path(
+            "/var/lib/kivra-memory-destruction-anchor/current.json"
+        ),
+        sealed_destruction_ledger_anchor_credential=Path(
+            "/run/credentials/kivra-memory-api.service/destruction-ledger-anchor"
+        ),
         sealed_digest_binding_credential=Path(
             "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
         ),
         **PRODUCTION_AUTH,
     )
     assert settings.sealed_content_enabled is True
+
+
+def test_production_sealed_content_requires_external_anchor_credential() -> None:
+    with pytest.raises(ValidationError, match="systemd credential boundary"):
+        Settings(
+            environment="production",
+            database_url=PostgresDsn("postgresql://memory-api:example@127.0.0.1/kivra_memory"),
+            sealed_content_enabled=True,
+            sealed_key_provider_root=Path("/var/lib/kivra-memory-sealed/keys"),
+            sealed_destruction_ledger_root=Path("/var/lib/kivra-memory-sealed/destruction-ledger"),
+            sealed_destruction_ledger_anchor_path=Path(
+                "/var/lib/kivra-memory-destruction-anchor/current.json"
+            ),
+            sealed_digest_binding_credential=Path(
+                "/run/credentials/kivra-memory-api.service/sealed-digest-binding"
+            ),
+            **PRODUCTION_AUTH,
+        )
 
 
 def test_production_requires_database_url() -> None:

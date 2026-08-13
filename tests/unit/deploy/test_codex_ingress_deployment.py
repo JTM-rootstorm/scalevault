@@ -251,13 +251,20 @@ def test_optional_sealed_drop_in_uses_ingress_credential_namespace() -> None:
         "/var/lib/kivra-memory-sealed/destruction-ledger"
     ) in drop_in
     assert (
+        "KIVRA_MEMORY_SEALED_DESTRUCTION_LEDGER_ANCHOR_PATH="
+        "/var/lib/kivra-memory-destruction-anchor/current.json"
+    ) in drop_in
+    assert (
         "KIVRA_MEMORY_SEALED_DIGEST_BINDING_CREDENTIAL="
         "/run/credentials/kivra-memory-codex-ingress.service/sealed-digest-binding"
     ) in drop_in
     assert "/run/credentials/kivra-memory-api.service/" not in drop_in
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in drop_in
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material" in drop_in
-    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" in drop_in
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-sealed/destruction-ledger" in drop_in
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-destruction-anchor" in drop_in
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" not in drop_in
+    assert "ReadWritePaths=/var/lib/kivra-memory-destruction-anchor" not in drop_in
 
 
 def test_private_ingress_artifacts_contain_no_completed_external_coordinates() -> None:

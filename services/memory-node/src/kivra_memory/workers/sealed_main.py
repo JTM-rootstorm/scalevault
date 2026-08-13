@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import pwd
 import signal
 import sys
 from contextlib import suppress
@@ -19,12 +18,20 @@ from sqlalchemy.engine import make_url
 
 from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.domain.identifiers import new_uuid7, require_uuid7
-from kivra_memory.security.credential_files import read_systemd_credential_text
-from kivra_memory.security.destruction_ledger import LOCAL_DESTRUCTION_LEDGER_ROOT
+from kivra_memory.security.credential_files import (
+    read_systemd_credential,
+    read_systemd_credential_text,
+)
+from kivra_memory.security.destruction_ledger import (
+    LOCAL_DESTRUCTION_LEDGER_ANCHOR_PATH,
+    LOCAL_DESTRUCTION_LEDGER_ROOT,
+    DestructionLedgerAnchor,
+)
 from kivra_memory.security.keys import KeyDestroyer
 from kivra_memory.security.local_key_provider import (
+    LOCAL_DESTRUCTION_REQUEST_ROOT,
     LOCAL_KEY_PROVIDER_ROOT,
-    LocalDirectoryKeyDestroyer,
+    LocalDirectoryKeyPurgeRequester,
 )
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import Actor, Client, TransportBinding
@@ -305,11 +312,20 @@ async def run_sealed_worker(settings: SealedWorkerSettings, destroyer: KeyDestro
 def main() -> None:
     try:
         settings = SealedWorkerSettings.from_environment()
-        destroyer = LocalDirectoryKeyDestroyer(
+        anchor_bytes = read_systemd_credential(
+            "destruction-ledger-anchor",
+            minimum_bytes=1,
+            maximum_bytes=512,
+        )
+        if not isinstance(anchor_bytes, bytes):
+            raise ValueError
+        destroyer = LocalDirectoryKeyPurgeRequester(
             LOCAL_KEY_PROVIDER_ROOT,
+            destruction_request_root=LOCAL_DESTRUCTION_REQUEST_ROOT,
             destruction_ledger_root=LOCAL_DESTRUCTION_LEDGER_ROOT,
+            destruction_ledger_anchor_path=LOCAL_DESTRUCTION_LEDGER_ANCHOR_PATH,
+            expected_destruction_ledger_anchor=DestructionLedgerAnchor.from_bytes(anchor_bytes),
             required_owner_uid=0,
-            material_file_owner_uid=pwd.getpwnam("memory-api").pw_uid,
         )
         asyncio.run(run_sealed_worker(settings, destroyer))
     except Exception:

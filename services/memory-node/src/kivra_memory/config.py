@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     sealed_content_enabled: bool = False
     sealed_key_provider_root: Path | None = None
     sealed_destruction_ledger_root: Path | None = None
+    sealed_destruction_ledger_anchor_path: Path | None = None
+    sealed_destruction_ledger_anchor_credential: Path | None = None
     sealed_digest_binding_credential: Path | None = None
 
     @model_validator(mode="after")
@@ -219,6 +221,21 @@ class Settings(BaseSettings):
                     "sealed_destruction_ledger_root must be an absolute canonical path"
                 )
             if (
+                self.sealed_destruction_ledger_anchor_path is None
+                or not self.sealed_destruction_ledger_anchor_path.is_absolute()
+                or ".." in self.sealed_destruction_ledger_anchor_path.parts
+            ):
+                raise ValueError(
+                    "sealed_destruction_ledger_anchor_path must be an absolute canonical path"
+                )
+            if self.sealed_destruction_ledger_anchor_credential is not None and (
+                not self.sealed_destruction_ledger_anchor_credential.is_absolute()
+                or ".." in self.sealed_destruction_ledger_anchor_credential.parts
+            ):
+                raise ValueError(
+                    "sealed_destruction_ledger_anchor_credential must be an absolute canonical path"
+                )
+            if (
                 self.sealed_destruction_ledger_root == self.sealed_key_provider_root
                 or self.sealed_destruction_ledger_root.is_relative_to(self.sealed_key_provider_root)
                 or self.sealed_key_provider_root.is_relative_to(self.sealed_destruction_ledger_root)
@@ -242,6 +259,27 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "sealed_destruction_ledger_root must use the production ledger boundary"
                 )
+            if (
+                self.environment == "production"
+                and self.sealed_destruction_ledger_anchor_path
+                != Path("/var/lib/kivra-memory-destruction-anchor/current.json")
+            ):
+                raise ValueError(
+                    "sealed_destruction_ledger_anchor_path must use the production anchor boundary"
+                )
+            anchor_credential_boundary = (
+                "/run/credentials/kivra-memory-codex-ingress.service/destruction-ledger-anchor"
+                if self.server_profile == "codex_private_ingress"
+                else "/run/credentials/kivra-memory-api.service/destruction-ledger-anchor"
+            )
+            if (
+                self.environment == "production"
+                and self.sealed_destruction_ledger_anchor_credential
+                != Path(anchor_credential_boundary)
+            ):
+                raise ValueError(
+                    "sealed destruction ledger anchor must use the systemd credential boundary"
+                )
             digest_boundary = (
                 "/run/credentials/kivra-memory-codex-ingress.service/sealed-digest-binding"
                 if self.server_profile == "codex_private_ingress"
@@ -256,6 +294,8 @@ class Settings(BaseSettings):
         elif (
             self.sealed_key_provider_root is not None
             or self.sealed_destruction_ledger_root is not None
+            or self.sealed_destruction_ledger_anchor_path is not None
+            or self.sealed_destruction_ledger_anchor_credential is not None
             or self.sealed_digest_binding_credential is not None
         ):
             raise ValueError("sealed provider settings require sealed content to be enabled")

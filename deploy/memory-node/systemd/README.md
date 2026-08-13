@@ -79,11 +79,16 @@ settings:
 ```sh
 groupadd --system kivra-sealed
 groupadd --system kivra-destruction-ledger
+groupadd --system kivra-destruction-request
 groupadd --system memory-purge
+groupadd --system memory-destruction
 useradd --system --no-create-home --home-dir /nonexistent \
   --shell /usr/sbin/nologin --gid memory-purge memory-purge
+useradd --system --no-create-home --home-dir /nonexistent \
+  --shell /usr/sbin/nologin --gid memory-destruction memory-destruction
 usermod --append --groups kivra-sealed,kivra-destruction-ledger memory-api
-usermod --append --groups kivra-memory,kivra-sealed,kivra-destruction-ledger memory-purge
+usermod --append --groups kivra-memory,kivra-sealed,kivra-destruction-ledger,kivra-destruction-request memory-purge
+usermod --append --groups kivra-sealed,kivra-destruction-ledger,kivra-destruction-request memory-destruction
 install -d -o root -g kivra-sealed -m 2710 \
   /var/lib/kivra-memory-sealed/keys
 install -d -o root -g kivra-sealed -m 2770 \
@@ -92,15 +97,42 @@ install -d -o root -g kivra-sealed -m 2770 \
   /var/lib/kivra-memory-sealed/keys/material
 install -d -o root -g kivra-destruction-ledger -m 2770 \
   /var/lib/kivra-memory-sealed/destruction-ledger
+install -d -o root -g kivra-destruction-ledger -m 2770 \
+  /var/lib/kivra-memory-destruction-anchor
+printf '%s' '{"aggregate_sha256":"2430f1a2ad2982d0067885488a4c89e21ad1d7c83b115ba8f1b20acc88dfaea8","entry_count":0,"version":1}' \
+  > /var/lib/kivra-memory-destruction-anchor/current.json
+chown root:kivra-destruction-ledger \
+  /var/lib/kivra-memory-destruction-anchor/current.json
+chmod 0640 /var/lib/kivra-memory-destruction-anchor/current.json
+install -o root -g root -m 0600 \
+  /var/lib/kivra-memory-destruction-anchor/current.json \
+  /etc/kivra-memory/destruction-ledger-anchor
+install -d -o root -g kivra-destruction-request -m 2770 \
+  /var/lib/kivra-memory-sealed/purge-requests
 ```
 
 Treat an existing sealed account, group membership, directory owner, or mode
 that differs from this layout as a failed prerequisite. The API creates raw
 DEK files in `material` as `memory-api` mode `0600`. The separate
-`memory-purge` user can create the stable, non-secret receipt tombstone in
-`control` and unlink a known material filename, but Unix DAC prevents it from
-opening a DEK file. Do not make material files group-readable and do not run the
-purge service as `memory-api`.
+`memory-purge` user can create only immutable, non-secret requests in
+`purge-requests`; it cannot write provider control, unlink material, or alter
+the ledger or either anchor. Do not make material files group-readable and do
+not run the purge service as `memory-api`.
+
+Install `kivra-memory-destruction-broker.service`, its `.path` unit, and
+`kivra-memory-sealed-restore-reconcile.service` beside the other ScaleVault
+units, then enable the path watcher:
+
+```sh
+systemctl enable --now kivra-memory-destruction-broker.path
+```
+
+Only the dedicated `memory-destruction` broker may write the ledger, local
+anchor, or provider control/material trees. The API and Codex ingress receive
+read-only ledger and
+anchor mounts. The purge worker receives read-only provider/ledger/anchor
+mounts and write access only to `purge-requests`; it cannot alter an accepted
+destruction fact or unlink a DEK itself.
 
 Configure the API with:
 
@@ -108,6 +140,8 @@ Configure the API with:
 KIVRA_MEMORY_SEALED_CONTENT_ENABLED=true
 KIVRA_MEMORY_SEALED_KEY_PROVIDER_ROOT=/var/lib/kivra-memory-sealed/keys
 KIVRA_MEMORY_SEALED_DESTRUCTION_LEDGER_ROOT=/var/lib/kivra-memory-sealed/destruction-ledger
+KIVRA_MEMORY_SEALED_DESTRUCTION_LEDGER_ANCHOR_PATH=/var/lib/kivra-memory-destruction-anchor/current.json
+KIVRA_MEMORY_SEALED_DESTRUCTION_LEDGER_ANCHOR_CREDENTIAL=/run/credentials/kivra-memory-api.service/destruction-ledger-anchor
 KIVRA_MEMORY_SEALED_DIGEST_BINDING_CREDENTIAL=/run/credentials/kivra-memory-api.service/sealed-digest-binding
 ```
 
@@ -120,13 +154,44 @@ sealed-content readability. Replacing the binding credential makes existing
 sealed idempotency bindings unverifiable and requires a separately reviewed
 rotation procedure.
 
-Never include `/var/lib/kivra-memory-sealed/destruction-ledger` in the
-key-provider backup, and never replace, overlay, truncate, or prune that ledger
-during provider restore. Recovery must validate its independently retained
-exact freshness anchor before constructing the restored provider. Provider
-construction then reconciles every ledger fact and removes any DEK resurrected
-by a stale provider backup; missing, corrupt, conflicting, or unanchored ledger
+Never include `/var/lib/kivra-memory-sealed/destruction-ledger` or
+`/var/lib/kivra-memory-destruction-anchor` in the key-provider backup, and never
+replace, overlay, truncate, or prune either during provider restore. Each
+immutable record carries an append generation and the preceding head digest,
+so the constant-size accepted head proves ancestry. The local anchor is updated
+under the same interprocess lock after each durable append; a crash between
+publications fails closed until the broker verifies the exact staged entry
+against its immutable request and repairs that one append. Copy each resulting
+exact anchor to independent operator custody and,
+after verifying that copy, install it at
+`/etc/kivra-memory/destruction-ledger-anchor` as `root:root` mode `0600`.
+Restart the API, private ingress, and purge worker so systemd supplies the new
+accepted anchor. A newly appended destruction remains `purge_pending` until
+that update: the worker will not unlink material or record completion against
+an anchor not yet accepted outside its writable boundary. Recovery must compare
+the retained anchor before installing the local and accepted copies and
+constructing the restored provider, which validates both exact anchors before
+reconciliation and then removes any DEK resurrected by a stale
+provider backup. Missing, stale, corrupt, conflicting, or unanchored ledger
 state keeps key reads, provisioning, and service activation disabled.
+
+Before restoring provider `control` and `material`, stop the API and private
+ingress. Restore both trees without touching the destruction ledger or either
+anchor, install the independently accepted anchor credential, and run:
+
+```sh
+systemctl start kivra-memory-sealed-restore-reconcile.service || exit 1
+systemctl start kivra-memory-api.service kivra-memory-codex-ingress.service
+```
+
+The reconciliation oneshot has read-only ledger/anchor access and cannot read
+mode-`0600` DEK files; it can only replace provider tombstones and unlink
+UUID-derived material names. Both API drop-ins require and order themselves
+after this gate, so a missing, corrupt, rolled-back, or divergent destruction
+authority prevents activation. The gate verifies that the local chain extends
+the accepted head, applies every authoritative ledger fact to the restored
+provider, fsyncs cleanup, and validates the resulting tombstones before
+returning success.
 
 Install `memory-sealed-worker.env` as `root:memory-purge` mode `0640`:
 

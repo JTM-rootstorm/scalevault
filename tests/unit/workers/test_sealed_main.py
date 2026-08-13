@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-import pwd
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
 from kivra_memory.domain.identifiers import new_uuid7
-from kivra_memory.security.destruction_ledger import LOCAL_DESTRUCTION_LEDGER_ROOT
-from kivra_memory.security.local_key_provider import LOCAL_KEY_PROVIDER_ROOT
+from kivra_memory.security.destruction_ledger import (
+    LOCAL_DESTRUCTION_LEDGER_ANCHOR_PATH,
+    LOCAL_DESTRUCTION_LEDGER_ROOT,
+    DestructionLedgerAnchor,
+)
+from kivra_memory.security.local_key_provider import (
+    LOCAL_DESTRUCTION_REQUEST_ROOT,
+    LOCAL_KEY_PROVIDER_ROOT,
+)
 from kivra_memory.storage.outbox_worker import ClaimedOutboxJob
 from kivra_memory.workers import sealed_main
 from kivra_memory.workers.sealed_content import (
@@ -135,21 +140,27 @@ def test_main_composes_only_destruction_capability(
         "from_environment",
         MagicMock(return_value=settings),
     )
-    monkeypatch.setattr(
-        pwd,
-        "getpwnam",
-        MagicMock(return_value=SimpleNamespace(pw_uid=8123)),
+    anchor = DestructionLedgerAnchor(
+        entry_count=0,
+        aggregate_sha256="a" * 64,
     )
-    monkeypatch.setattr(sealed_main, "LocalDirectoryKeyDestroyer", constructor)
+    monkeypatch.setattr(
+        sealed_main,
+        "read_systemd_credential",
+        MagicMock(return_value=anchor.canonical_bytes()),
+    )
+    monkeypatch.setattr(sealed_main, "LocalDirectoryKeyPurgeRequester", constructor)
     monkeypatch.setattr(sealed_main, "run_sealed_worker", run_worker)
 
     sealed_main.main()
 
     constructor.assert_called_once_with(
         LOCAL_KEY_PROVIDER_ROOT,
+        destruction_request_root=LOCAL_DESTRUCTION_REQUEST_ROOT,
         destruction_ledger_root=LOCAL_DESTRUCTION_LEDGER_ROOT,
+        destruction_ledger_anchor_path=LOCAL_DESTRUCTION_LEDGER_ANCHOR_PATH,
+        expected_destruction_ledger_anchor=anchor,
         required_owner_uid=0,
-        material_file_owner_uid=8123,
     )
     run_worker.assert_awaited_once_with(settings, destroyer)
     assert not hasattr(destroyer, "get_key")
@@ -283,22 +294,95 @@ def test_systemd_profile_is_local_separate_and_least_privilege() -> None:
 
     assert "User=memory-purge" in unit
     assert "Group=memory-purge" in unit
-    assert "SupplementaryGroups=kivra-memory kivra-sealed kivra-destruction-ledger" in unit
-    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in unit
-    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material" in unit
-    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" in unit
+    assert (
+        "SupplementaryGroups=kivra-memory kivra-sealed kivra-destruction-ledger "
+        "kivra-destruction-request"
+    ) in unit
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-sealed/keys/control" in unit
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-sealed/keys/material" in unit
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-sealed/destruction-ledger" in unit
+    assert "ConditionPathIsReadWrite=/var/lib/kivra-memory-destruction-anchor" not in unit
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-destruction-anchor" in unit
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/purge-requests" in unit
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys" not in unit.splitlines()
-    assert unit.count("LoadCredential=") == 1
+    assert unit.count("LoadCredential=") == 2
     assert "LoadCredential=database-url:" in unit
     assert "LoadCredential=sealed-digest-binding:" not in unit
     assert "/mnt/memory" not in unit
     assert "LoadCredential=sealed-digest-binding:" in drop_in
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in drop_in
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material" in drop_in
-    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" in drop_in
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-sealed/destruction-ledger" in drop_in
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-destruction-anchor" in drop_in
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" not in drop_in
+    assert "ReadWritePaths=/var/lib/kivra-memory-destruction-anchor" not in drop_in
     assert (
         "KIVRA_MEMORY_SEALED_DESTRUCTION_LEDGER_ROOT="
         "/var/lib/kivra-memory-sealed/destruction-ledger"
     ) in drop_in
+    assert (
+        "KIVRA_MEMORY_SEALED_DESTRUCTION_LEDGER_ANCHOR_PATH="
+        "/var/lib/kivra-memory-destruction-anchor/current.json"
+    ) in drop_in
     assert "DEK files in `material` as `memory-api` mode `0600`" in operator_documentation
     assert "Do not make material files group-readable" in operator_documentation
+
+
+def test_destruction_broker_unit_is_non_root_bounded_and_hardened() -> None:
+    unit = REPOSITORY_ROOT.joinpath(
+        "deploy/memory-node/systemd/kivra-memory-destruction-broker.service"
+    ).read_text()
+    path_unit = REPOSITORY_ROOT.joinpath(
+        "deploy/memory-node/systemd/kivra-memory-destruction-broker.path"
+    ).read_text()
+
+    assert "User=memory-destruction" in unit
+    assert "User=root" not in unit
+    assert (
+        "LoadCredential=destruction-ledger-anchor:/etc/kivra-memory/destruction-ledger-anchor"
+    ) in unit
+    assert "ConditionPathIsRegularFile=/etc/kivra-memory/destruction-ledger-anchor" in unit
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/purge-requests" in unit
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" in unit
+    assert "ReadWritePaths=/var/lib/kivra-memory-destruction-anchor" in unit
+    assert "TimeoutStartSec=60s" in unit
+    assert "DirectoryNotEmpty=/var/lib/kivra-memory-sealed/purge-requests" in path_unit
+    for directive in (
+        "NoNewPrivileges=true",
+        "PrivateMounts=true",
+        "ProtectClock=true",
+        "ProtectHostname=true",
+        "ProtectKernelTunables=true",
+        "ProtectKernelModules=true",
+        "ProtectKernelLogs=true",
+        "ProtectControlGroups=true",
+        "ProtectProc=invisible",
+        "ProcSubset=pid",
+        "RemoveIPC=true",
+        "RestrictNamespaces=true",
+        "RestrictRealtime=true",
+        "KeyringMode=private",
+        "LimitCORE=0",
+        "CapabilityBoundingSet=",
+    ):
+        assert directive in unit
+
+
+def test_api_activation_requires_offline_restore_reconciliation() -> None:
+    reconcile = REPOSITORY_ROOT.joinpath(
+        "deploy/memory-node/systemd/kivra-memory-sealed-restore-reconcile.service"
+    ).read_text()
+    for service in ("kivra-memory-api", "kivra-memory-codex-ingress"):
+        drop_in = REPOSITORY_ROOT.joinpath(
+            "deploy/memory-node/systemd/sealed-content",
+            f"{service}.service.d/20-sealed-content.conf",
+        ).read_text()
+        assert "Requires=kivra-memory-sealed-restore-reconcile.service" in drop_in
+        assert "After=kivra-memory-sealed-restore-reconcile.service" in drop_in
+
+    assert "User=memory-destruction" in reconcile
+    assert "LoadCredential=destruction-ledger-anchor:" in reconcile
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-sealed/destruction-ledger" in reconcile
+    assert "ReadOnlyPaths=/var/lib/kivra-memory-destruction-anchor" in reconcile
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in reconcile
+    assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/material" in reconcile
