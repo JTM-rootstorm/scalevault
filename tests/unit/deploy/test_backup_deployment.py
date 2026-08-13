@@ -76,6 +76,47 @@ def _index(backup_id: str, created: datetime) -> dict[str, object]:
     }
 
 
+def _retention_base(module: Any, backup_id: str, created: datetime) -> Path:
+    root = module.BASE_ROOT / backup_id
+    root.mkdir(mode=0o770)
+    root.chmod(0o770)
+    encrypted_manifest = root / "recovery-manifest.json.age"
+    encrypted_manifest.write_bytes(b"synthetic-manifest")
+    encrypted_manifest.chmod(0o640)
+    backup = root / "backup.tar.age"
+    backup.write_bytes(b"synthetic-base")
+    backup.chmod(0o640)
+    index = _index(backup_id, created)
+    index["manifest_ciphertext_sha256"] = module._sha256(encrypted_manifest)
+    (root / "index.json").write_text(json.dumps(index), encoding="utf-8")
+    (root / "index.json").chmod(0o640)
+    return root
+
+
+def _retention_wal(module: Any, wal_name: str, created: datetime) -> Path:
+    root = module.WAL_ROOT / wal_name
+    root.mkdir(mode=0o770)
+    root.chmod(0o770)
+    segment = root / "segment.age"
+    segment.write_bytes(f"synthetic-{wal_name}".encode())
+    segment.chmod(0o640)
+    encrypted_manifest = root / "recovery-manifest.json.age"
+    encrypted_manifest.write_bytes(b"synthetic-wal-manifest")
+    encrypted_manifest.chmod(0o640)
+    index = {
+        "ciphertext_sha256": module._sha256(segment),
+        "created_at": created.isoformat(),
+        "kind": "wal",
+        "manifest_ciphertext_sha256": module._sha256(encrypted_manifest),
+        "manifest_version": 1,
+        "object_id": wal_name,
+        "plaintext_sha256": "2" * 64,
+    }
+    (root / "index.json").write_text(json.dumps(index), encoding="utf-8")
+    (root / "index.json").chmod(0o640)
+    return root
+
+
 def test_helper_uses_fixed_paths_arguments_and_no_environment_redirects() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
@@ -549,19 +590,9 @@ def test_pg_verify_only_retention_never_prunes_without_dependency_watermark(
         created = now - timedelta(days=index)
         backup_id = created.strftime("%Y%m%dT%H%M%SZ") + f"-{index:016x}"
         ids.append(backup_id)
-        root = module.BASE_ROOT / backup_id
-        root.mkdir(mode=0o770)
-        root.chmod(0o770)
-        (root / "index.json").write_text(json.dumps(_index(backup_id, created)), encoding="utf-8")
-        (root / "index.json").chmod(0o640)
+        root = _retention_base(module, backup_id, created)
         encrypted_manifest = root / "recovery-manifest.json.age"
-        encrypted_manifest.write_bytes(b"synthetic-manifest")
-        encrypted_manifest.chmod(0o640)
         manifest_sha = module._sha256(encrypted_manifest)
-        index_value = json.loads((root / "index.json").read_text())
-        index_value["manifest_ciphertext_sha256"] = manifest_sha
-        (root / "index.json").write_text(json.dumps(index_value), encoding="utf-8")
-        (root / "index.json").chmod(0o640)
         (module.VERIFICATION_ROOT / f"{backup_id}.json").write_text(
             json.dumps(
                 {
@@ -588,8 +619,14 @@ def test_pg_verify_only_retention_never_prunes_without_dependency_watermark(
         "000000010000000000000010",
         "000000020000000000000001",
     ):
-        (module.WAL_ROOT / segment).mkdir(mode=0o770)
-        (module.WAL_ROOT / segment).chmod(0o770)
+        _retention_wal(module, segment, now)
+
+    protected_before = {
+        path.relative_to(module.STORE): module._sha256(path)
+        for root in (module.BASE_ROOT, module.WAL_ROOT, module.VERIFICATION_ROOT)
+        for path in root.rglob("*")
+        if path.is_file()
+    }
 
     module.retain()
 
@@ -604,8 +641,26 @@ def test_pg_verify_only_retention_never_prunes_without_dependency_watermark(
     assert (module.WAL_ROOT / "00000001000000000000000E").exists()
     assert (module.WAL_ROOT / "000000010000000000000010").exists()
     assert (module.WAL_ROOT / "000000020000000000000001").exists()
+    protected_after = {
+        path.relative_to(module.STORE): module._sha256(path)
+        for root in (module.BASE_ROOT, module.WAL_ROOT, module.VERIFICATION_ROOT)
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    assert protected_after == protected_before
     status = json.loads((module.STATUS_ROOT / "latest-retention.json").read_text())
     assert status["result"] == "no_prune_dependency_watermark_absent"
+    assert status["inventory"]["base_objects"]["count"] == 50
+    assert status["inventory"]["wal_history_objects"]["count"] == 3
+    assert status["inventory"]["restore_points"]["count"] == 1
+    assert status["inventory"]["holds"]["count"] == 1
+    assert status["inventory"]["verification_markers"]["count"] == 51
+    assert status["inventory"]["indexes_manifests"]["count"] == 107
+    assert status["inventory"]["status_artifacts"]["count"] == 0
+    for inventory in status["inventory"].values():
+        assert len(inventory["sha256"]) == 64
+    assert status["capacity"]["filesystem_available_bytes"] > 0
+    assert status["capacity"]["store_apparent_bytes"] > 0
 
 
 def test_retention_refuses_to_run_without_a_verified_chain(
@@ -615,6 +670,78 @@ def test_retention_refuses_to_run_without_a_verified_chain(
     _configure(module, tmp_path, monkeypatch)
     with pytest.raises(module.BackupError, match=r"^no_verified_recovery_chain$"):
         module.retain()
+
+
+@pytest.mark.parametrize("malformed", ["wal", "marker", "hold", "store"])
+def test_retention_rejects_malformed_inventory_without_writing_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed: str
+) -> None:
+    module = _load()
+    _configure(module, tmp_path, monkeypatch)
+    created = datetime(2026, 8, 12, 2, tzinfo=UTC)
+    backup_id = "20260812T020000Z-0000000000000001"
+    root = _retention_base(module, backup_id, created)
+    manifest_sha = module._sha256(root / "recovery-manifest.json.age")
+    marker = module.VERIFICATION_ROOT / f"{backup_id}.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "manifest_ciphertext_sha256": manifest_sha,
+                "object_id": backup_id,
+                "result": "isolated_pg_verifybackup_ok",
+                "verified_at": created.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker.chmod(0o640)
+    wal = _retention_wal(module, "000000010000000000000001", created)
+
+    if malformed == "wal":
+        (wal / "index.json").write_text("{}", encoding="utf-8")
+    elif malformed == "marker":
+        marker.write_text("[]", encoding="utf-8")
+    elif malformed == "hold":
+        (root / "HOLD").mkdir()
+    else:
+        (module.STORE / "unexpected").mkdir()
+
+    with pytest.raises(module.BackupError):
+        module.retain()
+    assert not (module.STATUS_ROOT / "latest-retention.json").exists()
+
+
+def test_retention_stops_below_no_prune_capacity_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load()
+    _configure(module, tmp_path, monkeypatch)
+    created = datetime(2026, 8, 12, 2, tzinfo=UTC)
+    backup_id = "20260812T020000Z-0000000000000001"
+    root = _retention_base(module, backup_id, created)
+    marker = module.VERIFICATION_ROOT / f"{backup_id}.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "manifest_ciphertext_sha256": module._sha256(root / "recovery-manifest.json.age"),
+                "object_id": backup_id,
+                "result": "isolated_pg_verifybackup_ok",
+                "verified_at": created.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker.chmod(0o640)
+
+    class LowCapacity:
+        total = 100
+        used = 91
+        free = 9
+
+    monkeypatch.setattr(module.shutil, "disk_usage", lambda _path: LowCapacity())
+    with pytest.raises(module.BackupError, match=r"^capacity_below_no_prune_floor$"):
+        module.retain()
+    assert not (module.STATUS_ROOT / "latest-retention.json").exists()
 
 
 def test_units_are_mount_gated_sandboxed_and_have_bounded_schedules() -> None:
@@ -633,6 +760,8 @@ def test_units_are_mount_gated_sandboxed_and_have_bounded_schedules() -> None:
     assert "ConditionPathIsRegularFile=/etc/kivra-memory/backup-age-identity" in verify
     assert "Group=memory-recovery" in verify
     assert "SupplementaryGroups=kivra-backup" in verify
+    assert "ReadOnlyPaths=/mnt/memory-backup/kivra-memory-postgres\n" in retention
+    assert "ReadWritePaths=/mnt/memory-backup/kivra-memory-postgres/status\n" in retention
     for unit in all_services:
         for setting in (
             "NoNewPrivileges=true",

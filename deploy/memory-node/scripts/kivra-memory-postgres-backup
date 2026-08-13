@@ -27,7 +27,7 @@ from pathlib import Path, PurePosixPath
 from typing import IO, Any, Never
 
 PG_BINDIR = Path("/usr/lib/postgresql/17/bin")
-PG_DATA = Path("/var/lib/postgresql/17/main")
+PG_DATA = Path("/mnt/memory/kivra-memory/postgresql/17/main")
 PG_WAL = PG_DATA / "pg_wal"
 PG_SOCKET = Path("/run/postgresql")
 PG_PORT = 5432
@@ -141,7 +141,7 @@ def _require_fd_owned(descriptor: int, *, owner: str, group: str, mode: int) -> 
         _fail("storage_owner_invalid")
 
 
-def _ensure_store() -> None:
+def _ensure_store(*, staging_writable: bool = True) -> None:
     _require_exact_mount(BACKUP_MOUNT, writable=False)
     _require_owned(BACKUP_MOUNT, owner="root", group=STORE_GROUP, mode=0o750)
     contracts = {
@@ -157,7 +157,8 @@ def _ensure_store() -> None:
         _require_owned(path, owner=owner, group=group, mode=mode)
     if not os.access(STORE, os.R_OK | os.X_OK):
         _fail("store_access_denied")
-    if not all(os.access(path, os.W_OK | os.X_OK) for path in (STATUS_ROOT, STAGING_ROOT)):
+    writable_paths = (STATUS_ROOT, STAGING_ROOT) if staging_writable else (STATUS_ROOT,)
+    if not all(os.access(path, os.W_OK | os.X_OK) for path in writable_paths):
         _fail("store_access_denied")
 
 
@@ -1487,10 +1488,284 @@ def _verified_bases() -> list[tuple[dt.datetime, Path, dict[str, Any]]]:
     return sorted(result, reverse=True, key=lambda item: item[0])
 
 
+def _read_inventory_json(path: Path, *, max_bytes: int = 64 * 1024) -> object:
+    _require_regular_file(path, max_bytes=max_bytes, mode=STORE_FILE_MODE)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BackupError("inventory_artifact_invalid") from exc
+
+
+def _retention_timestamp(value: object, *, code: str) -> dt.datetime:
+    if not isinstance(value, str):
+        _fail(code)
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise BackupError(code) from exc
+    if parsed.utcoffset() != dt.timedelta(0):
+        _fail(code)
+    return parsed
+
+
+def _retention_inventory() -> tuple[dict[str, dict[str, object]], dict[str, int]]:
+    category_names = (
+        "base_objects",
+        "wal_history_objects",
+        "restore_points",
+        "holds",
+        "verification_markers",
+        "indexes_manifests",
+        "status_artifacts",
+    )
+    records: dict[str, list[dict[str, object]]] = {name: [] for name in category_names}
+    seen_paths: set[Path] = set()
+    apparent_bytes = 0
+    allocated_bytes = 0
+
+    def account(path: Path) -> os.stat_result:
+        nonlocal apparent_bytes, allocated_bytes
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise BackupError("inventory_artifact_invalid") from exc
+        if path.is_symlink():
+            _fail("inventory_artifact_invalid")
+        if path not in seen_paths:
+            seen_paths.add(path)
+            if len(seen_paths) > 200_000:
+                _fail("inventory_limit_exceeded")
+            apparent_bytes += info.st_size
+            allocated_bytes += info.st_blocks * 512
+        return info
+
+    def add(
+        category: str,
+        path: Path,
+        *,
+        artifact_type: str,
+        content_sha256: str | None = None,
+        binding_sha256: str | None = None,
+    ) -> None:
+        info = account(path)
+        record: dict[str, object] = {
+            "mode": f"{stat.S_IMODE(info.st_mode):04o}",
+            "path": path.relative_to(STORE).as_posix(),
+            "size_bytes": info.st_size,
+            "type": artifact_type,
+        }
+        if content_sha256 is not None:
+            record["content_sha256"] = content_sha256
+        if binding_sha256 is not None:
+            record["binding_sha256"] = binding_sha256
+        records[category].append(record)
+
+    expected_roots = {
+        BASE_ROOT,
+        WAL_ROOT,
+        STATUS_ROOT,
+        VERIFICATION_ROOT,
+        STAGING_ROOT,
+    }
+    for path in expected_roots | {STORE}:
+        info = account(path)
+        if not stat.S_ISDIR(info.st_mode):
+            _fail("inventory_artifact_invalid")
+    try:
+        store_entries = set(STORE.iterdir())
+    except OSError as exc:
+        raise BackupError("inventory_artifact_invalid") from exc
+    if store_entries != expected_roots:
+        _fail("unexpected_store_object")
+    if any(STAGING_ROOT.iterdir()):
+        _fail("staging_residue_present")
+
+    base_indexes: dict[str, dict[str, Any]] = {}
+    for root in BASE_ROOT.iterdir():
+        if not BACKUP_ID_RE.fullmatch(root.name) or root.is_symlink() or not root.is_dir():
+            _fail("unexpected_backup_object")
+        _require_directory(root, mode=STORE_DIRECTORY_MODE)
+        account(root)
+        members = {path.name: path for path in root.iterdir()}
+        required = {"backup.tar.age", "index.json", "recovery-manifest.json.age"}
+        optional = {"DEPENDENCIES.json", "HOLD", "PITR-VERIFIED.json", "RESTORE-POINTS.json"}
+        if not required.issubset(members) or not set(members).issubset(required | optional):
+            _fail("unexpected_backup_member")
+        index = _read_index(members["index.json"], kind="base_backup")
+        if index.get("object_id") != root.name:
+            _fail("manifest_invalid")
+        if index.get("verification") != "source_pg_verifybackup_ok":
+            _fail("manifest_invalid")
+        _retention_timestamp(index.get("created_at"), code="manifest_invalid")
+        base_indexes[root.name] = index
+        _require_regular_file(
+            members["backup.tar.age"], max_bytes=16 * 1024**4, mode=STORE_FILE_MODE
+        )
+        _require_regular_file(
+            members["recovery-manifest.json.age"],
+            max_bytes=1024 * 1024,
+            mode=STORE_FILE_MODE,
+        )
+        if _sha256(members["recovery-manifest.json.age"]) != index["manifest_ciphertext_sha256"]:
+            _fail("manifest_ciphertext_digest_mismatch")
+        add(
+            "base_objects",
+            root,
+            artifact_type="directory",
+            content_sha256=_sha256(members["backup.tar.age"]),
+            binding_sha256=index["manifest_ciphertext_sha256"],
+        )
+        for name in ("index.json", "recovery-manifest.json.age"):
+            add(
+                "indexes_manifests",
+                members[name],
+                artifact_type="regular_file",
+                content_sha256=_sha256(members[name]),
+            )
+        account(members["backup.tar.age"])
+        if "HOLD" in members:
+            _require_regular_file(members["HOLD"], max_bytes=4096, mode=STORE_FILE_MODE)
+            _read_small_text(members["HOLD"], code="hold_invalid", max_bytes=4096)
+            add(
+                "holds",
+                members["HOLD"],
+                artifact_type="regular_file",
+                content_sha256=_sha256(members["HOLD"]),
+            )
+        for name, category in (
+            ("PITR-VERIFIED.json", "verification_markers"),
+            ("RESTORE-POINTS.json", "restore_points"),
+            ("DEPENDENCIES.json", "indexes_manifests"),
+        ):
+            if name in members:
+                _read_inventory_json(members[name])
+                add(
+                    category,
+                    members[name],
+                    artifact_type="regular_file",
+                    content_sha256=_sha256(members[name]),
+                )
+
+    for root in WAL_ROOT.iterdir():
+        if not WAL_RE.fullmatch(root.name) or root.is_symlink() or not root.is_dir():
+            _fail("unexpected_wal_object")
+        _require_directory(root, mode=STORE_DIRECTORY_MODE)
+        account(root)
+        members = {path.name: path for path in root.iterdir()}
+        required = {"index.json", "recovery-manifest.json.age", "segment.age"}
+        if set(members) not in (required, required | {"HOLD"}):
+            _fail("unexpected_wal_member")
+        index = _read_index(members["index.json"], kind="wal")
+        if index.get("object_id") != root.name:
+            _fail("manifest_invalid")
+        _retention_timestamp(index.get("created_at"), code="manifest_invalid")
+        _require_regular_file(members["segment.age"], max_bytes=2 * 1024**3, mode=STORE_FILE_MODE)
+        _require_regular_file(
+            members["recovery-manifest.json.age"],
+            max_bytes=1024 * 1024,
+            mode=STORE_FILE_MODE,
+        )
+        if _sha256(members["segment.age"]) != index["ciphertext_sha256"]:
+            _fail("ciphertext_digest_mismatch")
+        if _sha256(members["recovery-manifest.json.age"]) != index["manifest_ciphertext_sha256"]:
+            _fail("manifest_ciphertext_digest_mismatch")
+        add(
+            "wal_history_objects",
+            root,
+            artifact_type="directory",
+            binding_sha256=index["ciphertext_sha256"],
+        )
+        for name in ("index.json", "recovery-manifest.json.age"):
+            add(
+                "indexes_manifests",
+                members[name],
+                artifact_type="regular_file",
+                content_sha256=_sha256(members[name]),
+            )
+        account(members["segment.age"])
+        if "HOLD" in members:
+            _require_regular_file(members["HOLD"], max_bytes=4096, mode=STORE_FILE_MODE)
+            _read_small_text(members["HOLD"], code="hold_invalid", max_bytes=4096)
+            add(
+                "holds",
+                members["HOLD"],
+                artifact_type="regular_file",
+                content_sha256=_sha256(members["HOLD"]),
+            )
+
+    for marker_path in VERIFICATION_ROOT.iterdir():
+        match = re.fullmatch(r"([0-9]{8}T[0-9]{6}Z-[0-9a-f]{16})\.json", marker_path.name)
+        if match is None:
+            _fail("verification_marker_invalid")
+        object_id = match.group(1)
+        if object_id not in base_indexes:
+            _fail("verification_marker_invalid")
+        _require_regular_file(marker_path, max_bytes=4096, mode=STORE_FILE_MODE)
+        marker = _read_inventory_json(marker_path, max_bytes=4096)
+        index = base_indexes[object_id]
+        if (
+            not isinstance(marker, dict)
+            or set(marker)
+            != {
+                "manifest_ciphertext_sha256",
+                "object_id",
+                "result",
+                "verified_at",
+            }
+            or (
+                marker.get("object_id") != object_id
+                or marker.get("manifest_ciphertext_sha256") != index["manifest_ciphertext_sha256"]
+                or marker.get("result") != "isolated_pg_verifybackup_ok"
+            )
+        ):
+            _fail("verification_marker_invalid")
+        _retention_timestamp(marker.get("verified_at"), code="verification_marker_invalid")
+        add(
+            "verification_markers",
+            marker_path,
+            artifact_type="regular_file",
+            content_sha256=_sha256(marker_path),
+        )
+
+    for status_path in STATUS_ROOT.iterdir():
+        if not re.fullmatch(r"latest-(?:base|wal|verification|retention)\.json", status_path.name):
+            _fail("status_invalid")
+        if not isinstance(_read_inventory_json(status_path, max_bytes=4096), dict):
+            _fail("status_invalid")
+        account(status_path)
+        if status_path.name != "latest-retention.json":
+            add(
+                "status_artifacts",
+                status_path,
+                artifact_type="regular_file",
+                content_sha256=_sha256(status_path),
+            )
+
+    for path in seen_paths:
+        info = path.lstat()
+        if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+            _fail("inventory_artifact_invalid")
+
+    summaries: dict[str, dict[str, object]] = {}
+    for category in category_names:
+        canonical = json.dumps(
+            sorted(records[category], key=lambda value: str(value["path"])),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        summaries[category] = {
+            "count": len(records[category]),
+            "sha256": hashlib.sha256(canonical).hexdigest(),
+        }
+    return summaries, {
+        "store_allocated_bytes": allocated_bytes,
+        "store_apparent_bytes": apparent_bytes,
+    }
+
+
 def retain() -> None:
-    _ensure_store()
-    if not os.access(BASE_ROOT, os.W_OK | os.X_OK):
-        _fail("store_access_denied")
+    _ensure_store(staging_writable=False)
+    inventory, store_capacity = _retention_inventory()
     bases = _verified_bases()
     if not bases:
         _fail("no_verified_recovery_chain")
@@ -1498,16 +1773,19 @@ def retain() -> None:
     # prove a recoverable chain. Until a separately authenticated PITR result
     # and exact base/WAL/timeline/restore-point dependency catalog exist, every
     # deletion target is ambiguous and retention is a validation-only no-op.
-    for _created, path, _manifest in bases:
-        hold = path / "HOLD"
-        if hold.exists():
-            _require_regular_file(hold, max_bytes=4096, mode=STORE_FILE_MODE)
-    for entry in WAL_ROOT.iterdir():
-        if not WAL_RE.fullmatch(entry.name) or entry.is_symlink() or not entry.is_dir():
-            _fail("unexpected_wal_object")
+    capacity = shutil.disk_usage(BACKUP_MOUNT)
+    if capacity.total <= 0 or capacity.free * 10 < capacity.total:
+        _fail("capacity_below_no_prune_floor")
     _replace_json(
         STATUS_ROOT / "latest-retention.json",
         {
+            "capacity": {
+                "filesystem_available_bytes": capacity.free,
+                "filesystem_total_bytes": capacity.total,
+                "filesystem_used_bytes": capacity.used,
+                **store_capacity,
+            },
+            "inventory": inventory,
             "kept_base_count": len(bases),
             "newest_verified_id": bases[0][1].name,
             "result": "no_prune_dependency_watermark_absent",

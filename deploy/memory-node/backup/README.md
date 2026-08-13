@@ -15,7 +15,7 @@ The helper has no environment-controlled paths. Its installed contract is:
 | Purpose | Exact path |
 |---|---|
 | PostgreSQL tools | `/usr/lib/postgresql/17/bin` |
-| Canonical cluster | `/var/lib/postgresql/17/main` |
+| Canonical cluster | `/mnt/memory/kivra-memory/postgresql/17/main` |
 | independently mounted backup filesystem | `/mnt/memory-backup` |
 | controlled plaintext staging mount | `/mnt/memory-backup-staging` |
 | encrypted store | `/mnt/memory-backup/kivra-memory-postgres` |
@@ -184,6 +184,24 @@ restore-point dependency-and-hold catalog do not yet exist. Consequently every
 base, WAL segment, backup-history file, timeline-history file, restore point,
 and hold remains potentially required. The command validates names, manifests,
 markers, and holds, then reports `no_prune_dependency_watermark_absent`.
+
+The retention unit mounts the store read-only except for `status/`. It rejects
+staging residue, unexpected store children or object members, links and special
+files, malformed base/WAL indexes, ciphertext digest mismatches, malformed or
+orphaned verification markers, invalid JSON inventory hints, and malformed hold
+files. A run is bounded to 200,000 structural entries. It records counts and
+canonical SHA-256 inventory digests separately for base objects, WAL/history
+objects, restore-point artifacts, holds, verification markers,
+indexes/manifests, and status artifacts. `latest-retention.json` is deliberately
+excluded from the status-artifact digest because it is the command's sole
+permitted mutation; operators compare that file's prior absence or digest
+separately.
+
+The same status records filesystem total, used, and available bytes plus store
+apparent and allocated bytes. The validation fails closed below the installed
+critical capacity floor of 10 percent free. The warning remains 20 percent free
+under the monitoring rules, leaving an operator response window without giving
+retention any prune authority.
 
 The public age recipient does not authenticate the producer of a drill record:
 any holder of that public value can create ciphertext for the recovery identity.

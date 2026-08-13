@@ -38,5 +38,6 @@ KeyringMode=private
 LimitCORE=0
 CapabilityBoundingSet=
 IPAddressDeny=any
-ReadWritePaths=/mnt/memory-backup/kivra-memory-postgres
+ReadOnlyPaths=/mnt/memory-backup/kivra-memory-postgres
+ReadWritePaths=/mnt/memory-backup/kivra-memory-postgres/status
 TimeoutStartSec=1h
