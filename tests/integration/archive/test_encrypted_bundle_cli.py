@@ -18,9 +18,19 @@ from kivra_memory.archive.bundle import ArchiveBundleError, EncryptedArchiveBund
 from kivra_memory.archive.git import GitCommitSigner, GitSigningConfig
 from kivra_memory.storage.readiness import EXPECTED_ALEMBIC_HEAD
 from kivra_memory.tools.archive_recovery import ArchiveRecoverySettings
+from psycopg import Connection
+from psycopg import sql as psycopg_sql
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
 
 from tests.integration.archive.test_continuation import _run, _tree
+from tests.integration.database.conftest import (
+    AlembicRunner,
+    bootstrap_required_extensions,
+)
 from tests.integration.database.test_archive_restore_acceptance import (
+    PostgreSQLTestServer,
     _branch_event,
     _snapshot_source,
 )
@@ -72,8 +82,44 @@ def encrypted_gate_root(tmp_path: Path) -> Iterator[Path]:
         shutil.rmtree(root, ignore_errors=True)
 
 
+@pytest.fixture
+def disposable_restore_database(
+    postgresql_server: PostgreSQLTestServer,
+    encrypted_gate_root: Path,
+) -> tuple[str, Path]:
+    if shutil.which("age") is None or shutil.which("age-keygen") is None:
+        pytest.skip("age and age-keygen are required")
+    database_name = "scalevault_recovery_encrypted_bundle"
+    with Connection.connect(postgresql_server.database_url, autocommit=True) as connection:
+        connection.execute(
+            psycopg_sql.SQL("CREATE DATABASE {}").format(psycopg_sql.Identifier(database_name))
+        )
+
+    database_url = make_url(postgresql_server.database_url).set(database=database_name)
+    rendered_database_url = database_url.render_as_string(hide_password=False)
+    bootstrap_required_extensions(rendered_database_url)
+    engine = create_engine(
+        database_url.set(drivername="postgresql+psycopg"),
+        hide_parameters=True,
+        poolclass=NullPool,
+    )
+    runner = AlembicRunner(engine)
+    runner.upgrade()
+
+    database_url_file = encrypted_gate_root / "database-url"
+    database_url_file.write_text(rendered_database_url, encoding="utf-8")
+    database_url_file.chmod(0o600)
+    runner.dispose()
+    return database_name, database_url_file
+
+
+@pytest.mark.skipif(
+    shutil.which("age") is None or shutil.which("age-keygen") is None,
+    reason="age and age-keygen are required",
+)
 def test_cli_creates_and_restores_encrypted_signed_archive_object(
     encrypted_gate_root: Path,
+    disposable_restore_database: tuple[str, Path],
 ) -> None:
     if shutil.which("age") is None or shutil.which("age-keygen") is None:
         pytest.skip("age and age-keygen are required")
@@ -138,39 +184,38 @@ def test_cli_creates_and_restores_encrypted_signed_archive_object(
         head,
     )
 
-    config = tmp_path / "recovery.json"
-    config.write_text(
-        json.dumps(
+    database_name, database_url_file = disposable_restore_database
+    config_document = {
+        "archive_target_id": "encrypted-object-gate",
+        "repository": str(source_repository),
+        "branch_name": "main",
+        "expected_head": head,
+        "expected_manifest_sha256": built.manifest_sha256.hex(),
+        "expected_high_water_sequence": 1,
+        "expected_application_version": __version__,
+        "expected_alembic_revision": EXPECTED_ALEMBIC_HEAD,
+        "database_url_file": str(database_url_file),
+        "disposable_database_name": database_name,
+        "signer_epochs": [
             {
-                "archive_target_id": "encrypted-object-gate",
-                "repository": str(source_repository),
-                "branch_name": "main",
-                "expected_head": head,
-                "expected_manifest_sha256": built.manifest_sha256.hex(),
-                "expected_high_water_sequence": 1,
-                "expected_application_version": __version__,
-                "expected_alembic_revision": EXPECTED_ALEMBIC_HEAD,
-                "signer_epochs": [
-                    {
-                        "epoch_id": "gate-epoch-1",
-                        "first_event_sequence": 1,
-                        "last_event_sequence": None,
-                        "allowed_signers_file": str(allowed_signers),
-                        "public_key_file": str(exact_public_key),
-                        "public_key_fingerprint": fingerprint,
-                        "signer_principal": "archive@scalevault",
-                        "author_name": "ScaleVault Archive",
-                        "author_email": "archive@scalevault.invalid",
-                        "transition_record_id": None,
-                        "compromised_last_commit": None,
-                        "compromised_last_event_sequence": None,
-                    }
-                ],
-                "transition_evidence": [],
-            },
-            sort_keys=True,
-        )
-    )
+                "epoch_id": "gate-epoch-1",
+                "first_event_sequence": 1,
+                "last_event_sequence": None,
+                "allowed_signers_file": str(allowed_signers),
+                "public_key_file": str(exact_public_key),
+                "public_key_fingerprint": fingerprint,
+                "signer_principal": "archive@scalevault",
+                "author_name": "ScaleVault Archive",
+                "author_email": "archive@scalevault.invalid",
+                "transition_record_id": None,
+                "compromised_last_commit": None,
+                "compromised_last_event_sequence": None,
+            }
+        ],
+        "transition_evidence": [],
+    }
+    config = tmp_path / "recovery.json"
+    config.write_text(json.dumps(config_document, sort_keys=True))
 
     identity = tmp_path / "age-identity"
     recipient = _age_identity(identity)
@@ -239,7 +284,42 @@ def test_cli_creates_and_restores_encrypted_signed_archive_object(
     )
     restored_closure = _run("/usr/bin/git", "-C", str(restored), "rev-list", "--objects", head)
     assert restored_closure == source_closure
+    for object_entry in source_closure.splitlines():
+        object_id = object_entry.split(maxsplit=1)[0].decode("ascii")
+        object_type = (
+            _run("/usr/bin/git", "-C", str(source_repository), "cat-file", "-t", object_id)
+            .decode("ascii")
+            .strip()
+        )
+        assert (
+            _run("/usr/bin/git", "-C", str(restored), "cat-file", "-t", object_id)
+            .decode("ascii")
+            .strip()
+            == object_type
+        )
+        assert _run(
+            "/usr/bin/git", "-C", str(restored), "cat-file", object_type, object_id
+        ) == _run("/usr/bin/git", "-C", str(source_repository), "cat-file", object_type, object_id)
     assert not tuple(scratch.iterdir())
+
+    config_document["repository"] = str(restored)
+    config.write_text(json.dumps(config_document, sort_keys=True))
+    restored_database = _cli(
+        "--config",
+        str(config),
+        "restore-database",
+        "--confirmation",
+        "restore-into-disposable-empty-database",
+    )
+    assert restored_database.returncode == 0, restored_database.stderr.decode(
+        "utf-8", errors="replace"
+    )
+    assert json.loads(restored_database.stdout) == {
+        "continuation": "new_immutable_archive_target_required",
+        "embedding_jobs_queued": 0,
+        "final_high_water_sequence": 1,
+        "ok": True,
+    }
 
     wrong_identity = tmp_path / "wrong-age-identity"
     _age_identity(wrong_identity)
