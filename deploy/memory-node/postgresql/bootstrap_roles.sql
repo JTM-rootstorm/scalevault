@@ -99,6 +99,31 @@ ALTER ROLE kivra_memory_operator_report
 ALTER ROLE kivra_memory_operator_report_login
     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS;
 
+-- Wrapper logins may SET only their one capability role. Remove every other
+-- direct membership, including predefined PostgreSQL roles and future roles.
+DO $bootstrap$
+DECLARE
+    granted_role text;
+    member_role text;
+BEGIN
+    FOR granted_role, member_role IN
+        SELECT granted.rolname, member.rolname
+        FROM pg_catalog.pg_auth_members AS membership
+        JOIN pg_catalog.pg_roles AS granted ON granted.oid = membership.roleid
+        JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
+        WHERE member.rolname IN (
+            'kivra_memory_metrics', 'kivra_memory_operator_report_login'
+        )
+        AND (granted.rolname, member.rolname) NOT IN (
+            ('kivra_memory_observability', 'kivra_memory_metrics'),
+            ('kivra_memory_operator_report', 'kivra_memory_operator_report_login')
+        )
+    LOOP
+        EXECUTE format('REVOKE %I FROM %I', granted_role, member_role);
+    END LOOP;
+END
+$bootstrap$;
+
 -- Converge capability membership before granting the two intended SET-only
 -- wrapper relationships.  This removes stale memberships on bootstrap reruns.
 REVOKE kivra_memory_observability FROM

@@ -23,8 +23,8 @@ SELECT
 
 INSERT INTO public.observability_tenant_bindings (login_role, tenant_id)
 VALUES
-    ('kivra_memory_metrics'::name, :'tenant_id'::uuid),
-    ('kivra_memory_operator_report_login'::name, :'tenant_id'::uuid)
+    ('kivra_memory_metrics', :'tenant_id'::uuid),
+    ('kivra_memory_operator_report_login', :'tenant_id'::uuid)
 ON CONFLICT (login_role) DO UPDATE
 SET tenant_id = EXCLUDED.tenant_id;
 

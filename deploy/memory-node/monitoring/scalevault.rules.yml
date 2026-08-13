@@ -7,7 +7,7 @@ groups:
         labels: {severity: critical, category: monitoring}
         annotations: {summary: "ScaleVault Memory Node metrics are unavailable", response: "monitoring_unavailable"}
       - alert: ScaleVaultDatabaseMetricsUnavailable
-        expr: absent(up{job="scalevault-database-metrics"}) or up{job="scalevault-database-metrics"} == 0 or kivra_memory_database_collector_up == 0
+        expr: absent(up{job="scalevault-database-metrics"}) or up{job="scalevault-database-metrics"} == 0 or kivra_memory_database_collector_up == 0 or absent(kivra_memory_database_collector_last_success_unixtime) or time() - kivra_memory_database_collector_last_success_unixtime > 120
         for: 2m
         labels: {severity: critical, category: monitoring}
         annotations: {summary: "ScaleVault database aggregate metrics are unavailable", response: "database_metrics_unavailable"}

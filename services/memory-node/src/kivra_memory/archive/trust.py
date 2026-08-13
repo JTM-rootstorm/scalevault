@@ -102,6 +102,8 @@ class ArchiveSignerTransition:
             or _FINGERPRINT.fullmatch(self.next_key_fingerprint) is None
         ):
             raise ArchiveTrustError("archive transition fingerprint is invalid")
+        if self.previous_key_fingerprint == self.next_key_fingerprint:
+            raise ArchiveTrustError("archive transition must change signer key")
         if _OBJECT_ID.fullmatch(self.last_old_head) is None:
             raise ArchiveTrustError("archive transition head is invalid")
         if (
@@ -264,6 +266,8 @@ def verify_transition_evidence(
             index > 0 and epoch.transition_record_id is None
         ):
             raise ArchiveTrustError("archive signer transition identity is missing")
+        if index > 0 and policy[index - 1].public_key_fingerprint == epoch.public_key_fingerprint:
+            raise ArchiveTrustError("archive signer transition must change key fingerprint")
     if len(records) != max(0, len(policy) - 1):
         raise ArchiveTrustError("archive transition evidence count does not match epochs")
     commits_by_end = {

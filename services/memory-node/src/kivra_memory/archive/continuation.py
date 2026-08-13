@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import stat
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +54,14 @@ _COUNT_OBJECT_KEYS = {
     "garbage",
     "size-garbage",
 }
+_MAX_OBJECT_CLOSURE_BYTES = 64 * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class _PinnedDirectory:
+    device: int
+    inode: int
+    owner: int
 
 
 class ArchiveContinuationError(RuntimeError):
@@ -304,8 +314,8 @@ class NewTargetHistoryCopier:
         self._runner = runner or SubprocessRunner()
 
     def copy(self, source: GitRecoverySource, *, target_repository: Path) -> GitRecoverySource:
-        self._require_safe_directory(target_repository)
-        self._require_empty_bare_target(source, target_repository)
+        identity = self._require_safe_directory(target_repository)
+        self._require_empty_bare_target(source, target_repository, identity)
         zero = "0" * len(source.expected_head)
         reference = f"refs/heads/{source.branch_name}"
         if _REF_NAME.fullmatch(reference) is None:
@@ -327,27 +337,73 @@ class NewTargetHistoryCopier:
                 source.expected_head,
             ),
             stdout_limit_bytes=64 * 1024,
+            identity=identity,
         )
         self._git(
             source,
             target_repository,
             ("fsck", "--strict", "--no-reflogs", "--no-dangling", source.expected_head),
             stdout_limit_bytes=64 * 1024,
+            identity=identity,
         )
         self._git(
             source,
             target_repository,
             ("update-ref", reference, source.expected_head, zero),
             stdout_limit_bytes=128,
+            identity=identity,
         )
         refs = self._git(
             source,
             target_repository,
             ("for-each-ref", "--format=%(refname)", "--sort=refname"),
             stdout_limit_bytes=64 * 1024,
+            identity=identity,
         ).stdout
         if refs != f"{reference}\n".encode("ascii"):
             raise ArchiveContinuationError("new archive target contains unexpected references")
+        head = self._git(
+            source,
+            target_repository,
+            ("symbolic-ref", "HEAD"),
+            stdout_limit_bytes=512,
+            identity=identity,
+        ).stdout
+        if head != f"{reference}\n".encode("ascii"):
+            raise ArchiveContinuationError("new archive target HEAD topology does not match")
+        source_objects = self._git(
+            source,
+            source.repository,
+            ("rev-list", "--objects", "--no-object-names", source.expected_head),
+            stdout_limit_bytes=_MAX_OBJECT_CLOSURE_BYTES,
+            identity=None,
+        ).stdout
+        target_objects = self._git(
+            source,
+            target_repository,
+            ("rev-list", "--objects", "--no-object-names", source.expected_head),
+            stdout_limit_bytes=_MAX_OBJECT_CLOSURE_BYTES,
+            identity=identity,
+        ).stdout
+        if target_objects != source_objects:
+            raise ArchiveContinuationError("new archive target object closure does not match")
+        unreachable = self._git(
+            source,
+            target_repository,
+            (
+                "fsck",
+                "--strict",
+                "--no-reflogs",
+                "--unreachable",
+                "--no-dangling",
+                source.expected_head,
+            ),
+            stdout_limit_bytes=_MAX_OBJECT_CLOSURE_BYTES,
+            identity=identity,
+        ).stdout
+        if unreachable:
+            raise ArchiveContinuationError("new archive target contains extra Git objects")
+        self._revalidate_directory(target_repository, identity)
         return GitRecoverySource(
             repository=target_repository,
             branch_name=source.branch_name,
@@ -359,12 +415,14 @@ class NewTargetHistoryCopier:
         self,
         source: GitRecoverySource,
         target_repository: Path,
+        identity: _PinnedDirectory,
     ) -> None:
         bare = self._git(
             source,
             target_repository,
             ("rev-parse", "--is-bare-repository"),
             stdout_limit_bytes=16,
+            identity=identity,
         ).stdout
         if bare != b"true\n":
             raise ArchiveContinuationError("new archive target is not bare")
@@ -373,6 +431,7 @@ class NewTargetHistoryCopier:
             target_repository,
             ("for-each-ref", "--format=%(refname)"),
             stdout_limit_bytes=64 * 1024,
+            identity=identity,
         ).stdout
         if refs:
             raise ArchiveContinuationError("new archive target is not empty")
@@ -381,6 +440,7 @@ class NewTargetHistoryCopier:
             target_repository,
             ("count-objects", "-v"),
             stdout_limit_bytes=4 * 1024,
+            identity=identity,
         ).stdout
         try:
             values = {
@@ -392,12 +452,10 @@ class NewTargetHistoryCopier:
             raise ArchiveContinuationError("new archive target object state is invalid") from None
         if set(values) != _COUNT_OBJECT_KEYS or any(values.values()):
             raise ArchiveContinuationError("new archive target contains Git objects")
-        alternates = target_repository / "objects" / "info" / "alternates"
-        if alternates.exists() or alternates.is_symlink():
-            raise ArchiveContinuationError("new archive target has object alternates")
+        self._require_no_alternates(target_repository)
 
     @staticmethod
-    def _require_safe_directory(repository: Path) -> None:
+    def _require_safe_directory(repository: Path) -> _PinnedDirectory:
         try:
             if (
                 not repository.is_absolute()
@@ -406,8 +464,51 @@ class NewTargetHistoryCopier:
                 or repository.resolve(strict=True) != repository
             ):
                 raise ArchiveContinuationError("new archive target path is unsafe")
+            details = repository.stat(follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(details.st_mode)
+                or details.st_uid != os.geteuid()
+                or details.st_mode & 0o022
+            ):
+                raise ArchiveContinuationError("new archive target ownership is unsafe")
+            for ancestor in repository.parents:
+                ancestor_details = ancestor.stat(follow_symlinks=False)
+                if not stat.S_ISDIR(ancestor_details.st_mode):
+                    raise ArchiveContinuationError("new archive target ancestry is unsafe")
+                if ancestor_details.st_mode & 0o022 and not (
+                    ancestor_details.st_mode & stat.S_ISVTX
+                ):
+                    raise ArchiveContinuationError("new archive target ancestry is writable")
+            return _PinnedDirectory(details.st_dev, details.st_ino, details.st_uid)
         except OSError:
             raise ArchiveContinuationError("new archive target path is unavailable") from None
+
+    @staticmethod
+    def _require_no_alternates(repository: Path) -> None:
+        alternates = repository / "objects" / "info" / "alternates"
+        if alternates.exists() or alternates.is_symlink():
+            raise ArchiveContinuationError("new archive target has object alternates")
+
+    @classmethod
+    def _revalidate_directory(
+        cls,
+        repository: Path,
+        identity: _PinnedDirectory,
+    ) -> None:
+        try:
+            details = repository.stat(follow_symlinks=False)
+        except OSError:
+            raise ArchiveContinuationError("new archive target changed during operation") from None
+        if (
+            not stat.S_ISDIR(details.st_mode)
+            or repository.is_symlink()
+            or details.st_dev != identity.device
+            or details.st_ino != identity.inode
+            or details.st_uid != identity.owner
+            or details.st_mode & 0o022
+        ):
+            raise ArchiveContinuationError("new archive target changed during operation")
+        cls._require_no_alternates(repository)
 
     def _git(
         self,
@@ -416,7 +517,10 @@ class NewTargetHistoryCopier:
         arguments: tuple[str, ...],
         *,
         stdout_limit_bytes: int,
+        identity: _PinnedDirectory | None,
     ) -> ProcessResult:
+        if identity is not None:
+            self._revalidate_directory(target_repository, identity)
         try:
             result = self._runner.run(
                 (
@@ -446,6 +550,8 @@ class NewTargetHistoryCopier:
             )
         except GitSigningError:
             raise ArchiveContinuationError("new archive target Git operation failed") from None
+        if identity is not None:
+            self._revalidate_directory(target_repository, identity)
         if result.returncode != 0:
             raise ArchiveContinuationError("new archive target Git operation failed")
         return result

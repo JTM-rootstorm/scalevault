@@ -18,6 +18,9 @@ from kivra_memory.archive.git import (
     GitCommitVerifier,
     GitSigningConfig,
     GitVerificationConfig,
+    ProcessResult,
+    ProcessRunner,
+    SubprocessRunner,
     archive_commit_message,
 )
 from kivra_memory.archive.models import MANIFEST_PATH
@@ -202,6 +205,76 @@ class _RealNormalAppender:
         return head
 
 
+class _SwapTargetRunner:
+    def __init__(self, target: Path) -> None:
+        self.target = target
+        self.delegate = SubprocessRunner()
+        self.swapped = False
+
+    def run(
+        self,
+        arguments: tuple[str, ...],
+        *,
+        stdin: bytes,
+        environment: dict[str, str],
+        timeout_seconds: int,
+        stdout_limit_bytes: int = 8 * 1024 * 1024,
+        stderr_limit_bytes: int = 256 * 1024,
+    ) -> ProcessResult:
+        result = self.delegate.run(
+            arguments,
+            stdin=stdin,
+            environment=environment,
+            timeout_seconds=timeout_seconds,
+            stdout_limit_bytes=stdout_limit_bytes,
+            stderr_limit_bytes=stderr_limit_bytes,
+        )
+        if not self.swapped:
+            displaced = self.target.with_name("displaced.git")
+            self.target.rename(displaced)
+            self.target.mkdir(mode=0o700)
+            self.swapped = True
+        return result
+
+
+class _InjectObjectRunner:
+    def __init__(self, target: Path) -> None:
+        self.target = target
+        self.delegate: ProcessRunner = SubprocessRunner()
+        self.injected = False
+
+    def run(
+        self,
+        arguments: tuple[str, ...],
+        *,
+        stdin: bytes,
+        environment: dict[str, str],
+        timeout_seconds: int,
+        stdout_limit_bytes: int = 8 * 1024 * 1024,
+        stderr_limit_bytes: int = 256 * 1024,
+    ) -> ProcessResult:
+        result = self.delegate.run(
+            arguments,
+            stdin=stdin,
+            environment=environment,
+            timeout_seconds=timeout_seconds,
+            stdout_limit_bytes=stdout_limit_bytes,
+            stderr_limit_bytes=stderr_limit_bytes,
+        )
+        if not self.injected and "update-ref" in arguments:
+            _run(
+                "/usr/bin/git",
+                "-C",
+                str(self.target),
+                "hash-object",
+                "-w",
+                "--stdin",
+                stdin=b"unreachable injected object",
+            )
+            self.injected = True
+        return result
+
+
 def test_pinned_history_is_copied_only_to_a_new_empty_bare_target(tmp_path: Path) -> None:
     source_repository = tmp_path / "source.git"
     target_repository = tmp_path / "target.git"
@@ -228,6 +301,32 @@ def test_pinned_history_is_copied_only_to_a_new_empty_bare_target(tmp_path: Path
 
     with pytest.raises(ArchiveContinuationError, match="not empty"):
         NewTargetHistoryCopier().copy(source, target_repository=target_repository)
+
+
+def test_target_directory_swap_is_detected_by_pinned_identity(tmp_path: Path) -> None:
+    source_repository = tmp_path / "source.git"
+    target_repository = tmp_path / "target.git"
+    head = _bare_history(source_repository)
+    _run("/usr/bin/git", "init", "--bare", "--initial-branch=main", str(target_repository))
+
+    with pytest.raises(ArchiveContinuationError, match="changed during operation"):
+        NewTargetHistoryCopier(runner=_SwapTargetRunner(target_repository)).copy(
+            GitRecoverySource(source_repository, "main", head),
+            target_repository=target_repository,
+        )
+
+
+def test_unreachable_object_injection_is_rejected_after_copy(tmp_path: Path) -> None:
+    source_repository = tmp_path / "source.git"
+    target_repository = tmp_path / "target.git"
+    head = _bare_history(source_repository)
+    _run("/usr/bin/git", "init", "--bare", "--initial-branch=main", str(target_repository))
+
+    with pytest.raises(ArchiveContinuationError, match="extra Git objects"):
+        NewTargetHistoryCopier(runner=_InjectObjectRunner(target_repository)).copy(
+            GitRecoverySource(source_repository, "main", head),
+            target_repository=target_repository,
+        )
 
 
 @pytest.mark.asyncio

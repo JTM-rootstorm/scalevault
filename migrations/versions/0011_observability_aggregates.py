@@ -48,7 +48,7 @@ def _scope() -> str:
         "IS DISTINCT FROM p_tenant_id::text THEN "
         "RAISE EXCEPTION 'tenant scope mismatch' USING ERRCODE = '42501'; END IF; "
         "IF NOT EXISTS (SELECT 1 FROM public.observability_tenant_bindings AS binding "
-        "WHERE binding.login_role = SESSION_USER::name "
+        "WHERE binding.login_role = SESSION_USER::text "
         "AND binding.tenant_id = p_tenant_id) THEN "
         "RAISE EXCEPTION 'tenant binding mismatch' USING ERRCODE = '42501'; END IF; "
     )
@@ -62,14 +62,21 @@ def _limit() -> str:
 
 
 def upgrade() -> None:
-    op.execute(
-        sa.text(
-            "CREATE TABLE public.observability_tenant_bindings ("
-            "login_role name PRIMARY KEY, tenant_id uuid NOT NULL, "
-            "CONSTRAINT tenant FOREIGN KEY (tenant_id) REFERENCES public.tenants(tenant_id) "
-            "ON DELETE RESTRICT, CONSTRAINT fixed_login CHECK (login_role IN "
-            "('kivra_memory_metrics'::name, 'kivra_memory_operator_report_login'::name)))"
-        )
+    op.create_table(
+        "observability_tenant_bindings",
+        sa.Column("login_role", sa.String(length=64), nullable=False),
+        sa.Column("tenant_id", sa.Uuid(), nullable=False),
+        sa.CheckConstraint(
+            "login_role IN ('kivra_memory_metrics', 'kivra_memory_operator_report_login')",
+            name=op.f("ck_observability_tenant_bindings_fixed_login"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.tenant_id"],
+            name="tenant",
+            ondelete="RESTRICT",
+        ),
+        sa.PrimaryKeyConstraint("login_role", name=op.f("pk_observability_tenant_bindings")),
     )
     op.execute(sa.text("REVOKE ALL ON TABLE public.observability_tenant_bindings FROM PUBLIC"))
     _create_function(

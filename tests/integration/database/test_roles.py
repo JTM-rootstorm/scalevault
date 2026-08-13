@@ -277,6 +277,39 @@ def test_role_bootstrap_upgrades_m1_ownership_and_is_idempotent(
     ]
 
 
+def test_bootstrap_converges_every_wrapper_membership_before_migrations(
+    postgresql_server: PostgreSQLTestServer,
+    alembic_runner: AlembicRunner,
+) -> None:
+    run_operator_sql_file(postgresql_server, ROLE_BOOTSTRAP)
+    with alembic_runner.engine.begin() as connection:
+        for granted, member in (
+            ("kivra_memory_api", "kivra_memory_metrics"),
+            ("pg_read_all_data", "kivra_memory_metrics"),
+            ("kivra_memory_worker", "kivra_memory_operator_report_login"),
+            ("pg_read_all_data", "kivra_memory_operator_report_login"),
+        ):
+            connection.execute(text(f"GRANT {granted} TO {member}"))
+
+    run_operator_sql_file(postgresql_server, ROLE_BOOTSTRAP)
+
+    with alembic_runner.engine.begin() as connection:
+        memberships = connection.execute(
+            text(
+                "SELECT granted.rolname, member.rolname FROM pg_auth_members AS membership "
+                "JOIN pg_roles AS granted ON granted.oid = membership.roleid "
+                "JOIN pg_roles AS member ON member.oid = membership.member "
+                "WHERE member.rolname IN "
+                "('kivra_memory_metrics','kivra_memory_operator_report_login') "
+                "ORDER BY member.rolname, granted.rolname"
+            )
+        ).all()
+    assert [tuple(row) for row in memberships] == [
+        ("kivra_memory_observability", "kivra_memory_metrics"),
+        ("kivra_memory_operator_report", "kivra_memory_operator_report_login"),
+    ]
+
+
 def test_role_bootstrap_is_safe_before_migrating_an_existing_0004_database(
     postgresql_server: PostgreSQLTestServer,
     alembic_runner: AlembicRunner,
@@ -1881,9 +1914,13 @@ def test_bootstrap_removes_observability_privilege_and_membership_drift(
 ) -> None:
     with role_secured_database.engine.begin() as connection:
         connection.execute(text("GRANT kivra_memory_owner TO kivra_memory_metrics"))
+        connection.execute(text("GRANT kivra_memory_api TO kivra_memory_metrics"))
+        connection.execute(text("GRANT pg_read_all_data TO kivra_memory_metrics"))
         connection.execute(
             text("GRANT kivra_memory_migrator TO kivra_memory_operator_report_login")
         )
+        connection.execute(text("GRANT kivra_memory_worker TO kivra_memory_operator_report_login"))
+        connection.execute(text("GRANT pg_read_all_data TO kivra_memory_operator_report_login"))
         connection.execute(text("GRANT kivra_memory_observability TO kivra_memory_worker"))
         connection.execute(text("GRANT kivra_memory_operator_report TO kivra_memory_api"))
         connection.execute(
@@ -1916,6 +1953,20 @@ def test_bootstrap_removes_observability_privilege_and_membership_drift(
             )
         ).all()
         assert stale_memberships == []
+        wrapper_memberships = connection.execute(
+            text(
+                "SELECT granted.rolname, member.rolname FROM pg_auth_members AS membership "
+                "JOIN pg_roles AS granted ON granted.oid = membership.roleid "
+                "JOIN pg_roles AS member ON member.oid = membership.member "
+                "WHERE member.rolname IN "
+                "('kivra_memory_metrics','kivra_memory_operator_report_login') "
+                "ORDER BY member.rolname, granted.rolname"
+            )
+        ).all()
+        assert [tuple(row) for row in wrapper_memberships] == [
+            ("kivra_memory_observability", "kivra_memory_metrics"),
+            ("kivra_memory_operator_report", "kivra_memory_operator_report_login"),
+        ]
         assert not connection.execute(
             text(
                 "SELECT has_function_privilege('kivra_memory_api', "

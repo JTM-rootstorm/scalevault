@@ -212,6 +212,8 @@ tests:
         values: '1 1 1 1 1 1 1 1 1 1'
       - series: 'kivra_memory_database_collector_up'
         values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'kivra_memory_database_collector_last_success_unixtime'
+        values: '0 0 0 180 240 300 360 420 480 540'
       - series: 'kivra_memory_backup_age_seconds{kind="base"}'
         values: '_ _ _ _ _ _ _ _ _ 0'
       - series: 'kivra_memory_wal_oldest_age_seconds'
@@ -241,6 +243,28 @@ tests:
           - exp_labels: {severity: critical, category: monitoring}
             exp_annotations: {summary: "ScaleVault database aggregate metrics are unavailable", response: "database_metrics_unavailable"}
       - eval_time: 3m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts: []
+
+  - name: database-collector-stale-success-is-fail-visible
+    interval: 1m
+    input_series:
+      - series: 'up{job="scalevault-database-metrics",instance="loopback"}'
+        values: '1x7'
+      - series: 'kivra_memory_database_collector_up'
+        values: '1x7'
+      - series: 'kivra_memory_database_collector_last_success_unixtime'
+        values: '0x6 360'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ScaleVaultDatabaseMetricsUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, category: monitoring}
+            exp_annotations: {summary: "ScaleVault database aggregate metrics are unavailable", response: "database_metrics_unavailable"}
+      - eval_time: 6m
         alertname: ScaleVaultDatabaseMetricsUnavailable
         exp_alerts: []
       - eval_time: 2m

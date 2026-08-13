@@ -5,13 +5,17 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import socket
 import sys
+import threading
 import time
 from contextlib import suppress
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Final, Protocol
 from uuid import UUID
 
-from prometheus_client import start_http_server
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client.registry import CollectorRegistry
 from sqlalchemy.engine import make_url
 
 from kivra_memory.domain.identifiers import is_uuid7
@@ -31,10 +35,72 @@ LISTEN_ADDRESS: Final = "127.0.0.1"
 LISTEN_PORT: Final = 9098
 REFRESH_SECONDS: Final = 30.0
 COLLECTION_TIMEOUT_SECONDS: Final = 10.0
+MAXIMUM_REQUEST_LINE_BYTES: Final = 4096
+REQUEST_TIMEOUT_SECONDS: Final = 5.0
 
 
 class SnapshotCollector(Protocol):
     async def collect(self, tenant_id: UUID) -> AggregateSnapshot: ...
+
+
+class _BoundedHTTPServer(HTTPServer):
+    request_queue_size = 8
+    allow_reuse_address = False
+
+    def get_request(self) -> tuple[socket.socket, object]:
+        connection, address = super().get_request()
+        connection.settimeout(REQUEST_TIMEOUT_SECONDS)
+        return connection, address
+
+    def handle_error(self, _request: object, _client_address: object) -> None:
+        return
+
+
+class _MetricsHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+    registry: CollectorRegistry
+
+    def handle_one_request(self) -> None:
+        self.raw_requestline = self.rfile.readline(MAXIMUM_REQUEST_LINE_BYTES + 1)
+        if len(self.raw_requestline) > MAXIMUM_REQUEST_LINE_BYTES:
+            self.requestline = ""
+            self.request_version = ""
+            self.command = ""
+            self.send_error(414)
+            return
+        if not self.raw_requestline or not self.parse_request():
+            return
+        method = getattr(self, f"do_{self.command}", None)
+        if method is None:
+            self.send_error(405)
+            return
+        method()
+        self.wfile.flush()
+
+    def do_GET(self) -> None:
+        if self.path != "/metrics":
+            self.send_error(404)
+            return
+        body = generate_latest(self.registry)
+        self.send_response(200)
+        self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+
+def _start_bounded_http_server(
+    registry: CollectorRegistry,
+) -> tuple[_BoundedHTTPServer, threading.Thread]:
+    handler = type("BoundedMetricsHandler", (_MetricsHandler,), {"registry": registry})
+    server = _BoundedHTTPServer((LISTEN_ADDRESS, LISTEN_PORT), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True, name="metrics-http")
+    thread.start()
+    return server, thread
 
 
 def _credentials() -> tuple[str, UUID]:
@@ -105,9 +171,7 @@ def main() -> None:
     try:
         database_url, tenant_id = _credentials()
         registry = MetricRegistry()
-        server, _thread = start_http_server(
-            LISTEN_PORT, addr=LISTEN_ADDRESS, registry=registry.prometheus
-        )
+        server, _thread = _start_bounded_http_server(registry.prometheus)
         asyncio.run(_run(database_url, tenant_id, registry))
     except Exception:
         print("ScaleVault metrics exporter failed", file=sys.stderr)
@@ -123,5 +187,6 @@ __all__ = [
     "LISTEN_ADDRESS",
     "LISTEN_PORT",
     "REFRESH_SECONDS",
+    "REQUEST_TIMEOUT_SECONDS",
     "main",
 ]

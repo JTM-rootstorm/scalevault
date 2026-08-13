@@ -16,7 +16,21 @@ def test_metrics_exporter_is_loopback_function_only_and_credential_bound() -> No
     assert "IPAddressAllow=localhost" in unit
     assert "NoNewPrivileges=true" in unit
     assert "LimitCORE=0" in unit
+    assert "TasksMax=8" in unit
+    assert "MemoryMax=192M" in unit
+    assert "CPUQuota=50%" in unit
     assert "EnvironmentFile=" not in unit
+
+    exporter = (
+        REPOSITORY_ROOT / "services/memory-node/src/kivra_memory/observability/metrics_exporter.py"
+    ).read_text()
+    assert "class _BoundedHTTPServer(HTTPServer)" in exporter
+    assert "request_queue_size = 8" in exporter
+    assert "MAXIMUM_REQUEST_LINE_BYTES" in exporter
+    assert "REQUEST_TIMEOUT_SECONDS" in exporter
+    assert "connection.settimeout" in exporter
+    assert "ThreadingHTTPServer" not in exporter
+    assert "start_http_server" not in exporter
 
 
 def test_prometheus_scrapes_dedicated_exporter_only_on_loopback() -> None:

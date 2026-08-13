@@ -95,6 +95,8 @@ def test_alert_thresholds_match_accepted_adr_0031() -> None:
         'kivra_memory_recovery_drill_age_seconds{kind="full"} > 8640000',
     )
     assert all(fragment in rules for fragment in required_fragments)
+    assert "absent(kivra_memory_database_collector_last_success_unixtime)" in rules
+    assert "time() - kivra_memory_database_collector_last_success_unixtime > 120" in rules
     assert rules.count("for: 5m") >= 5
     assert "for: 15m" in rules
 

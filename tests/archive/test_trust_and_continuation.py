@@ -176,6 +176,50 @@ def test_transition_record_requires_canonical_dual_signed_exact_boundary(tmp_pat
         ArchiveSignerTransition.parse(record_file.read_bytes())
 
 
+def test_planned_transition_rejects_same_old_and_new_key() -> None:
+    with pytest.raises(ArchiveTrustError, match="change signer key"):
+        ArchiveSignerTransition(
+            transition_id="same-key",
+            archive_target_id="archive-primary",
+            previous_epoch_id="old",
+            next_epoch_id="new",
+            previous_key_fingerprint=OLD_FINGERPRINT,
+            next_key_fingerprint=OLD_FINGERPRINT,
+            last_old_head="a" * 40,
+            last_old_event_sequence=1,
+            first_new_event_sequence=2,
+        )
+
+    archive = _verified_archive(2)
+    epochs = (
+        ArchiveSignerEpoch(
+            1,
+            1,
+            NeverCommitVerifier(),
+            epoch_id="old",
+            public_key_fingerprint=OLD_FINGERPRINT,
+        ),
+        ArchiveSignerEpoch(
+            2,
+            None,
+            NeverCommitVerifier(),
+            epoch_id="new",
+            public_key_fingerprint=OLD_FINGERPRINT,
+            transition_record_id="same-key",
+        ),
+    )
+    with pytest.raises(ArchiveTrustError, match="change key fingerprint"):
+        verify_transition_evidence(
+            archive,
+            epochs,
+            (ArchiveTransitionEvidence(Path("/unused"), Path("/unused"), Path("/unused")),),
+            archive_target_id="archive-primary",
+            allowed_signers={},
+            signer_principals={},
+            public_keys={},
+        )
+
+
 @pytest.mark.asyncio
 async def test_exact_copy_reconstructs_only_final_checkpoint_and_proves_one_append() -> None:
     source = _verified_archive(1)

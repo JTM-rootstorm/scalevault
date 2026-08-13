@@ -58,6 +58,24 @@ class Tenant(Base):
     )
 
 
+class ObservabilityTenantBinding(Base):
+    """Owner-only authorization binding for reviewed observability functions."""
+
+    __tablename__ = "observability_tenant_bindings"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], name="tenant", ondelete="RESTRICT"
+        ),
+        CheckConstraint(
+            "login_role IN ('kivra_memory_metrics', 'kivra_memory_operator_report_login')",
+            name="fixed_login",
+        ),
+    )
+
+    login_role: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+
+
 class Actor(Base):
     __tablename__ = "actors"
     __table_args__ = (
