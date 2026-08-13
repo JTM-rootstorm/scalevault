@@ -30,7 +30,12 @@ from kivra_memory.archive.git import (
     SubprocessRunner,
     archive_commit_message,
 )
-from kivra_memory.archive.models import ARCHIVE_FORMAT, MANIFEST_PATH, build_manifest
+from kivra_memory.archive.models import (
+    ARCHIVE_FORMAT,
+    MANIFEST_PATH,
+    MAX_ARCHIVE_FILES,
+    build_manifest,
+)
 from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.values import format_utc_datetime
 from kivra_memory.storage.archive import ArchiveBatchSource, ArchiveStorageError
@@ -43,6 +48,15 @@ _SCHEMA_FILES = (
     "export-manifest-v2.schema.json",
     "memory-event.schema.json",
     "memory-projection.schema.json",
+)
+# Linux PATH_MAX includes the terminal NUL. The archive worktree adapter is
+# Linux-only in production, so a tracked relative name can consume at most the
+# remaining 4095 bytes before filesystem materialization rejects it.
+_MAX_TRACKED_PATH_BYTES = 4095
+_MAX_TRACKED_FILES = MAX_ARCHIVE_FILES + 1
+_LS_FILES_OUTPUT_LIMIT = min(
+    64 * 1024 * 1024,
+    _MAX_TRACKED_FILES * (_MAX_TRACKED_PATH_BYTES + 1),
 )
 
 
@@ -285,7 +299,7 @@ class GitWorktreeArchiveRepository:
             arguments.append(expected_parent_sha)
         elif self._local_head() is not None:
             raise ArchiveStorageError("archive_local_parent_mismatch")
-        self._git(tuple(arguments))
+        self._git(tuple(arguments), stdout_limit_bytes=1)
         self._prepared = None
         return commit_sha
 
@@ -295,7 +309,10 @@ class GitWorktreeArchiveRepository:
             raise ArchiveStorageError("archive_local_commit_mismatch")
         self._signer.verify_commit(git_commit_sha)
         refspec = f"{git_commit_sha}:refs/heads/{self._config.branch_name}"
-        self._git(("push", "--porcelain", self._config.repository_reference, refspec))
+        self._git(
+            ("push", "--porcelain", self._config.repository_reference, refspec),
+            stdout_limit_bytes=64 * 1024,
+        )
         remote = self._remote_head()
         if remote is None:
             raise ArchiveStorageError("archive_remote_commit_unavailable")
@@ -313,7 +330,10 @@ class GitWorktreeArchiveRepository:
             self._signer.verify_commit(commit_sha)
             tree = self._git_object_id(("rev-parse", f"{commit_sha}^{{tree}}"), name="tree")
             parents = self._git_text(("show", "-s", "--format=%P", commit_sha))
-            details = self._git(("show", "-s", "--format=%B%x00%aI", commit_sha)).stdout
+            details = self._git(
+                ("show", "-s", "--format=%B%x00%aI", commit_sha),
+                stdout_limit_bytes=8 * 1024,
+            ).stdout
             message_bytes, timestamp_bytes = details.rsplit(b"\x00", 1)
             timestamp = datetime.fromisoformat(timestamp_bytes.decode("ascii").strip())
             message = message_bytes.decode("utf-8")
@@ -361,14 +381,14 @@ class GitWorktreeArchiveRepository:
                 with suppress(OSError):
                     temporary.unlink(missing_ok=True)
                 raise ArchiveStorageError("archive_worktree_write_failed") from None
-        self._git(("add", "--", *payload.files.keys()))
+        self._git(("add", "--", *payload.files.keys()), stdout_limit_bytes=1)
 
     def _empty_worktree(self) -> None:
-        result = self._git(("ls-files", "-z"))
-        try:
-            tracked = tuple(item.decode("utf-8") for item in result.stdout.split(b"\x00") if item)
-        except UnicodeDecodeError:
-            raise ArchiveStorageError("archive_worktree_path_invalid") from None
+        result = self._git(
+            ("ls-files", "-z"),
+            stdout_limit_bytes=_LS_FILES_OUTPUT_LIMIT,
+        )
+        tracked = _decode_tracked_paths(result.stdout)
         for relative in tracked:
             if relative != MANIFEST_PATH:
                 from kivra_memory.archive.models import validate_archive_path
@@ -395,7 +415,7 @@ class GitWorktreeArchiveRepository:
                     parent.rmdir()
         except OSError:
             raise ArchiveStorageError("archive_worktree_write_failed") from None
-        self._git(("read-tree", "--empty"))
+        self._git(("read-tree", "--empty"), stdout_limit_bytes=1)
 
     def _require_repository(self) -> None:
         repository = self._config.repository
@@ -412,7 +432,10 @@ class GitWorktreeArchiveRepository:
             raise ArchiveStorageError("archive_branch_mismatch")
 
     def _require_clean_worktree(self) -> None:
-        status = self._git(("status", "--porcelain=v1", "--untracked-files=all"))
+        status = self._git(
+            ("status", "--porcelain=v1", "--untracked-files=all"),
+            stdout_limit_bytes=64 * 1024,
+        )
         if status.stdout:
             raise ArchiveStorageError("archive_worktree_not_clean")
 
@@ -420,6 +443,7 @@ class GitWorktreeArchiveRepository:
         result = self._git(
             ("rev-parse", "--verify", f"refs/heads/{self._config.branch_name}"),
             ok=(0, 1),
+            stdout_limit_bytes=128,
         )
         if result.returncode == 1:
             return None
@@ -428,7 +452,10 @@ class GitWorktreeArchiveRepository:
 
     def _remote_head(self) -> str | None:
         ref = f"refs/heads/{self._config.branch_name}"
-        result = self._git(("ls-remote", "--heads", self._config.repository_reference, ref))
+        result = self._git(
+            ("ls-remote", "--heads", self._config.repository_reference, ref),
+            stdout_limit_bytes=512,
+        )
         if not result.stdout:
             return None
         try:
@@ -442,15 +469,24 @@ class GitWorktreeArchiveRepository:
         return value
 
     def _git_object_id(self, arguments: tuple[str, ...], *, name: str) -> str:
-        return self._decode_object_id(self._git(arguments).stdout, name)
+        return self._decode_object_id(
+            self._git(arguments, stdout_limit_bytes=128).stdout,
+            name,
+        )
 
     def _git_text(self, arguments: tuple[str, ...]) -> str:
         try:
-            return self._git(arguments).stdout.decode("utf-8").strip()
+            return self._git(arguments, stdout_limit_bytes=4096).stdout.decode("utf-8").strip()
         except UnicodeDecodeError:
             raise ArchiveStorageError("archive_git_output_invalid") from None
 
-    def _git(self, arguments: tuple[str, ...], *, ok: tuple[int, ...] = (0,)) -> ProcessResult:
+    def _git(
+        self,
+        arguments: tuple[str, ...],
+        *,
+        ok: tuple[int, ...] = (0,),
+        stdout_limit_bytes: int = 8 * 1024 * 1024,
+    ) -> ProcessResult:
         prefix = (
             str(self._config.signing.git_executable),
             "--no-pager",
@@ -460,12 +496,17 @@ class GitWorktreeArchiveRepository:
             "-c",
             "core.hooksPath=/dev/null",
         )
-        result = self._runner.run(
-            (*prefix, *arguments),
-            stdin=b"",
-            environment=self._environment(),
-            timeout_seconds=self._config.timeout_seconds,
-        )
+        try:
+            result = self._runner.run(
+                (*prefix, *arguments),
+                stdin=b"",
+                environment=self._environment(),
+                timeout_seconds=self._config.timeout_seconds,
+                stdout_limit_bytes=stdout_limit_bytes,
+                stderr_limit_bytes=256 * 1024,
+            )
+        except GitSigningError:
+            raise ArchiveStorageError("archive_git_operation_failed") from None
         if result.returncode not in ok:
             raise ArchiveStorageError("archive_git_operation_failed")
         return result
@@ -489,6 +530,8 @@ class GitWorktreeArchiveRepository:
             "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_SSH_COMMAND": ssh_command,
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_NO_LAZY_FETCH": "1",
         }
 
     @staticmethod
@@ -513,6 +556,23 @@ class GitWorktreeArchiveRepository:
             raise ArchiveStorageError(f"archive_{name.replace(' ', '_')}_invalid") from None
         cls._require_object_id(decoded)
         return decoded
+
+
+def _decode_tracked_paths(document: bytes) -> tuple[str, ...]:
+    if len(document) > _LS_FILES_OUTPUT_LIMIT:
+        raise ArchiveStorageError("archive_worktree_path_invalid")
+    raw_paths = tuple(item for item in document.split(b"\x00") if item)
+    if len(raw_paths) > _MAX_TRACKED_FILES:
+        raise ArchiveStorageError("archive_worktree_path_invalid")
+    tracked: list[str] = []
+    for raw_path in raw_paths:
+        if len(raw_path) > _MAX_TRACKED_PATH_BYTES:
+            raise ArchiveStorageError("archive_worktree_path_invalid")
+        try:
+            tracked.append(raw_path.decode("utf-8"))
+        except UnicodeDecodeError:
+            raise ArchiveStorageError("archive_worktree_path_invalid") from None
+    return tuple(tracked)
 
 
 __all__ = [

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import re
+import signal
 import subprocess
+import threading
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import BinaryIO, Protocol
 
 from kivra_memory.domain.values import format_utc_datetime
 
@@ -19,6 +23,12 @@ _SIGNATURE_STATUS = re.compile(
     rb'Good "git" signature for ([A-Za-z0-9][A-Za-z0-9_.@+\-]{0,127}) '
     rb"with [A-Z0-9][A-Z0-9_-]{0,31} key SHA256:[A-Za-z0-9+/=]{4,128}"
 )
+_DEFAULT_STDOUT_LIMIT = 8 * 1024 * 1024
+_DEFAULT_STDERR_LIMIT = 256 * 1024
+_MAX_STDOUT_LIMIT = 64 * 1024 * 1024 + 1
+_MAX_STDERR_LIMIT = 1024 * 1024
+_MAX_STDIN_SIZE = 16 * 1024 * 1024
+_PROCESS_CHUNK_SIZE = 64 * 1024
 
 
 class GitSigningError(RuntimeError):
@@ -53,12 +63,14 @@ class ProcessRunner(Protocol):
         stdin: bytes,
         environment: dict[str, str],
         timeout_seconds: int,
+        stdout_limit_bytes: int = _DEFAULT_STDOUT_LIMIT,
+        stderr_limit_bytes: int = _DEFAULT_STDERR_LIMIT,
     ) -> ProcessResult:
         """Return captured process output without invoking a shell."""
 
 
 class SubprocessRunner:
-    """Production argv-only subprocess implementation."""
+    """Production argv-only subprocess implementation with bounded pipe drains."""
 
     def run(
         self,
@@ -67,24 +79,129 @@ class SubprocessRunner:
         stdin: bytes,
         environment: dict[str, str],
         timeout_seconds: int,
+        stdout_limit_bytes: int = _DEFAULT_STDOUT_LIMIT,
+        stderr_limit_bytes: int = _DEFAULT_STDERR_LIMIT,
     ) -> ProcessResult:
+        _validate_process_limits(
+            stdin,
+            stdout_limit_bytes=stdout_limit_bytes,
+            stderr_limit_bytes=stderr_limit_bytes,
+        )
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 arguments,
-                input=stdin,
-                capture_output=True,
-                check=False,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 shell=False,
                 env=environment,
-                timeout=timeout_seconds,
+                start_new_session=True,
             )
-        except (OSError, subprocess.SubprocessError):
+        except OSError:
             raise GitSigningError("isolated Git command failed") from None
-        return ProcessResult(
-            returncode=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+        process_stdin = process.stdin
+        process_stdout = process.stdout
+        process_stderr = process.stderr
+        exceeded = threading.Event()
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        stdout_size = [0]
+        stderr_size = [0]
+
+        def drain(
+            stream: BinaryIO,
+            chunks: list[bytes],
+            size: list[int],
+            limit: int,
+        ) -> None:
+            try:
+                while True:
+                    chunk = stream.read(_PROCESS_CHUNK_SIZE)
+                    if not chunk:
+                        return
+                    if size[0] + len(chunk) > limit:
+                        exceeded.set()
+                        _kill_process_group(process)
+                        return
+                    chunks.append(chunk)
+                    size[0] += len(chunk)
+            except OSError:
+                exceeded.set()
+                _kill_process_group(process)
+
+        stdout_thread = threading.Thread(
+            target=drain,
+            args=(process_stdout, stdout_chunks, stdout_size, stdout_limit_bytes),
+            daemon=True,
         )
+        stderr_thread = threading.Thread(
+            target=drain,
+            args=(process_stderr, stderr_chunks, stderr_size, stderr_limit_bytes),
+            daemon=True,
+        )
+
+        def write_stdin() -> None:
+            try:
+                process_stdin.write(stdin)
+            except (BrokenPipeError, OSError):
+                pass
+            finally:
+                with suppress(OSError):
+                    process_stdin.close()
+
+        stdin_thread = threading.Thread(target=write_stdin, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        stdin_thread.start()
+        try:
+            try:
+                returncode = process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                exceeded.set()
+                _kill_process_group(process)
+                returncode = process.wait()
+            stdin_thread.join()
+            stdout_thread.join()
+            stderr_thread.join()
+        finally:
+            _kill_process_group(process)
+            with suppress(OSError):
+                process.wait()
+            for stream in (process_stdin, process_stdout, process_stderr):
+                with suppress(OSError):
+                    stream.close()
+        if exceeded.is_set():
+            raise GitSigningError("isolated Git command exceeded a resource limit")
+        return ProcessResult(returncode, b"".join(stdout_chunks), b"".join(stderr_chunks))
+
+
+def _validate_process_limits(
+    stdin: bytes,
+    *,
+    stdout_limit_bytes: int,
+    stderr_limit_bytes: int,
+) -> None:
+    if len(stdin) > _MAX_STDIN_SIZE:
+        raise GitSigningError("isolated Git command exceeded a resource limit")
+    for value, maximum in (
+        (stdout_limit_bytes, _MAX_STDOUT_LIMIT),
+        (stderr_limit_bytes, _MAX_STDERR_LIMIT),
+    ):
+        if isinstance(value, bool) or not 1 <= value <= maximum:
+            raise GitSigningError("isolated Git command has an invalid resource limit")
+
+
+def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    with suppress(OSError):
+        os.killpg(process.pid, signal.SIGKILL)
+        return
+    with suppress(OSError):
+        process.kill()
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,7 +283,11 @@ class GitCommitVerifier:
         """Verify a commit against only the externally pinned allowed-signers file."""
 
         _require_object_id(commit_sha, "commit")
-        result = self._run_git(("verify-commit", "--raw", commit_sha))
+        result = self._run_git(
+            ("verify-commit", "--raw", commit_sha),
+            stdout_limit_bytes=64 * 1024,
+            stderr_limit_bytes=64 * 1024,
+        )
         principals = {
             match.group(1).decode("ascii")
             for line in (*result.stderr.splitlines(), *result.stdout.splitlines())
@@ -195,7 +316,10 @@ class GitCommitVerifier:
             raise GitSigningError("archive commit expected file set is empty")
         self.verify_commit(commit_sha)
 
-        commit_result = self._run_git(("cat-file", "commit", commit_sha))
+        commit_result = self._run_git(
+            ("cat-file", "commit", commit_sha),
+            stdout_limit_bytes=64 * 1024,
+        )
         tree_sha, parent_sha, author, committer, message = _parse_commit_object(
             commit_result.stdout
         )
@@ -211,7 +335,10 @@ class GitCommitVerifier:
         for path, content in expected_files.items():
             _validate_git_path(path)
             expected_tree[path] = _git_object_id(b"blob", content, len(commit_sha))
-        tree_result = self._run_git(("ls-tree", "-r", "-z", "--full-tree", commit_sha))
+        tree_result = self._run_git(
+            ("ls-tree", "-r", "-z", "--full-tree", commit_sha),
+            stdout_limit_bytes=_tree_output_limit(expected_files),
+        )
         actual_tree = _parse_tree_entries(tree_result.stdout, max_entries=len(expected_tree))
         if actual_tree != expected_tree:
             raise GitSigningError("Git archive tree does not exactly match its batch bytes")
@@ -222,12 +349,20 @@ class GitCommitVerifier:
             parent_sha=parent_sha,
         )
 
-    def _run_git(self, arguments: tuple[str, ...]) -> ProcessResult:
+    def _run_git(
+        self,
+        arguments: tuple[str, ...],
+        *,
+        stdout_limit_bytes: int = _DEFAULT_STDOUT_LIMIT,
+        stderr_limit_bytes: int = _DEFAULT_STDERR_LIMIT,
+    ) -> ProcessResult:
         result = self._runner.run(
             (*self._git_prefix(), *arguments),
             stdin=b"",
             environment=self._environment(),
             timeout_seconds=self._config.timeout_seconds,
+            stdout_limit_bytes=stdout_limit_bytes,
+            stderr_limit_bytes=stderr_limit_bytes,
         )
         if result.returncode != 0:
             raise GitSigningError("Git archive object verification failed")
@@ -257,6 +392,8 @@ class GitCommitVerifier:
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_TERMINAL_PROMPT": "0",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_NO_LAZY_FETCH": "1",
         }
 
 
@@ -299,6 +436,8 @@ class GitCommitSigner:
             stdin=message.encode("utf-8"),
             environment=self._environment(normalized_timestamp),
             timeout_seconds=self._config.timeout_seconds,
+            stdout_limit_bytes=128,
+            stderr_limit_bytes=64 * 1024,
         )
         if result.returncode != 0:
             raise GitSigningError("Git commit signing failed")
@@ -324,6 +463,8 @@ class GitCommitSigner:
             stdin=b"",
             environment=self._environment(None),
             timeout_seconds=self._config.timeout_seconds,
+            stdout_limit_bytes=64 * 1024,
+            stderr_limit_bytes=64 * 1024,
         )
         if result.returncode != 0:
             raise GitSigningError("Git commit signature verification failed")
@@ -355,7 +496,10 @@ class GitCommitSigner:
             raise GitSigningError("archive commit expected file set is empty")
         self.verify_commit(commit_sha)
 
-        commit_result = self._run_git(("cat-file", "commit", commit_sha))
+        commit_result = self._run_git(
+            ("cat-file", "commit", commit_sha),
+            stdout_limit_bytes=64 * 1024,
+        )
         tree_sha, parent_sha, author, committer, message = _parse_commit_object(
             commit_result.stdout
         )
@@ -374,7 +518,10 @@ class GitCommitSigner:
         for path, content in expected_files.items():
             _validate_git_path(path)
             expected_tree[path] = _git_object_id(b"blob", content, len(commit_sha))
-        tree_result = self._run_git(("ls-tree", "-r", "-z", "--full-tree", commit_sha))
+        tree_result = self._run_git(
+            ("ls-tree", "-r", "-z", "--full-tree", commit_sha),
+            stdout_limit_bytes=_tree_output_limit(expected_files),
+        )
         actual_tree = _parse_tree_entries(tree_result.stdout, max_entries=len(expected_tree))
         if actual_tree != expected_tree:
             raise GitSigningError("Git archive tree does not exactly match its batch bytes")
@@ -385,12 +532,20 @@ class GitCommitSigner:
             parent_sha=parent_sha,
         )
 
-    def _run_git(self, arguments: tuple[str, ...]) -> ProcessResult:
+    def _run_git(
+        self,
+        arguments: tuple[str, ...],
+        *,
+        stdout_limit_bytes: int = _DEFAULT_STDOUT_LIMIT,
+        stderr_limit_bytes: int = _DEFAULT_STDERR_LIMIT,
+    ) -> ProcessResult:
         result = self._runner.run(
             (*self._git_prefix(signing=False), *arguments),
             stdin=b"",
             environment=self._environment(None),
             timeout_seconds=self._config.timeout_seconds,
+            stdout_limit_bytes=stdout_limit_bytes,
+            stderr_limit_bytes=stderr_limit_bytes,
         )
         if result.returncode != 0:
             raise GitSigningError("Git archive object verification failed")
@@ -427,6 +582,8 @@ class GitCommitSigner:
             "GIT_AUTHOR_EMAIL": self._config.author_email,
             "GIT_COMMITTER_NAME": self._config.author_name,
             "GIT_COMMITTER_EMAIL": self._config.author_email,
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_NO_LAZY_FETCH": "1",
         }
         if timestamp is not None:
             environment["GIT_AUTHOR_DATE"] = timestamp
@@ -566,6 +723,14 @@ def _validate_git_path(path: str) -> None:
         or any(component in {"", ".", ".."} for component in path.split("/"))
     ):
         raise GitSigningError("Git archive path is invalid")
+
+
+def _tree_output_limit(expected_files: Mapping[str, bytes]) -> int:
+    # ``git ls-tree -rz`` adds mode, type, object ID, separators, and NUL.
+    estimate = sum(len(path.encode("utf-8")) + 160 for path in expected_files)
+    if not 1 <= estimate <= _MAX_STDOUT_LIMIT:
+        raise GitSigningError("Git archive tree exceeds the verification output limit")
+    return estimate
 
 
 def _git_object_id(kind: bytes, content: bytes, object_id_length: int) -> str:

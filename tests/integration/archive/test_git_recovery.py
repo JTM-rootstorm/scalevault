@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 from kivra_memory.archive.adapters import ArchivePayload, DeterministicArchiveBuilder
 from kivra_memory.archive.git import (
     GitCommitSigner,
@@ -12,7 +13,12 @@ from kivra_memory.archive.git import (
     GitSigningConfig,
     GitVerificationConfig,
 )
-from kivra_memory.archive.recovery import GitRecoverySource, ReadOnlyGitArchive
+from kivra_memory.archive.recovery import (
+    ArchiveRecoveryError,
+    GitRecoveryLimits,
+    GitRecoverySource,
+    ReadOnlyGitArchive,
+)
 from kivra_memory.archive.verification import ArchiveSignerEpoch, verify_signed_archive_epochs
 
 from tests.integration.database.test_archive_restore_acceptance import (
@@ -39,6 +45,55 @@ def _run(*arguments: str, stdin: bytes = b"") -> bytes:
         timeout=30,
     )
     return completed.stdout
+
+
+def _commit_tree(
+    repository: Path,
+    files: dict[str, bytes],
+    *,
+    parent: str | None = None,
+) -> str:
+    entries: list[bytes] = []
+    for path, content in sorted(files.items()):
+        blob = (
+            _run(
+                "/usr/bin/git",
+                "-C",
+                str(repository),
+                "hash-object",
+                "-w",
+                "--stdin",
+                stdin=content,
+            )
+            .decode("ascii")
+            .strip()
+        )
+        entries.append(f"100644 blob {blob}\t{path}\n".encode())
+    tree = (
+        _run(
+            "/usr/bin/git",
+            "-C",
+            str(repository),
+            "mktree",
+            stdin=b"".join(entries),
+        )
+        .decode("ascii")
+        .strip()
+    )
+    arguments = [
+        "/usr/bin/git",
+        "-C",
+        str(repository),
+        "-c",
+        "user.name=Recovery Test",
+        "-c",
+        "user.email=recovery@test.invalid",
+        "commit-tree",
+        tree,
+    ]
+    if parent is not None:
+        arguments.extend(("-p", parent))
+    return _run(*arguments, stdin=b"test\n").decode("ascii").strip()
 
 
 def test_real_signed_git_history_is_read_and_verified_without_private_key(
@@ -146,3 +201,44 @@ def test_real_signed_git_history_is_read_and_verified_without_private_key(
     assert verified.commits[-1].git.commit_sha == commit
     assert not hasattr(verifier, "sign_commit")
     assert not private_key.exists()
+
+
+def test_real_git_history_and_tree_output_caps_fail_before_allocation(tmp_path: Path) -> None:
+    repository = tmp_path / "bounded.git"
+    _run("/usr/bin/git", "init", "--bare", str(repository))
+    first = _commit_tree(repository, {"manifest.json": b"one"})
+    second = _commit_tree(repository, {"manifest.json": b"two"}, parent=first)
+    _run("/usr/bin/git", "-C", str(repository), "update-ref", "refs/heads/main", second)
+
+    with pytest.raises(ArchiveRecoveryError, match="oversized"):
+        ReadOnlyGitArchive(
+            GitRecoverySource(repository, "main", second),
+            limits=GitRecoveryLimits(max_commits=1),
+        ).read()
+
+    with pytest.raises(ArchiveRecoveryError, match="operation failed"):
+        ReadOnlyGitArchive(
+            GitRecoverySource(repository, "main", second),
+            limits=GitRecoveryLimits(max_tree_bytes=16),
+        ).read()
+
+
+def test_real_git_replace_ref_is_ignored_by_recovery_reader(tmp_path: Path) -> None:
+    repository = tmp_path / "replace.git"
+    _run("/usr/bin/git", "init", "--bare", str(repository))
+    accepted = _commit_tree(repository, {"manifest.json": b"accepted"})
+    replacement = _commit_tree(repository, {"secret.txt": b"malicious"})
+    _run("/usr/bin/git", "-C", str(repository), "update-ref", "refs/heads/main", accepted)
+    _run(
+        "/usr/bin/git",
+        "-C",
+        str(repository),
+        "update-ref",
+        f"refs/replace/{accepted}",
+        replacement,
+    )
+
+    batches = ReadOnlyGitArchive(GitRecoverySource(repository, "main", accepted)).read()
+
+    assert batches[0].batch.manifest_bytes == b"accepted"
+    assert batches[0].batch.files == {}

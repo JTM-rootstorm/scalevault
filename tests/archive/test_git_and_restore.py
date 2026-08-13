@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -14,6 +15,7 @@ from kivra_memory.archive.git import (
     GitSigningConfig,
     GitSigningError,
     ProcessResult,
+    SubprocessRunner,
     VerifiedGitCommit,
     archive_commit_message,
 )
@@ -49,7 +51,10 @@ class RecordingRunner:
         stdin: bytes,
         environment: dict[str, str],
         timeout_seconds: int,
+        stdout_limit_bytes: int = 8 * 1024 * 1024,
+        stderr_limit_bytes: int = 256 * 1024,
     ) -> ProcessResult:
+        del stdout_limit_bytes, stderr_limit_bytes
         self.calls.append((arguments, stdin, environment, timeout_seconds))
         return self.results.pop(0)
 
@@ -66,6 +71,37 @@ def signer(runner: RecordingRunner) -> GitCommitSigner:
         ),
         runner,
     )
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_subprocess_runner_kills_oversized_fake_git_output(stream: str) -> None:
+    descriptor = "1" if stream == "stdout" else "2"
+    command = (
+        sys.executable,
+        "-c",
+        f"import os; os.write({descriptor}, b'x' * 131072)",
+    )
+    with pytest.raises(GitSigningError, match="resource limit"):
+        SubprocessRunner().run(
+            command,
+            stdin=b"",
+            environment={"LC_ALL": "C", "LANG": "C"},
+            timeout_seconds=5,
+            stdout_limit_bytes=1024,
+            stderr_limit_bytes=1024,
+        )
+
+
+def test_subprocess_runner_kills_and_reaps_timeout() -> None:
+    with pytest.raises(GitSigningError, match="resource limit"):
+        SubprocessRunner().run(
+            (sys.executable, "-c", "import time; time.sleep(5)"),
+            stdin=b"",
+            environment={"LC_ALL": "C", "LANG": "C"},
+            timeout_seconds=1,
+            stdout_limit_bytes=1024,
+            stderr_limit_bytes=1024,
+        )
 
 
 def test_signer_uses_fixed_argv_stdin_and_isolated_environment() -> None:
@@ -87,6 +123,8 @@ def test_signer_uses_fixed_argv_stdin_and_isolated_environment() -> None:
     assert stdin == b"memory-export: events 1..2\n"
     assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
     assert environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert environment["GIT_NO_LAZY_FETCH"] == "1"
     assert environment["GIT_AUTHOR_DATE"] == TIMESTAMP
     assert "HOME" not in environment and "SSH_AUTH_SOCK" not in environment
     assert timeout == 30

@@ -6,7 +6,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from kivra_memory.archive.git import ProcessResult, ProcessRunner, SubprocessRunner
+from kivra_memory.archive.git import (
+    GitSigningError,
+    ProcessResult,
+    ProcessRunner,
+    SubprocessRunner,
+)
 from kivra_memory.archive.models import (
     MANIFEST_PATH,
     MAX_ARCHIVE_FILE_SIZE,
@@ -27,10 +32,11 @@ class ArchiveRecoveryError(RuntimeError):
 class GitRecoveryLimits:
     """Whole-history and per-object allocation bounds."""
 
-    max_commits: int = 100_000
-    max_files_per_commit: int = MAX_ARCHIVE_FILES + 1
-    max_blob_size: int = MAX_ARCHIVE_FILE_SIZE
-    max_history_bytes: int = 8 * 1024 * 1024 * 1024
+    max_commits: int = 10_000
+    max_files_per_commit: int = min(MAX_ARCHIVE_FILES + 1, 25_000)
+    max_blob_size: int = min(MAX_ARCHIVE_FILE_SIZE, 64 * 1024 * 1024)
+    max_history_bytes: int = 64 * 1024 * 1024
+    max_tree_bytes: int = 16 * 1024 * 1024
     timeout_seconds: int = 60
 
     def __post_init__(self) -> None:
@@ -39,6 +45,7 @@ class GitRecoveryLimits:
             self.max_files_per_commit,
             self.max_blob_size,
             self.max_history_bytes,
+            self.max_tree_bytes,
             self.timeout_seconds,
         ):
             if isinstance(value, bool) or value < 1:
@@ -99,7 +106,8 @@ class ReadOnlyGitArchive:
                 "--reverse",
                 f"--max-count={self._limits.max_commits + 1}",
                 self._source.expected_head,
-            )
+            ),
+            stdout_limit_bytes=(self._limits.max_commits + 1) * 65,
         ).stdout
         try:
             commits = tuple(line for line in history.decode("ascii").splitlines() if line)
@@ -120,7 +128,10 @@ class ReadOnlyGitArchive:
         return tuple(result)
 
     def _read_commit(self, commit: str, *, consumed: int) -> tuple[ArchiveBatch, int]:
-        tree = self._git(("ls-tree", "-r", "-z", "--long", "--full-tree", commit)).stdout
+        tree = self._git(
+            ("ls-tree", "-r", "-z", "--long", "--full-tree", commit),
+            stdout_limit_bytes=self._limits.max_tree_bytes,
+        ).stdout
         if not tree.endswith(b"\0"):
             raise ArchiveRecoveryError("Git returned an invalid archive tree")
         records = tree[:-1].split(b"\0") if tree[:-1] else []
@@ -159,7 +170,10 @@ class ReadOnlyGitArchive:
 
         files: dict[str, bytes] = {}
         for path, object_id, size in objects:
-            content = self._git(("cat-file", "blob", object_id)).stdout
+            content = self._git(
+                ("cat-file", "blob", object_id),
+                stdout_limit_bytes=size + 1,
+            ).stdout
             if len(content) != size:
                 raise ArchiveRecoveryError("archive blob size changed while reading")
             files[path] = content
@@ -189,28 +203,40 @@ class ReadOnlyGitArchive:
         except UnicodeDecodeError:
             raise ArchiveRecoveryError("Git returned invalid text") from None
 
-    def _git(self, arguments: tuple[str, ...]) -> ProcessResult:
-        result = self._runner.run(
-            (
-                str(self._source.git_executable),
-                "--no-pager",
-                "--literal-pathspecs",
-                "-C",
-                str(self._source.repository),
-                "-c",
-                "core.hooksPath=/dev/null",
-                *arguments,
-            ),
-            stdin=b"",
-            environment={
-                "LC_ALL": "C",
-                "LANG": "C",
-                "GIT_CONFIG_NOSYSTEM": "1",
-                "GIT_CONFIG_GLOBAL": "/dev/null",
-                "GIT_TERMINAL_PROMPT": "0",
-            },
-            timeout_seconds=self._limits.timeout_seconds,
-        )
+    def _git(
+        self,
+        arguments: tuple[str, ...],
+        *,
+        stdout_limit_bytes: int = 1024 * 1024,
+    ) -> ProcessResult:
+        try:
+            result = self._runner.run(
+                (
+                    str(self._source.git_executable),
+                    "--no-pager",
+                    "--literal-pathspecs",
+                    "-C",
+                    str(self._source.repository),
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    *arguments,
+                ),
+                stdin=b"",
+                environment={
+                    "LC_ALL": "C",
+                    "LANG": "C",
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_CONFIG_GLOBAL": "/dev/null",
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "GIT_NO_REPLACE_OBJECTS": "1",
+                    "GIT_NO_LAZY_FETCH": "1",
+                },
+                timeout_seconds=self._limits.timeout_seconds,
+                stdout_limit_bytes=stdout_limit_bytes,
+                stderr_limit_bytes=256 * 1024,
+            )
+        except GitSigningError:
+            raise ArchiveRecoveryError("read-only Git recovery operation failed") from None
         if result.returncode != 0:
             raise ArchiveRecoveryError("read-only Git recovery operation failed")
         return result

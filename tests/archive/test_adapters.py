@@ -14,6 +14,7 @@ from kivra_memory.archive.adapters import (
     DeterministicArchiveBuilder,
     GitWorktreeArchiveRepository,
     GitWorktreeConfig,
+    _decode_tracked_paths,
 )
 from kivra_memory.archive.git import GitSigningConfig, ProcessResult
 from kivra_memory.archive.models import ArchiveManifest
@@ -77,6 +78,19 @@ def test_builder_is_deterministic_and_binds_manifest_payload() -> None:
     )
 
 
+def test_tracked_path_contract_accepts_valid_listing_larger_than_eight_mib() -> None:
+    document = b"".join(
+        (f"projections/a/{'x' * 90}{sequence:06d}.json\0").encode()
+        for sequence in range(1, 100_001)
+    )
+
+    assert len(document) > 8 * 1024 * 1024
+    tracked = _decode_tracked_paths(document)
+    assert len(tracked) == 100_000
+    assert tracked[0].endswith("000001.json")
+    assert tracked[-1].endswith("100000.json")
+
+
 def _signing(repository: Path) -> GitSigningConfig:
     return GitSigningConfig(
         repository=repository,
@@ -126,7 +140,11 @@ def test_repository_rebuilds_index_from_an_exact_batch_tree(
     repository = cast(Any, object.__new__(GitWorktreeArchiveRepository))
     repository._config = SimpleNamespace(repository=tmp_path)
 
-    def fake_git(arguments: tuple[str, ...]) -> ProcessResult:
+    def fake_git(
+        arguments: tuple[str, ...],
+        **kwargs: object,
+    ) -> ProcessResult:
+        del kwargs
         calls.append(arguments)
         if arguments == ("ls-files", "-z"):
             return ProcessResult(

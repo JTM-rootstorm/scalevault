@@ -41,10 +41,16 @@ class RecordingRunner:
         stdin: bytes,
         environment: dict[str, str],
         timeout_seconds: int,
+        stdout_limit_bytes: int = 8 * 1024 * 1024,
+        stderr_limit_bytes: int = 256 * 1024,
     ) -> ProcessResult:
         assert stdin == b""
         assert environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
+        assert environment["GIT_NO_LAZY_FETCH"] == "1"
         assert timeout_seconds == 60
+        assert stdout_limit_bytes > 0
+        assert stderr_limit_bytes > 0
         self.calls.append(arguments)
         return self.results.pop(0)
 
