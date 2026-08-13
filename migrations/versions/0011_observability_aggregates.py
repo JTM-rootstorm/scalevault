@@ -43,7 +43,11 @@ def _create_function(signature: str, returns: str, body: str) -> None:
 
 
 def _scope() -> str:
-    return "PERFORM pg_catalog.set_config('scalevault.tenant_id', p_tenant_id::text, true); "
+    return (
+        "IF pg_catalog.current_setting('scalevault.tenant_id', true) "
+        "IS DISTINCT FROM p_tenant_id::text THEN "
+        "RAISE EXCEPTION 'tenant scope mismatch' USING ERRCODE = '42501'; END IF; "
+    )
 
 
 def _limit() -> str:

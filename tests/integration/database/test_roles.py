@@ -1769,6 +1769,10 @@ def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
             assert connection.execute(text("SELECT current_user")).scalar_one() == (
                 "kivra_memory_observability"
             )
+            connection.execute(
+                text("SELECT set_config('scalevault.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(TENANT_A)},
+            )
             rows = connection.execute(
                 text(
                     "SELECT metric_name, label_one, label_two, metric_value "
@@ -1785,17 +1789,54 @@ def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
             assert connection.execute(text("SELECT current_user")).scalar_one() == (
                 "kivra_memory_operator_report"
             )
+            connection.execute(
+                text("SELECT set_config('scalevault.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(TENANT_A)},
+            )
             rows = connection.execute(
                 text(
-                    "SELECT job_type, state, count "
+                    "SELECT job_type, state, count, oldest_available_at "
                     "FROM public.scalevault_operator_report_queues(:tenant_id, 500)"
                 ),
                 {"tenant_id": TENANT_A},
             ).all()
-            assert rows == [("check_duplicates", "pending", 1)]
+            assert len(rows) == 1
+            assert rows[0][:3] == ("check_duplicates", "pending", 1)
+            assert rows[0][3] is not None
             with pytest.raises(DBAPIError) as denied, connection.begin_nested():
                 connection.execute(text("SELECT statement FROM public.memories"))
             assert _sqlstate(denied.value) == "42501"
+
+            mismatched_calls = (
+                "scalevault_operator_report_selection(:tenant_id, now(), 500)",
+                "scalevault_operator_report_writes(:tenant_id, now(), 500)",
+                "scalevault_operator_report_conflicts(:tenant_id, 500)",
+                "scalevault_operator_report_memories(:tenant_id, 500)",
+                "scalevault_operator_report_branches(:tenant_id, 500)",
+                "scalevault_operator_report_credentials(:tenant_id, now(), 500)",
+                "scalevault_operator_report_queues(:tenant_id, 500)",
+                "scalevault_operator_report_archive(:tenant_id, 500)",
+                "scalevault_operator_report_consistency(:tenant_id)",
+            )
+            for function_call in mismatched_calls:
+                with pytest.raises(DBAPIError) as mismatch, connection.begin_nested():
+                    connection.execute(
+                        text(f"SELECT * FROM public.{function_call}"),
+                        {"tenant_id": TENANT_B},
+                    )
+                assert _sqlstate(mismatch.value) == "42501"
+
+        with metrics_engine.begin() as connection:
+            connection.execute(
+                text("SELECT set_config('scalevault.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(TENANT_A)},
+            )
+            with pytest.raises(DBAPIError) as mismatch:
+                connection.execute(
+                    text("SELECT * FROM public.scalevault_observability_snapshot(:tenant_id)"),
+                    {"tenant_id": TENANT_B},
+                )
+            assert _sqlstate(mismatch.value) == "42501"
     finally:
         metrics_engine.dispose()
         report_engine.dispose()

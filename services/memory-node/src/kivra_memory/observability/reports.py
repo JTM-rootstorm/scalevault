@@ -116,8 +116,7 @@ REPORT_QUERIES = (
         "queue_status",
         text(
             """
-            SELECT job_type, state, count(*) AS count,
-                   min(available_at) AS oldest_available_at
+            SELECT job_type, state, count, oldest_available_at
               FROM public.scalevault_operator_report_queues(:tenant_id, :limit)
             """
         ),
