@@ -1,6 +1,6 @@
 # Credential lifecycle
 
-This runbook covers every active or deliberately dormant ScaleVault credential.
+This runbook covers every active Milestone 10 ScaleVault credential.
 It never authorizes a live provider change. Provider revocation, service
 activation, and recovery reissue require a separate operator checkpoint.
 The normative lifecycle and revocation semantics are frozen by
@@ -23,8 +23,7 @@ or not applicable.
 | GitHub connected app/install | provider owner; GitHub | provider-managed revocation; no live claim while ingress is dormant | explicitly reauthorize if enabled |
 | GitHub poll token | ingress operator; GitHub plus systemd credential | stop poller, replace least-privilege token, start; bound includes one reviewed in-flight poll | reissue, do not restore from database or archive |
 | GitHub local installation | ingress operator; PostgreSQL | monotonic local revoke; no processing after the selected revocation boundary | review after rollback before any poller activation |
-| Forgejo deploy key | archive operator; Forgejo plus systemd credential | overlap new key, verify intended repository operation, revoke old; old key must then fail | reissue repository-scoped key |
-| Archive signing key | archive trust owner; external trust anchor | follow the accepted signer-transition policy; deploy-key rotation is independent | never recover from the archive it signs |
+| Archive public signer trust | archive trust owner; external trust anchor | verify the accepted signer policy, transitions, and compromise cutoffs when applicable; no private-key operation is authorized by M10 | never recover trust from the archive it verifies |
 | PostgreSQL service password | database operator; PostgreSQL plus per-service systemd credential | replace one role, restart only its consumers, terminate old sessions, verify old login fails | reissue before service activation |
 | Backup recipient | recovery custodian; backup manifest and external custody | new objects use the new recipient; retained objects remain decryptable by their recorded recipient | private identity stays separate from backup objects |
 | Sealed digest binder | key custodian; systemd credential | no ordinary rotation; replacement requires a reviewed migration | restore separately and verify identity |
@@ -111,7 +110,15 @@ then prove no provider-head, quarantine, receipt, or canonical progress occurs
 under the revoked local installation. HTTP `401`/`403` and rate limits must
 enter bounded backoff; response bodies are untrusted and must not be logged.
 
-## Forgejo deploy key, host key, and archive signer
+## Deferred Forgejo credentials (not M10)
+
+Forgejo provider credentials, deploy-key and host-key exercises, provider API
+operations, and exporter activation are excluded from M10. Verify that their
+consumer is disabled and do not provision, rotate, revoke, or test them for M10
+acceptance. The following guidance is retained for future separately authorized
+Forgejo operation; its result cannot close an M10 gate.
+
+### Forgejo deploy key, host key, and archive signer
 
 Deploy-key rotation is independent from signing-key transition:
 
@@ -125,6 +132,11 @@ Deploy-key rotation is independent from signing-key transition:
 4. Rotate a signing key only under the accepted signer-transition policy.
    Verify historical commits under their recorded epoch and reject new commits
    from a compromised old signer. Never silently delete historical trust.
+
+M10 verifies only public signer trust for local signed-history and encrypted-
+bundle recovery. It does not provision, invoke, rotate, or revoke an archive
+signing private key. Live signer work requires separate authorization and is
+required only when the accepted policy declares a transition or compromise.
 
 ## PostgreSQL service passwords
 
@@ -148,7 +160,7 @@ sources; review and reissue them before services are re-enabled.
 
 Recipient transition applies the new recipient only to new encrypted objects.
 Inventory every retained chain by recipient before retiring a private identity;
-never prune the last verified recovery chain. Restore drills use isolated
+M10 has zero authority to prune any recovery chain. Restore drills use isolated
 destinations and separately supplied private identities.
 
 The sealed digest binder and per-memory DEKs are separate. Do not rotate the

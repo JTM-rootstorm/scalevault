@@ -9,17 +9,19 @@
 3. Run repository verification and the required PostgreSQL 17 gate. Validate
    installed candidate units with `systemd-analyze verify`; review
    `systemd-analyze security` as evidence, not a numeric pass/fail oracle.
-4. Create and independently verify a fresh physical recovery chain and archive
-   head before maintenance.
+4. Create and independently verify a fresh physical recovery chain before
+   maintenance. Verify the local signed-history anchor and encrypted bundle
+   when the maintenance window includes that provider-independent recovery
+   gate; Forgejo provider state is not an M10 prerequisite.
 5. Enter the [safe shutdown](shutdown-startup.md) boundary. Install immutable
    artifacts and configuration without modifying credential values.
 6. Run migrations once with the dedicated migration role. For revision
    `0011_observability_aggregates`, prove both wrapper/capability role pairs
    retain no direct table access and only their reviewed fixed-shape functions.
    Never let runtime services own or opportunistically apply schema changes.
-7. Start in dependency order. Verify readiness, queue progress, archive
-   continuity, alerts, log canaries, and both access paths before closing the
-   window.
+7. Start in dependency order. Leave the archive exporter disabled for M10.
+   Verify readiness, queue progress, alerts, log canaries, and both access paths
+   before closing the window.
 
 ## Rollback decision
 
@@ -36,4 +38,5 @@ If database PITR is required, leave the canonical installation disabled and
 follow [PostgreSQL PITR](postgresql-pitr.md) into an isolated destination.
 Review every credential and destruction action newer than the target before
 any recovered service starts. Never overlay the production cluster or point an
-older exporter at newer Forgejo history.
+archive exporter at any recovered history. Forgejo reactivation is future,
+separately authorized work.

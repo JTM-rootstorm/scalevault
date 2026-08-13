@@ -1,9 +1,11 @@
 {
-  "record_version": 1,
+  "record_version": 2,
   "reviewed_at_utc": "PENDING",
   "status": "pending",
-  "source_release": "PENDING",
-  "source_archive_sha256": "PENDING",
+  "frozen_release": "PENDING",
+  "frozen_release_archive_sha256": "PENDING",
+  "evidence_revision": "PENDING",
+  "evidence_revision_scope": "pending",
   "migration_revision": "PENDING",
   "installation_class": "canonical",
   "service_units": {
@@ -21,37 +23,137 @@
   "postgresql_recovery": {
     "backup_object_id": "PENDING",
     "manifest_sha256": "PENDING",
+    "ciphertext_sha256": "PENDING",
     "wal_continuity_result": "pending",
-    "pitr_result": "pending"
+    "recovery_window_result": "pending",
+    "routine_node_private_identity_absence_result": "pending",
+    "pitr_result": "pending",
+    "rpo_seconds": "PENDING",
+    "rto_seconds": "PENDING",
+    "cleanup_result": "pending"
+  },
+  "no_prune_retention": {
+    "expected_result": "no_prune_dependency_watermark_absent",
+    "actual_result": "pending",
+    "deletion_attempt_count": "PENDING",
+    "restore_points_and_holds_unchanged_result": "pending",
+    "capacity_result": "pending",
+    "inventory_class_results": [
+      {
+        "class_name": "PENDING_ONE_ENTRY_PER_REQUIRED_CLASS",
+        "before_count": "PENDING",
+        "before_inventory_digest": "PENDING",
+        "after_count": "PENDING",
+        "after_inventory_digest": "PENDING",
+        "equality_result": "pending"
+      }
+    ]
   },
   "archive_recovery": {
     "source_head": "PENDING",
     "manifest_sha256": "PENDING",
     "high_water_sequence": "PENDING",
+    "signer_policy_digest": "PENDING",
+    "local_signed_history_result": "pending",
     "signer_transition_result": "pending",
     "compromise_cutoff_result": "not-applicable",
-    "primary_forgejo_result": "pending",
-    "secondary_ciphertext_sha256": "PENDING",
-    "secondary_bundle_result": "pending",
-    "local_new_target_result": "pending",
-    "remote_promotion_result": "pending",
-    "normal_exporter_append_result": "pending"
+    "forgejo_provider_recovery_result": "excluded-not-evaluated",
+    "archive_continuation_result": "excluded-not-evaluated",
+    "remote_promotion_result": "excluded-not-evaluated",
+    "normal_exporter_append_result": "excluded-not-evaluated",
+    "bundle_ciphertext_sha256": "PENDING",
+    "bundle_materialization_result": "pending",
+    "bundle_clean_database_restore_result": "pending",
+    "bundle_same_anchor_result": "pending",
+    "bundle_negative_cases_result": "pending",
+    "bundle_cleanup_result": "pending",
+    "bundle_overall_result": "pending"
   },
+  "credential_class_results": [
+    {
+      "class_name": "PENDING_ONE_ENTRY_PER_ACTIVE_CLASS",
+      "lifecycle_kind": "PENDING_ROTATABLE_OR_CUSTODY_RECOVERY",
+      "consumer_units_result": "pending",
+      "issued_at_utc": "PENDING",
+      "replaced_at_utc": "PENDING",
+      "revoked_at_utc": "PENDING",
+      "intended_operation_result": "pending",
+      "old_credential_next_use_result": "pending",
+      "old_session_termination_result": "pending",
+      "provider_revocation_result": "pending",
+      "rollback_posture": "pending",
+      "canary_result": "pending",
+      "cleanup_result": "pending"
+    }
+  ],
   "security": {
-    "credential_lifecycle_result": "pending",
-    "npm_external_exposure_result": "pending",
-    "leakage_canary_result": "pending",
-    "destruction_dominance_result": "pending"
+    "destruction_dominance_result": "pending",
+    "destruction_scope": "postgresql-local-key-provider-ledger-installed-pitr",
+    "archive_and_bundle_erasure_claim": "excluded-not-evaluated"
   },
-  "operations": {
+  "monitoring": {
     "observability_migration_result": "pending",
     "least_privilege_database_roles_result": "pending",
     "loopback_metrics_exporter_result": "pending",
-    "alerts_result": "pending",
-    "retention_result": "no_prune_dependency_watermark_absent",
-    "retention_activation_result": "blocked",
+    "scrape_result": "pending",
+    "rule_health_result": "pending",
+    "evaluation_error_count": "PENDING",
+    "missing_series_result": "pending",
+    "scrape_down_result": "pending",
     "operator_report_result": "pending",
+    "operator_report_stdout_absence_result": "pending",
+    "external_notification_delivery_result": "non-blocking-not-evaluated",
+    "fault_family_results": [
+      {
+        "family_name": "PENDING_ONE_ENTRY_PER_APPLICABLE_FAMILY",
+        "pending_result": "pending",
+        "firing_result": "pending",
+        "recovery_result": "pending"
+      }
+    ]
+  },
+  "retention_cap_results": [
+    {
+      "class_name": "PENDING_ONE_ENTRY_PER_REQUIRED_CLASS",
+      "age_limit_days": "PENDING",
+      "byte_cap": "PENDING",
+      "age_limit_result": "pending",
+      "byte_cap_result": "pending"
+    }
+  ],
+  "scanners": {
+    "offline_artifact": {
+      "ok": "pending",
+      "artifact_sha256": "PENDING",
+      "counts": "PENDING"
+    },
+    "offline_negative_cases_result": "pending",
+    "cross_process_canary_result": "pending",
+    "cross_process_zero_match_count": "PENDING",
     "cleanup_result": "pending"
   },
+  "npm_exposure": {
+    "identity_result": "pending",
+    "static_check_result": "pending",
+    "server_location_real_ip_proxy_method_listener_counts": "PENDING",
+    "unapproved_baseline_result": "pending",
+    "forwarded_spoof_result": "pending",
+    "x_forwarded_for_spoof_result": "pending",
+    "x_real_ip_spoof_result": "pending",
+    "rejected_probe_backend_contact_count": "PENDING",
+    "approved_exact_mcp_result": "pending",
+    "invalid_request_matrix_result": "pending",
+    "direct_public_backend_absence_result": "pending",
+    "canary_scan_result": "pending",
+    "cleanup_result": "pending"
+  },
+  "cleanup": {
+    "inventory_result": "pending",
+    "cleanup_result": "pending",
+    "second_check_result": "pending",
+    "production_state_result": "pending",
+    "synthetic_canary_residue_count": "PENDING"
+  },
+  "backblaze_provider_evidence_result": "non-blocking-not-evaluated",
   "remaining_risk_references": []
 }

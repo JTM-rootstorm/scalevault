@@ -5,8 +5,9 @@ state. ChatGPT Web reaches the query-only route through outbound Secure MCP
 Tunnel, while owner-controlled Codex devices use distinct direct-private
 identities after joining the private network through the operator's VPN.
 GitHub ingress may carry explicitly approved proposals but is not an alternate
-memory store. Forgejo is a deterministic recovery archive written by one
-logical exporter.
+memory store. Local signed-archive verification and encrypted-bundle recovery
+provide provider-independent semantic recovery. Forgejo remains a supported
+future archive provider, but its operation is excluded from Milestone 10.
 
 Shared contracts are versioned and reviewed centrally. All write transports
 must converge on the same policy and concurrency-safe domain command layer.
@@ -49,12 +50,14 @@ and continuous WAL form one verified recovery chain; encryption identity is
 kept outside the objects it protects. A recovery never overlays the active
 cluster.
 
-The signed private Forgejo archive is an independent semantic recovery source,
-not a second canonical database. The exporter is its only logical writer. A
-read-only recovery identity may fetch and verify it, while an encrypted
-full-history bundle in a separate failure domain supplies the secondary archive
-copy. Neither archive path contains runtime credentials, sealed-content keys,
-embeddings, worker leases, exporter checkpoints, or deployment configuration.
+The signed local archive is an independent semantic recovery source, not a
+second canonical database. A verified encrypted full-history bundle supplies a
+second provider-independent archive copy. Neither archive path contains runtime
+credentials, sealed-content keys, embeddings, worker leases, exporter
+checkpoints, or deployment configuration. Milestone 10 verifies exact local
+signed history and restores the encrypted bundle into a clean disposable
+database; it makes no archive-cadence, remote-equality, or remote-provider
+claim.
 
 Archive trust is held outside Git. Recovery pins the exact target, branch,
 head, final manifest digest, event high-water mark, compatible release and
@@ -64,13 +67,21 @@ compromised epoch remains usable only through an independently anchored exact
 last-accepted commit and event sequence; later commits from that signer are
 rejected. Recovery never learns a new signer from archive content.
 
-Archive-only continuation creates a new immutable target. The recovery command
-copies and reverifies the exact anchored object history and reconstructs one
-disabled target with one committed, not-pushed checkpoint in the disposable
-recovered database. It does not sign, append, push, promote a remote, activate
-the exporter, or re-anchor the existing target. Verified remote promotion,
-normal exporter activation, and the first new first-parent append are separate
-gates.
+Forgejo fetch/restore, remote target promotion, archive checkpoint
+reconstruction, continuation, and exporter reactivation are future operational
+work rather than Milestone 10 gates. The historical Forgejo runbook is retained
+for that separately authorized work. No local test appender or direct
+`update-ref` operation is accepted as production continuation evidence, and
+existing-target re-anchoring remains unsupported.
+
+This M10 scope is frozen by
+[ADR 0034](adr/0034-local-signed-archive-m10-acceptance.md). Recovery retention
+is validation-only under
+[ADR 0035](adr/0035-no-prune-recovery-retention.md): every base, WAL/history
+object, restore point, and hold is retained. The eight-daily/five-weekly values
+are accumulation and inventory floors, not deletion authority. Capacity
+pressure stops backup production; it does not authorize pruning. PBS protection
+and Backblaze upload remain operator-managed outside ScaleVault's M10 gates.
 
 ## Observability plane
 

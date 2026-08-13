@@ -1,8 +1,10 @@
 # Installed-system verification
 
-Repository tests do not prove the installed LXC, NPM, PostgreSQL, Forgejo,
-offsite copy, or provider state. Run this checklist after installation,
-upgrade, recovery, and at final M10 acceptance.
+Repository tests do not prove the installed LXC, NPM, PostgreSQL recovery
+store, or active provider state. Run this checklist after installation,
+upgrade, recovery, and at final M10 acceptance. Forgejo provider state and
+Backblaze/PBS evidence are outside the M10 gate and must not be inferred from
+this checklist.
 
 ## Read-only inventory
 
@@ -43,7 +45,10 @@ Verify `kivra-memory-metrics-exporter.service` runs as
 UUIDv7 tenant credentials, binds exactly `127.0.0.1:9098`, refreshes every 30
 seconds with a 10-second query timeout, and clears DB-derived samples while
 setting `kivra_memory_database_collector_up=0` on failure. Prometheus must use
-the `scalevault-database-metrics` job.
+the `scalevault-database-metrics` job. Verify the distinct
+`scalevault-postgresql` job scrapes its loopback exporter at exactly
+`127.0.0.1:9187`; this supplies the PostgreSQL-up series and must not expose
+payload or replace the bounded ScaleVault collector.
 
 Generate a report through a fresh
 `kivra-memory-operator-report@<report-id>.service` instance. Verify it accepts
@@ -52,7 +57,7 @@ new mode-`0600` file below `/var/lib/kivra-memory/operator-reports`, and emits
 no report contents to stdout or the journal.
 
 Verify PostgreSQL 17 durability/WAL settings and recovery-chain freshness,
-Forgejo pinned host key and external head anchor, alert rule evaluation,
+the exact local signed-history external head anchor, alert rule evaluation,
 fixed-label Prometheus output, root-only report access,
 and content-free journal/NPM/metric/artifact canary scans. Confirm
 `/var/lib/kivra-memory-sealed/destruction-ledger` is root-owned, group
@@ -66,21 +71,43 @@ recovery/acceptance reports may not exceed 400 days. Both need explicit
 operator-chosen byte caps. Missing caps leave installed retention pending.
 External alert delivery is not required for M10.
 
-Apply the complete [NPM drift gate](npm-drift.md), provider revocation gates
-when provisioned, and separate [PITR](postgresql-pitr.md),
-[Forgejo](forgejo-recovery.md), and, when operator-scheduled,
-[secondary-bundle](secondary-bundle-recovery.md) drills. Backblaze is the
-operator-managed offsite destination and its provider drill is not an M10
-blocker. Record each category
-as `pass`, `fail`, `pending`, or `not-applicable`; absence of evidence is
-`pending`, never `pass`, for required categories. Record the Backblaze provider
-category as `not-applicable` to the M10 decision unless the operator separately
-supplies evidence.
+Apply the complete [NPM drift gate](npm-drift.md), active-provider revocation
+gates when provisioned, the installed [PITR](postgresql-pitr.md) drill, local
+signed-history restoration, and the
+[secondary-bundle](secondary-bundle-recovery.md) clean database restore bound
+to the exact same head, manifest, high-water mark, signer policy, and object
+bytes. Record required categories as `pass`, `fail`, or `pending`; absence of
+evidence is `pending`, never `pass`.
+
+Record Forgejo provider restore, remote promotion, archive continuation, and
+exporter append as `excluded / not evaluated`. Record Backblaze/PBS provider
+evidence and external alert delivery as `non-blocking / not evaluated` unless
+the operator separately supplies evidence. None may be reported as passed from
+local source or test evidence.
+
+The NPM static checker must return its exact content-free JSON success object
+with bounded configuration counts. Prose output, a partial generated
+configuration, or a zero process status without the expected result object is
+not acceptance evidence.
 
 For every candidate public artifact, run `kivra-memory-scan-public-artifact`
 with independently supplied synthetic canaries. Preserve only `ok`, the
 artifact digest, and fixed counts. A pass proves this bounded offline scan; it
 does not authorize or accept a public export or publication workflow.
+
+For the cross-process gate, capture only the exact approved operational outputs
+as root-owned regular mode-`0400` or mode-`0600` files. List their absolute
+paths, one per line, in a root-owned mode-`0600` file and run:
+
+```bash
+kivra-memory-scan-operational-canaries \
+  --artifact-list /absolute/root-owned-mode-0600-list \
+  --canary-file /absolute/root-owned-mode-0600-canaries
+```
+
+Accept only exit zero with `ok=true`, `result=clean`, and fixed
+`bytes_scanned`, `inputs_scanned`, and `matches=0` counts. `match` and
+`incomplete` fail closed. Preserve no path or matching content in evidence.
 
 Use the [evidence template](evidence-template.md). Do not attach raw unit files,
 environment, generated NPM configuration, Prometheus dumps, journal exports, or

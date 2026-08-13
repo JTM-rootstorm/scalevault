@@ -1,4 +1,11 @@
-# Primary Forgejo recovery
+# Future Forgejo recovery (not an M10 procedure)
+
+Forgejo provider restore, clone/fetch, credentials, host-key exercise, target
+promotion, archive checkpoint reconstruction, continuation, and exporter
+reactivation are excluded from Milestone 10 and remain unverified. Do not run
+this procedure or use source/tests as evidence for any of those claims during
+M10 closeout. This runbook is retained only as future guidance and requires a
+separate operator authorization and acceptance plan.
 
 Use this path only when the signed archive is selected as the semantic recovery
 source. It does not restore credentials, keys, embeddings, worker leases,
@@ -45,7 +52,8 @@ exporter checkpoints, or deployment configuration.
    deployment configuration were not synthesized. Reissue independently before
    any later activation. Preserve and apply the current independent destruction
    ledger before restoring or reconciling a permitted key backup.
-9. Archive recovery never re-anchors an existing target. Pre-create an empty
+9. Future archive continuation never re-anchors an existing target. A future
+   authorized drill may pre-create an empty
    local bare target with no refs, objects, or alternates, then run:
 
    ```bash

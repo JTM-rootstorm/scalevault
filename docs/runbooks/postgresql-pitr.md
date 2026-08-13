@@ -3,23 +3,25 @@
 This procedure restores PostgreSQL 17 into `/mnt/memory-recovery`. It never
 overlays `/mnt/memory` or an active production cluster.
 
-Run an isolated PITR drill at least monthly and a full physical/Forgejo/bundle/
-credential/destruction exercise at least quarterly. Measure the 15-minute RPO
-and four-hour RTO objectives; do not infer them from backup completion.
+Run an isolated PITR drill at least monthly and the full physical,
+credential/destruction, and local signed-history/bundle exercise at least
+quarterly. Measure the 15-minute RPO and four-hour RTO objectives; do not infer
+them from backup completion. Forgejo provider recovery and archive continuation
+are not part of this exercise.
 
 ## Prepare
 
 1. Select a verified base-backup object and a target name, time, or LSN within
    its complete WAL chain. Record safe identifiers and digests only.
-2. Keep API, ingress, tunnel, workers, pollers, and exporter disabled on the
-   recovery node. Prove the destination is disposable, empty, on the exact
-   recovery mount, and cannot bind production listeners.
+2. Keep API, ingress, tunnel, workers, pollers, and all archive exporters
+   disabled on the recovery node. Prove the destination is disposable, empty,
+   on the exact recovery mount, and cannot bind production listeners.
 3. Supply `/etc/kivra-memory/backup-age-identity` through the restricted
    recovery process. It must not have been stored with the backup or present on
    a routine backup node.
 4. Confirm PostgreSQL 17 binaries, extensions, accepted release, migration
-   compatibility, storage capacity, external archive anchor, credential
-   inventory, and the current independent destruction ledger at
+   compatibility, storage capacity, credential inventory, and the current
+   independent destruction ledger at
    `/var/lib/kivra-memory-sealed/destruction-ledger`.
 
 Stop on a missing segment, unverifiable manifest, destination symlink or
@@ -44,8 +46,9 @@ instance. Never start a ScaleVault application service during replay.
 
 Confirm recovery reached the selected target and timeline, then verify system
 identifier, exact migration head, extensions, event/global sequence and hash
-chains, projection high-water marks, aggregate counts/digests, archive prefix
-relationship, and synthetic canary result codes. Rebuild projections and
+chains, projection high-water marks, aggregate counts/digests, content-free
+database recovery anchors, and synthetic canary result codes. This check does
+not require a live or current archive-exporter head. Rebuild projections and
 requeue/rebuild embeddings through supported commands in the isolated system.
 
 Compare all post-target credential revocations/rotations and key-destruction

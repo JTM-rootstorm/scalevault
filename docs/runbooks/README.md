@@ -16,7 +16,8 @@ or output into repository files.
 3. Declare the stop condition, rollback point, write-disable boundary, and
    cleanup target.
 4. Preserve an unexpected state before remediation. Do not rewrite archives,
-   prune backups, or restart competing writers to hide divergence.
+   delete any recovery object under the M10 no-prune posture, or restart
+   competing writers to hide divergence.
 5. Record evidence according to the [content-free template](evidence-template.md).
 
 ## Index
@@ -28,11 +29,11 @@ or output into repository files.
 | Planned stop or dependency-safe start | [Shutdown and startup](shutdown-startup.md) |
 | Release deployment or source/database rollback | [Upgrade and rollback](upgrade-rollback.md) |
 | Queue depth, age, lease, or worker failure | [Queue diagnosis](queue-diagnosis.md) |
-| Archive head, signature, signer, host key, or remote divergence | [Archive divergence](archive-divergence.md) |
+| Future Forgejo archive/remote divergence (excluded from M10) | [Archive divergence](archive-divergence.md) |
 | Alert, outage, suspected compromise, or privacy event | [Incident and alert response](incident-alerts.md) |
 | PostgreSQL point-in-time recovery | [PostgreSQL PITR](postgresql-pitr.md) |
-| Recovery from the primary Forgejo archive | [Forgejo recovery](forgejo-recovery.md) |
-| Recovery from the encrypted secondary Git bundle | [Secondary-bundle recovery](secondary-bundle-recovery.md) |
+| M10 recovery from the encrypted local Git bundle | [Secondary-bundle recovery](secondary-bundle-recovery.md) |
+| Future Forgejo provider recovery (excluded from M10) | [Forgejo recovery](forgejo-recovery.md) |
 | NPM edit/upgrade or external-exposure alarm | [NPM drift](npm-drift.md) |
 | Recovery-drill teardown and evidence review | [Drill cleanup](drill-cleanup.md) |
 | Installed service, timer, listener, and artifact audit | [Installed-system verification](installed-verification.md) |
@@ -42,6 +43,8 @@ or output into repository files.
 
 Stop, keep writers/listeners disabled where applicable, and preserve
 content-free evidence if identity or installation binding is unknown; a
-recovery target is active; backup/WAL continuity is incomplete; an archive
-anchor, signature, host key, or signer is unexpected; a destruction tombstone
+recovery target is active; backup/WAL continuity is incomplete; a local signed-
+history anchor, signature, or signer is unexpected; a destruction tombstone
 would be rolled back; or any diagnostic contains payload or credential data.
+Forgejo host-key and remote checks apply only to the future Forgejo runbooks,
+not M10 closeout.

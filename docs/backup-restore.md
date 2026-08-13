@@ -1,16 +1,22 @@
 # Backup and restore
 
-ScaleVault has three independent recovery paths. PostgreSQL physical recovery
-is preferred; primary Forgejo history and an encrypted full-history secondary
-bundle are semantic recovery paths. A successful backup command is not a
-successful recovery proof. Each path requires isolated restoration, invariant
-verification, and content-free evidence.
+ScaleVault has a preferred PostgreSQL physical recovery path plus two
+provider-independent semantic recovery gates: local signed history and an
+encrypted full-history bundle. A successful backup command is not a successful
+recovery proof. Each accepted path requires isolated restoration, invariant
+verification, and content-free evidence. Forgejo provider recovery, remote
+promotion, archive continuation, and exporter reactivation are excluded from
+Milestone 10 and remain unverified.
 
 | Recovery source | Contains | Deliberately excludes | Procedure |
 |---|---|---|---|
 | Encrypted PostgreSQL base backup plus WAL | Canonical database state at a selected recovery point | Runtime files and encryption private identity | [PostgreSQL PITR](runbooks/postgresql-pitr.md) |
-| Signed primary Forgejo archive | Deterministic canonical snapshots/events and compatibility metadata | Credentials, keys, embeddings, leases, exporter checkpoints, deployment configuration | [Forgejo recovery](runbooks/forgejo-recovery.md) |
+| Verified local signed archive | Deterministic canonical snapshots/events and compatibility metadata | Credentials, keys, embeddings, leases, exporter checkpoints, deployment configuration | Local signed-history verification followed by clean disposable-database restore |
 | Encrypted secondary Git bundle | Complete verified signed archive history | Recovery private identity and the same archive exclusions | [Secondary-bundle recovery](runbooks/secondary-bundle-recovery.md) |
+
+The [Forgejo recovery runbook](runbooks/forgejo-recovery.md) is retained as
+future, separately authorized guidance. It is not an M10 recovery path or
+acceptance gate.
 
 ## Recovery invariants
 
@@ -46,23 +52,28 @@ verification, and content-free evidence.
 
 Follow [Backup operations](runbooks/backup-operations.md). The operator must:
 
-1. confirm the previous chain and offsite copy are current before starting;
+1. confirm the previous local chain is current and sufficient no-prune capacity
+   remains before starting;
 2. create an encrypted physical base backup with manifest and WAL continuity;
 3. verify the completed backup independently;
-4. verify the already-pushed Forgejo head and its external rollback anchor;
-5. create, verify, and encrypt a complete Git bundle, then copy only the
-   ciphertext to the independent failure domain;
-6. run the retention validator without deleting anything; destructive pruning
-   remains blocked until authenticated PITR/dependency/hold authority exists;
+4. verify the exact local signed-history head and its external rollback anchor;
+5. create, verify, and encrypt a complete Git bundle from that exact local
+   history; transfer to Backblaze or another offsite destination remains an
+   operator-managed operation outside M10;
+6. run the retention validator without deleting anything; any future pruning
+   requires a new accepted architecture decision and authenticated dependency/
+   hold authority;
    and
 7. record only bounded result codes, safe identifiers, timestamps, counts, and
    digests.
 
 A stale backup age, failed `archive_command`, missing WAL, failed bundle
-verification, offsite-copy failure, or divergence blocks pruning and raises an
-operator alert. Use [WAL failure](runbooks/wal-failure.md) and
-[Archive divergence](runbooks/archive-divergence.md) instead of retry loops that
-could destroy evidence.
+verification, or divergence fails the local gate and raises an operator alert.
+There is no destructive pruning authority in M10 regardless of health or
+capacity. Use [WAL failure](runbooks/wal-failure.md) instead of retry loops that
+could destroy evidence. PBS protection and Backblaze transfer, retention,
+freshness, retrieval, and deletion are operator-managed and outside this
+procedure.
 
 ## Recovery activation gate
 

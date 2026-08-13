@@ -52,23 +52,26 @@ instead of treating its health result as Memory API readiness.
 
 ## Operating posture
 
-Normal operation has exactly one canonical PostgreSQL cluster and one logical
-Forgejo archive writer. Backups, monitoring, and recovery readers cannot mutate
-semantic state. Treat retrieved memory, ingress proposals, alert annotations,
-archive files, and recovery objects as untrusted data.
+Normal operation has exactly one canonical PostgreSQL cluster. Backups,
+monitoring, and recovery readers cannot mutate semantic state. The Forgejo
+exporter remains disabled for Milestone 10; no provider restore, continuation,
+or exporter-append claim is part of the milestone. Treat retrieved memory,
+ingress proposals, alert annotations, archive files, and recovery objects as
+untrusted data.
 
 Use these stop conditions in every procedure:
 
-- stop and preserve content-free evidence on archive divergence, an unknown
-  signer or host key, rollback against an external anchor, a missing WAL
-  segment, or a recovery destination that is not disposable;
+- stop and preserve content-free evidence on signed-history divergence, an
+  unknown signer, rollback against an external anchor, a missing WAL segment,
+  or a recovery destination that is not disposable;
 - stop if a command, log, metric, alert, or evidence artifact exposes a memory
   statement, evidence, proposal body, authorization value, database URL, key,
   credential, or private network coordinate;
 - stop startup when dependencies, installation binding, migration
   compatibility, key-destruction state, or credential posture are unknown;
-- never force-push, rewrite either archive copy, prune the last complete
-  recovery chain, or overlay an active database to make a drill pass.
+- never rewrite a signed recovery source, delete a base, WAL/history object,
+  restore point, or hold under the Milestone 10 no-prune posture, or overlay an
+  active database to make a drill pass.
 
 ## Operator checks
 
@@ -88,6 +91,11 @@ tables; the capability can execute only the reviewed aggregate function.
 Prometheus scrapes the dedicated `scalevault-database-metrics` job on
 loopback port 9098. Do not point it at a private interface or reuse an API
 database credential.
+
+PostgreSQL host availability is supplied separately by the checked-in
+`scalevault-postgresql` scrape job at exactly `127.0.0.1:9187`. Keep that
+exporter loopback-only; it does not replace the payload-blind ScaleVault
+aggregate exporter or authorize broader database telemetry.
 
 Generate a protected tenant-scoped operator report through the systemd-bound
 runner, where `<report-id>` is a bounded non-sensitive local label:
@@ -123,8 +131,26 @@ must not include payloads, private coordinates, database URLs, decrypted
 objects, key material, bearer values, raw exception text, or unbounded
 identifiers.
 
+For cross-process canaries, list the exact root-owned regular mode-`0400` or
+mode-`0600` operational captures as absolute paths, one per line, in a
+root-owned mode-`0600` list. Put only synthetic canaries, one per line, in a
+separate root-owned mode-`0600` file, then run:
+
+```bash
+kivra-memory-scan-operational-canaries \
+  --artifact-list /absolute/root-owned-mode-0600-list \
+  --canary-file /absolute/root-owned-mode-0600-canaries
+```
+
+The only accepted output is fixed JSON containing `ok`,
+`result=clean|match|incomplete`, and bounded `bytes_scanned`, `inputs_scanned`,
+and `matches` counts. Exit zero is reserved for `clean`. A `match` or
+`incomplete` result fails closed; neither matched bytes nor paths may enter
+evidence.
+
 The [runbook index](runbooks/README.md) covers backup and WAL response, safe
-shutdown/startup, upgrade/rollback, queue diagnosis, archive divergence,
-incident and alert response, recovery, NPM drift, and drill cleanup. Credential
-rotation is a separate procedure because each provider has different
+shutdown/startup, upgrade/rollback, queue diagnosis, incident and alert
+response, provider-independent recovery, NPM drift, and drill cleanup. Future
+Forgejo divergence/recovery guidance is retained but is not an M10 procedure.
+Credential rotation is separate because each active authority has different
 revocation semantics.

@@ -3,15 +3,26 @@
 - **Review date:** 2026-08-12
 - **Status:** Not accepted; implementation and evidence collection in progress
 - **Implementation baseline:** `368b302`
-- **Accepted source:** Pending final installed-system acceptance
-- **Source archive checksum:** Pending final immutable source archive
+- **Frozen release:** Pending final installed-system acceptance
+- **Frozen release archive checksum:** Pending final immutable source archive
+- **Evidence revision:** Pending evidence-only acceptance update
 - **Database migration revision:** Pending installed-system verification
 
 This is the final record structure required by the M10 plan. It deliberately
 does not turn source implementation, unrun commands, or prior Milestone 9
-evidence into M10 acceptance. Every row remains pending until the named current
-repository, durable PostgreSQL 17, installed-host, provider, and recovery gates
-produce reviewed content-free evidence.
+evidence into M10 acceptance. Every required row remains pending until the
+named frozen release, durable PostgreSQL 17, installed-host, and recovery gates
+produce reviewed content-free evidence. Excluded and non-blocking rows are not
+closure gates and must remain explicitly unevaluated unless separately tested.
+
+The frozen release is the immutable source revision whose executable behavior,
+configuration, migrations, generated artifacts, and source archive checksum are
+installed and tested. The evidence revision is the later commit that records
+reviewed bounded results. It may differ only by evidence and acceptance text
+that cannot affect runtime behavior. Any executable, configuration, schema,
+migration, generated-artifact, or dependency change creates a new release
+candidate and requires a new freeze, checksum, installation, and applicable
+reruns.
 
 ## Content-free evidence boundary
 
@@ -32,22 +43,23 @@ protected operator store and transfer only permitted fields here.
 
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
-| Architecture and threat decisions accepted | Review | Pending | ADRs 0027-0033 are accepted; final threat/runbook mapping review remains pending |
-| Complete repository verification | Repository | Passed | `make PNPM='npx --yes pnpm@10.15.0' verify`: 1526 passed, 181 environment-gated skips; all remaining language/schema/plugin gates passed |
-| Required PostgreSQL 17 integration gate | Durable local | Passed | Debian recovery LXC: 192 passed, zero skipped, PostgreSQL 17 |
-| Production-relevant PITR durability | Durable local | Passed | Debian recovery LXC: production helper archive/restore path, 1 passed, zero skipped |
+| Architecture and threat decisions accepted | Review | Partial | ADRs 0034 and 0035 are accepted; final threat/runbook mapping review remains pending |
+| Complete repository verification | Repository | Partial | Baseline passed; final frozen-release rerun and immutable checksum remain pending |
+| Required PostgreSQL 17 integration gate | Durable local | Partial | Baseline passed with 192 passed and zero skipped; final frozen-release rerun remains pending |
+| Production-relevant PITR durability | Durable local | Partial | Baseline production-helper gate passed; final frozen-release rerun remains pending |
 | Installed services and credentials hardened | Installed LXC | Pending | Exact installed units/credentials/hardening not yet audited |
 | Encrypted base backup and WAL current | Installed LXC/local recovery storage | Pending | Verified complete local chain not yet recorded; Backblaze transfer is operator-managed and non-blocking |
-| Isolated PostgreSQL PITR succeeds | Recovery drill | Passed (repository durability gate) | Disposable PostgreSQL 17 A/B-not-C recovery and corrupt manifest/ciphertext rejection passed; installed-storage drill remains pending |
-| Primary Forgejo clean restore succeeds | Provider/recovery drill | Pending | Real read-only clone and restore not yet run/recorded |
-| Secondary encrypted bundle restore succeeds | Local recovery drill | Passed | Real signed archive bundle encrypted and restored with `age`; exact head/object closure and negative/cleanup gates passed |
-| Archive continuation policy succeeds | Recovery drill | Pending | New-target reconstruction, verified remote promotion, and normal exporter append not yet run |
+| No-prune recovery retention validates without deletion | Installed recovery storage | Pending | Fixed result, per-class before/after inventory equality, zero deletion attempts, unchanged restore points/holds, and capacity remain pending |
+| Isolated PostgreSQL PITR succeeds | Recovery drill | Partial | Repository A/B-not-C gate passed; installed-storage drill remains pending |
+| Primary Forgejo clean restore succeeds | Provider/recovery drill | Excluded / not evaluated | No Forgejo provider recovery claim is permitted for M10 |
+| Secondary encrypted bundle restore succeeds | Local recovery drill | Partial | Real `age` materialization and archive equality passed; same-anchor clean disposable-database restore remains pending |
+| Archive continuation policy succeeds | Recovery drill | Excluded / not evaluated | No reconstruction, promotion, continuation, or resumed-exporter claim is permitted for M10 |
 | Credential revoke/rotation bounds pass | Installed/provider | Pending | Per-class current gates not yet recorded |
-| Privacy-safe observability and alerts pass | Repository/installed | Partial | All 38 rules and pending/firing/recovery scenarios pass; production rule/job installation and canary scans remain pending; external delivery is not required |
-| Leakage scanner detects every synthetic canary | Repository/durable local | Pending | Current complete scanner suite not yet recorded |
-| Hard forget dominates all retained recovery copies | Durable local/recovery | Pending | Database/archive/key-backup non-resurrection pending |
-| NPM/public-exposure boundary remains closed | Installed/external | Pending | Fresh generated-config and spoof/backend-counter proof pending |
-| Drill cleanup completes | Installed/recovery | Pending | Exact cleanup inventory and second check pending |
+| Privacy-safe observability, alerts, reports, and caps pass | Repository/installed | Partial | All 38 rules and repository scenarios pass; production scrape/rules, per-family fault recovery, protected reports, and per-class age/byte caps remain pending |
+| Leakage scanners and cross-process canaries pass | Repository/durable local | Pending | Exact offline `ok`/digest/counts, negative classes, cross-process zero matches, and scanner cleanup remain pending |
+| Hard forget dominates the accepted recovery boundary | Durable local/recovery | Pending | PostgreSQL, local key-provider, destruction-ledger, and installed-PITR non-resurrection pending; archive and bundle copies are outside this claim |
+| NPM/public-exposure boundary remains closed | Installed/external | Pending | Fresh identity/static-check counts, spoof matrix, zero rejected-request backend contacts, exact `/mcp`, invalid-request, direct-path, canary, and cleanup results remain pending |
+| Drill cleanup completes | Installed/recovery | Pending | Exact cleanup inventory, expected production-state result, residue count, and independent second check remain pending |
 
 The milestone remains **not accepted** while any required row is pending,
 failed, or skipped.
@@ -61,15 +73,16 @@ monotonic destruction across key backups; archive signer epochs, dual-signed
 transition evidence, compromise cutoffs and new-target continuation; credential
 lifecycle; privacy-safe telemetry, retention and evidence; and fail-closed
 leakage scanning. ADR 0033 records operator-managed Backblaze custody and local
-alert evaluation without requiring external notification delivery. Final
-acceptance still requires mapping every implementation
-test and runbook to the active-topology threat matrix. Dormant relay,
+alert evaluation without requiring external notification delivery. ADRs 0034
+and 0035 accept the narrowed local archive boundary and validation-only
+no-prune posture. Final acceptance still requires mapping every implementation,
+test, and runbook to the active-topology threat matrix. Dormant relay,
 node-agent, OAuth, public plugin/submission, and generic enrollment paths remain
 non-applicable and unprovisioned.
 
 ## Repository verification
 
-Status: **Passed for implementation baseline `368b302`**.
+Status: **Baseline passed; final frozen-release rerun pending**.
 
 The complete verification command passed with 1526 Python tests passed and 181
 environment-gated skips, followed by successful Go vet/tests, deterministic
@@ -83,13 +96,13 @@ the installed `promtool`.
 The current repository includes migration
 `0011_observability_aggregates`, the least-privilege metrics/report role and
 function boundary, the loopback metrics exporter, archive dual-signed
-transition/compromise verification, and `continue-new-target`. The immutable
-source archive checksum remains pending the final installed-system acceptance
-candidate.
+transition/compromise verification, and `continue-new-target`. Those archive
+continuation capabilities are not exercised or accepted by M10. The immutable
+frozen-release source archive checksum and final rerun remain pending.
 
 ## Durable PostgreSQL 17 verification
 
-Status: **Passed on the designated Debian recovery LXC**.
+Status: **Baseline passed on the designated Debian recovery LXC; final rerun pending**.
 
 The clean Debian gate must run with PostgreSQL 17 binaries explicitly selected
 and database tests required:
@@ -123,6 +136,18 @@ classes, timer status, reviewed systemd hardening, secret-delivery result,
 listener class result, core-dump/log-retention result, and per-credential-class
 revocation/rotation outcome. Do not include unit/environment contents or
 provider responses.
+
+Per-class evidence must cover direct Codex ingress; Secure MCP Tunnel; the
+OpenAI association/control plane when provisioned; applicable PostgreSQL
+application, metrics, report, worker, backup, and migration identities; backup
+recipient/recovery-identity custody; sealed digest binding; Bearer HMAC or
+client-token pepper; content-key authority; and optional GitHub ingress when
+active. For rotatable credentials, record replacement, intended-operation
+success, old-credential next-use rejection, old-session termination, provider
+revocation when applicable, rollback posture, canary result, and cleanup.
+For custody or recovery material that must remain valid for retained objects,
+mark unsafe rotation/revocation fields not applicable and record custody,
+availability, intended recovery use, canary absence, and cleanup instead.
 
 ## Encrypted base-backup and WAL evidence
 
@@ -158,18 +183,16 @@ proof, and cleanup confirmation.
 
 ## Primary Forgejo restore drill
 
-Status: **Pending; not run or accepted by this record**.
+Status: **Excluded / not evaluated**.
 
-Follow [Forgejo recovery](runbooks/forgejo-recovery.md). Record source head and
-external head/manifest/high-water anchors, pinned-host-key result, signer epoch
-public-key fingerprints, canonical transition-record and both detached-
-signature results, compromise cutoff results when applicable, complete signed-
-chain/manifest results, compatible revision, clean-destination preflight,
-aggregate/canary results, archive-exclusion proof, RTO, and cleanup.
+Forgejo provider recovery, remote equality, target promotion, deploy-key and
+host-key exercises, and provider API operations are outside M10. This record
+makes no Forgejo restore or remote-custody claim. The historical
+[Forgejo recovery](runbooks/forgejo-recovery.md) procedure is not an M10 gate.
 
 ## Secondary encrypted bundle drill
 
-Status: **Passed locally; Backblaze retrieval is non-blocking**.
+Status: **Partial; same-anchor clean database restore pending**.
 
 The Debian recovery LXC created a real ephemeral SSH-signed archive history,
 created an offsite-suitable full-history bundle, encrypted it to an ephemeral
@@ -181,7 +204,11 @@ publication. Wrong-identity and corrupted-ciphertext attempts returned only the
 fixed safe failure and created no output repository. The gate removed the
 ephemeral signing and recovery identities, plaintext bundle, scratch, source,
 and restored repositories; the staging root was independently removed after
-the run.
+the run. This proves materialization and exact archive recovery only. M10 still
+requires the materialized history to restore into a clean disposable database,
+bound to the same source head, manifest, high-water mark, signer policy, and
+object bytes. Until that passes at the frozen release, the bundle gate remains
+partial.
 
 Backblaze handles the offsite failure domain. Provider placement, freshness,
 retention, and retrieval validation are operator-managed and non-blocking. In
@@ -189,18 +216,12 @@ their absence, do not claim that a provider copy exists or has been restored.
 
 ## Archive continuation evidence
 
-Status: **Pending**.
+Status: **Excluded / not evaluated**.
 
-Record `new_immutable_archive_target_required` after clean restore; the exact
-`continue-new-target` invocation and `verified_remote_promotion_required`
-result; database/archive prefix equality; external head/manifest/high-water
-anchors; byte-identical empty-target reconstruction; verified promotion to the
-new immutable remote; and exactly one subsequent normal exporter first-parent
-append. The continuation command itself must not sign, append, push, promote,
-or activate the exporter. Existing-target re-anchor is not supported.
-No checked-in production SSH-promotion command currently closes the next step;
-remote promotion and normal exporter activation remain live/implementation
-blockers. Divergence is preserved and fails the gate.
+Archive checkpoint reconstruction, new-target continuation, remote promotion,
+and subsequent exporter append are outside M10. No continuation command,
+provider mutation, or exporter activation is required or authorized, and this
+record makes no continuation or resumed-exporter claim.
 
 ## Observability, alerts, and retention
 
@@ -241,9 +262,16 @@ The checked-in Backblaze/offsite rule scenarios remain validated repository
 contracts, but no installed provider-series producer or provider fault
 injection is required for M10.
 
-Retention remains **pending** until operator-chosen byte caps are installed for
-the 30-day journal/alert and 400-day content-free report maxima. No external
-alert receiver is required for M10.
+No-prune recovery retention remains **pending live evidence** until installed
+inventory validation records exact before/after object counts and canonical
+digests separately for bases, WAL/history, restore points, holds, verification
+markers, indexes/manifests, and status artifacts; the fixed
+`no_prune_dependency_watermark_absent` result; zero deletion attempts; unchanged
+restore points and holds; and adequate capacity. This is a
+validation-only success contract, not a blocked destructive-retention feature.
+Operational retention caps remain separately pending until operator-chosen byte
+caps are installed for the 30-day journal/alert and 400-day content-free report
+maxima. No external alert receiver is required for M10.
 
 ## Leakage scanner and hard-forget gates
 
@@ -263,9 +291,11 @@ links/special files; invalid canary input; and sanitized internal failure. Any
 nonzero count or nonzero exit is fail closed.
 
 Record the envelope-encrypted synthetic hard-forget test across canonical
-PostgreSQL, private archive, secondary copy, PITR, Forgejo-only recovery,
-bundle recovery, and every permitted key backup. Acceptance is bounded to
-cryptographic erasure inside those tested copies. Record that the independent
+PostgreSQL, the local key provider and its permitted backup, the independently
+anchored destruction ledger, and installed PITR. Local signed-archive and
+encrypted-bundle recovery are separate gates outside this erasure-dominance
+claim. Acceptance is bounded to cryptographic erasure inside the tested copies.
+Record that the independent
 current destruction ledger was excluded from key backups, survived each
 rollback boundary, matched or extended its independently retained freshness
 anchor, and dominated stale restored keys. Routine key-provider backup
@@ -279,12 +309,14 @@ that unknown external copies do not exist.
 Status: **Pending**.
 
 Record fresh NPM generated-config and external source/spoof/backend-counter
-results; exact private/canonical listener result; direct and Secure Tunnel
-credential gates; Forgejo deploy-key/host-key gates; GitHub provider gates only
-if the optional ingress is provisioned; local alert evaluation and recovery;
-real canary scans; and independent Forgejo recovery. Backblaze operation and
-external alert delivery are not M10 acceptance blockers. Their absence must not
-be reported as successful offsite durability or notification delivery.
+results; exact private/canonical listener result; each active non-Forgejo
+credential class separately; GitHub provider gates only if the optional ingress
+is provisioned; local monitoring and alert evaluation/recovery; age and byte-cap
+results for each required retention class; offline and cross-process scanner
+results; and cleanup plus independent second-check results. Forgejo recovery and
+continuation are excluded and not evaluated. Backblaze operation and external
+alert delivery are not M10 acceptance blockers. Their absence must not be
+reported as successful offsite durability or notification delivery.
 
 Non-applicable paths: public relay, node-agent, OAuth, public plugin submission,
 generic third-party enrollment, public branch/export/publication, and
@@ -319,7 +351,8 @@ relay/OAuth/node-agent surfaces also remain outside this acceptance.
 ## Acceptance decision
 
 **Decision: NOT ACCEPTED.** This draft contains no completed M10 live recovery,
-installed-system, provider, or final repository evidence. Update the individual
-rows only from reviewed current evidence. Change this decision only after every
-required gate passes, cleanup is confirmed, and remaining risks are explicitly
-accepted by the operator.
+installed-system, or final frozen-release evidence. Update the individual rows
+only from reviewed current evidence, record the later evidence-only revision
+separately, and change this decision only after every required gate passes,
+cleanup is confirmed, and remaining risks are explicitly accepted by the
+operator.
