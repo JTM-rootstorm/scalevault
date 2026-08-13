@@ -2,7 +2,7 @@
 
 - **Review date:** 2026-08-12
 - **Status:** Not accepted; implementation and evidence collection in progress
-- **Implementation baseline:** `c66edf0`
+- **Implementation baseline:** `368b302`
 - **Accepted source:** Pending final installed-system acceptance
 - **Source archive checksum:** Pending final immutable source archive
 - **Database migration revision:** Pending installed-system verification
@@ -33,17 +33,17 @@ protected operator store and transfer only permitted fields here.
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
 | Architecture and threat decisions accepted | Review | Pending | ADRs 0027-0033 are accepted; final threat/runbook mapping review remains pending |
-| Complete repository verification | Repository | Passed | `make PNPM='npx --yes pnpm@10.15.0' verify`: 1526 passed, 179 environment-gated skips; all remaining language/schema/plugin gates passed |
+| Complete repository verification | Repository | Passed | `make PNPM='npx --yes pnpm@10.15.0' verify`: 1526 passed, 181 environment-gated skips; all remaining language/schema/plugin gates passed |
 | Required PostgreSQL 17 integration gate | Durable local | Passed | Debian recovery LXC: 192 passed, zero skipped, PostgreSQL 17 |
 | Production-relevant PITR durability | Durable local | Passed | Debian recovery LXC: production helper archive/restore path, 1 passed, zero skipped |
 | Installed services and credentials hardened | Installed LXC | Pending | Exact installed units/credentials/hardening not yet audited |
 | Encrypted base backup and WAL current | Installed LXC/local recovery storage | Pending | Verified complete local chain not yet recorded; Backblaze transfer is operator-managed and non-blocking |
 | Isolated PostgreSQL PITR succeeds | Recovery drill | Passed (repository durability gate) | Disposable PostgreSQL 17 A/B-not-C recovery and corrupt manifest/ciphertext rejection passed; installed-storage drill remains pending |
 | Primary Forgejo clean restore succeeds | Provider/recovery drill | Pending | Real read-only clone and restore not yet run/recorded |
-| Secondary encrypted bundle restore succeeds | Local recovery drill | Pending | Exact encrypted bundle has not yet been locally materialized and restored; Backblaze placement/retrieval is operator-managed and non-blocking |
+| Secondary encrypted bundle restore succeeds | Local recovery drill | Passed | Real signed archive bundle encrypted and restored with `age`; exact head/object closure and negative/cleanup gates passed |
 | Archive continuation policy succeeds | Recovery drill | Pending | New-target reconstruction, verified remote promotion, and normal exporter append not yet run |
 | Credential revoke/rotation bounds pass | Installed/provider | Pending | Per-class current gates not yet recorded |
-| Privacy-safe observability and alerts pass | Repository/installed | Partial | Prometheus syntax and rule scenarios pass; installed evaluation, fault injection, and canary scans pending; external delivery is not required |
+| Privacy-safe observability and alerts pass | Repository/installed | Partial | All 38 rules and pending/firing/recovery scenarios pass; production rule/job installation and canary scans remain pending; external delivery is not required |
 | Leakage scanner detects every synthetic canary | Repository/durable local | Pending | Current complete scanner suite not yet recorded |
 | Hard forget dominates all retained recovery copies | Durable local/recovery | Pending | Database/archive/key-backup non-resurrection pending |
 | NPM/public-exposure boundary remains closed | Installed/external | Pending | Fresh generated-config and spoof/backend-counter proof pending |
@@ -69,9 +69,9 @@ non-applicable and unprovisioned.
 
 ## Repository verification
 
-Status: **Passed for implementation baseline `c66edf0`**.
+Status: **Passed for implementation baseline `368b302`**.
 
-The complete verification command passed with 1526 Python tests passed and 179
+The complete verification command passed with 1526 Python tests passed and 181
 environment-gated skips, followed by successful Go vet/tests, deterministic
 protobuf verification, 11 schema validations, and plugin format, lint,
 TypeScript, and six test gates. The local PostgreSQL skips were caused by the
@@ -89,7 +89,7 @@ candidate.
 
 ## Durable PostgreSQL 17 verification
 
-Status: **Pending**.
+Status: **Passed on the designated Debian recovery LXC**.
 
 The clean Debian gate must run with PostgreSQL 17 binaries explicitly selected
 and database tests required:
@@ -169,17 +169,19 @@ aggregate/canary results, archive-exclusion proof, RTO, and cleanup.
 
 ## Secondary encrypted bundle drill
 
-Status: **Pending local recovery evidence; Backblaze retrieval is non-blocking**.
+Status: **Passed locally; Backblaze retrieval is non-blocking**.
 
-M10 must locally materialize the exact offsite-suitable ciphertext with
-independently supplied recovery material. Follow
-[Secondary-bundle recovery](runbooks/secondary-bundle-recovery.md) using a
-protected local recovery store. Record the ciphertext digest, pre-decryption
-digest check, authenticated decryption and `git bundle verify` result codes,
-exact ref/head, signed-history and clean restore results, canaries, RTO, and
-verified removal of every plaintext scratch object. The plaintext bundle digest
-remains protected in-memory flow and is not retained. Do not record the private
-recovery identity.
+The Debian recovery LXC created a real ephemeral SSH-signed archive history,
+created an offsite-suitable full-history bundle, encrypted it to an ephemeral
+`age` recipient, independently recomputed the ciphertext SHA-256, and
+materialized it through the checked-in recovery CLI. The restored ref/head and
+reachable object closure were byte-identical to the source, and signed-history
+verification passed against the protected unpublished clone before atomic
+publication. Wrong-identity and corrupted-ciphertext attempts returned only the
+fixed safe failure and created no output repository. The gate removed the
+ephemeral signing and recovery identities, plaintext bundle, scratch, source,
+and restored repositories; the staging root was independently removed after
+the run.
 
 Backblaze handles the offsite failure domain. Provider placement, freshness,
 retention, and retrieval validation are operator-managed and non-blocking. In
@@ -202,7 +204,7 @@ blockers. Divergence is preserved and fails the gate.
 
 ## Observability, alerts, and retention
 
-Status: **Repository rule and database-boundary gates passed; live evidence pending**.
+Status: **Repository/local evaluation passed; production activation pending**.
 
 Record fixed-label/cardinality test results; Prometheus rule syntax and unit
 tests; installed scrape and rule health; backup, WAL, archive, queue,
@@ -216,14 +218,24 @@ dedicated `memory-metrics` exporter on `127.0.0.1:9098`; collector clear/down
 behavior; and protected systemd report publication with no stdout.
 
 Prometheus rule syntax and all checked-in rule scenarios passed with the
-installed `promtool`. The PostgreSQL 17 suite also passed the function-only
-metrics/report principals, owner-controlled tenant bindings, arbitrary-tenant
-denial, payload/table denial, bounded report limits including NULL rejection,
-and all nine report function families. These repository gates do not replace
-installed scrape freshness or operator-report publication. External alert
-delivery is explicitly not required for M10; local rule evaluation and visible
+installed Debian `promtool`: all 38 rules loaded, and the fixtures exercised
+exact threshold, pending, firing, recovery, absent-series, and scrape-down
+behavior. An isolated Debian Prometheus process also reached ready state,
+reported healthy evaluation with zero evaluation errors, and self-scraped with
+`up=1`; its temporary listener, storage, and configuration were removed without
+changing the production Prometheus process. The PostgreSQL 17 suite also passed
+the function-only metrics/report principals, owner-controlled tenant bindings,
+arbitrary-tenant denial, payload/table denial, bounded report limits including
+NULL rejection, and all nine report function families. These repository gates
+do not replace installed scrape freshness or operator-report publication.
+External alert delivery is explicitly not required for M10; local rule evaluation and visible
 collector/rule health remain required. When no receiver is configured, this
 record must not claim notification delivery.
+
+The production Prometheus process is healthy, but currently loads no ScaleVault
+rule groups or ScaleVault scrape jobs. Installed production activation and
+fault injection therefore remain pending even though the local evaluation gate
+passes.
 
 The checked-in Backblaze/offsite rule scenarios remain validated repository
 contracts, but no installed provider-series producer or provider fault
