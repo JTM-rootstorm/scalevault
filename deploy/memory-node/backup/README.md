@@ -34,6 +34,14 @@ before activation. Plaintext staging remains mode `0600/0700`. Do not grant
 `kivra-backup` to any application, ingress, worker, exporter, or monitoring
 identity.
 
+Provision the locked, non-login `memory-recovery` system identity and the
+`verification` directory on the routine node even though the private age
+identity and verification timer remain absent there. Base backup, WAL archive,
+and retention validate this ownership but cannot write the recovery-owned
+directory. On the isolated recovery host, the same named identity writes only
+digest-bound verification markers; `memory-backup` reads them through
+`kivra-backup` and cannot replace them.
+
 Create the isolated recovery mount as `root:memory-recovery` mode `0770`. The
 fixed staging mount is a distinct, local controlled filesystem owned by
 `memory-backup:memory-backup` mode `0700`. It must not be an offsite/NAS/cloud
@@ -58,6 +66,11 @@ bounded `restore_command` can decrypt WAL. Do not enable the verification timer
 on the routine node. A concrete offsite mount, recipient, custody owner,
 retention policy, and isolated recovery destination are mandatory before
 activation.
+
+Install the public recipient as `root:kivra-backup` mode `0640`. Install
+`REVISION` and `recovery-configuration.sha256` as `root:root` mode `0644`; they
+must contain only their single bounded revision or digest value. The helper
+validates these owners and modes before use.
 
 The helper never accepts a database URL, destination root, binary directory, or
 recipient through ambient environment variables. It emits fixed event/result
@@ -119,6 +132,19 @@ fsync, and an atomic same-filesystem rename. An identical WAL retry succeeds
 only when the plaintext hash, ciphertext hash, manifest name, and on-disk bytes
 agree; any mismatch fails closed. Recovery later decrypts and authenticates the
 full manifest before trusting its bindings. Plain staging is removed on handled failure.
+
+WAL source bytes are opened descriptor-relative beneath the exact `pg_wal`
+directory with `O_NOFOLLOW`; one stable descriptor is streamed to age while its
+hash is computed, and before/after inode metadata must match. Duplicate retries
+also require and hash-check the encrypted recovery manifest.
+
+Base-backup tar creation traverses descriptor-relative sorted names, never
+follows links, verifies stable inode metadata, and normalizes owner, group,
+mode, time, and PAX metadata. Restore scans the complete archive before writing:
+at most 200,000 members, 2 TiB per member, 8 TiB expanded bytes, 32 path
+components, 4,096 path bytes, and 255 bytes per component. Sparse files, links,
+devices, duplicate paths, file-as-parent paths, unsafe names, truncation, and a
+changed archive fail closed before or during bounded extraction.
 After an uncatchable process or host failure, inspect `.staging` without reading
 payloads, preserve evidence, and remove only a positively identified stale
 `base-<valid-id>` or `wal-<valid-name>-<nonce>` child before retrying.
@@ -150,20 +176,20 @@ rollback. Destroy decrypted drill data after recording content-free evidence.
 
 ## Retention invariant
 
-Daily retention considers only bases whose encrypted-manifest digest has a
-matching marker written by the isolated recovery identity after successful
-decrypt and post-decrypt `pg_verifybackup`. It keeps at least the newest such
-verified backup from each of eight UTC days plus the newest verified backup
-from each of five ISO weeks. It always keeps the newest verified base and
-refuses to run when no verified base exists. Unverified bases are preserved for
-investigation and never treated as retention-eligible.
-An exact WAL dependency watermark is external recovery state. Until a verified
-watermark covering every retained chain and hold exists, automated retention
-keeps every WAL segment, backup-history file, and timeline-history file. The
-helper bounds obsolete base generations only and honors a regular, bounded
-`HOLD` marker inside a base object. This conservative rule requires
-operator-reviewed WAL-capacity management, but cannot infer a dependency and
-delete the last known verified chain.
+The checked-in retention command is intentionally validation-only and deletes
+nothing. A decrypt plus `pg_verifybackup` marker does not prove that PostgreSQL
+actually started, reached a requested PITR target, or consumed a complete WAL
+chain. An authenticated production PITR result and exact base/WAL/timeline/
+restore-point dependency-and-hold catalog do not yet exist. Consequently every
+base, WAL segment, backup-history file, timeline-history file, restore point,
+and hold remains potentially required. The command validates names, manifests,
+markers, and holds, then reports `no_prune_dependency_watermark_absent`.
+
+The eight-daily/five-weekly policy is an activation target, not deletion
+authority. Implementing it requires the authenticated dependency catalog and
+real isolated-start/PITR proof first. Capacity pressure is a stop condition;
+operators must not manually approximate dependencies and prune around this
+gate.
 
 Status files under `status/` are atomic, content-free fixed-field JSON. They are
 operational hints, not canonical state or proof of offsite durability. A real

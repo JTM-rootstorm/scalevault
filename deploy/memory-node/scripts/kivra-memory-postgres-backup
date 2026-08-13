@@ -22,10 +22,9 @@ import shutil
 import stat
 import subprocess
 import tarfile
-from collections.abc import Iterable
 from contextlib import suppress
-from pathlib import Path
-from typing import Any, Never
+from pathlib import Path, PurePosixPath
+from typing import IO, Any, Never
 
 PG_BINDIR = Path("/usr/lib/postgresql/17/bin")
 PG_DATA = Path("/var/lib/postgresql/17/main")
@@ -48,6 +47,7 @@ IDENTITY_FILE = Path("/etc/kivra-memory/backup-age-identity")
 RELEASE_FILE = Path("/opt/kivra-memory/app/REVISION")
 CONFIG_DIGEST_FILE = Path("/etc/kivra-memory/recovery-configuration.sha256")
 AGE = Path("/usr/bin/age")
+HELPER_PATH = Path("/usr/local/libexec/kivra-memory-postgres-backup")
 
 BACKUP_ID_RE = re.compile(r"\A[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}\Z")
 WAL_RE = re.compile(r"\A(?:[0-9A-F]{24}(?:\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)\Z")
@@ -57,6 +57,13 @@ SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 AGE_RECIPIENT_RE = re.compile(r"\Aage1[023456789acdefghjklmnpqrstuvwxyz]{20,100}\Z")
 MANIFEST_VERSION = 1
 CHUNK = 1024 * 1024
+MAX_TAR_MEMBERS = 200_000
+MAX_TAR_MEMBER_BYTES = 2 * 1024**4
+MAX_TAR_EXPANDED_BYTES = 8 * 1024**4
+MAX_TAR_ARCHIVE_BYTES = 9 * 1024**4
+MAX_TAR_PATH_BYTES = 4096
+MAX_TAR_COMPONENT_BYTES = 255
+MAX_TAR_DEPTH = 32
 STORE_DIRECTORY_MODE = 0o770
 STORE_FILE_MODE = 0o640
 STORE_OWNER = "memory-backup"
@@ -119,27 +126,44 @@ def _require_owned(path: Path, *, owner: str, group: str, mode: int) -> None:
         _fail("storage_mode_invalid")
 
 
+def _require_fd_owned(descriptor: int, *, owner: str, group: str, mode: int) -> None:
+    try:
+        info = os.fstat(descriptor)
+        expected_uid = pwd.getpwnam(owner).pw_uid
+        expected_gid = grp.getgrnam(group).gr_gid
+    except (KeyError, OSError) as exc:
+        raise BackupError("storage_identity_invalid") from exc
+    if (
+        info.st_uid != expected_uid
+        or info.st_gid != expected_gid
+        or stat.S_IMODE(info.st_mode) != mode
+    ):
+        _fail("storage_owner_invalid")
+
+
 def _ensure_store() -> None:
     _require_exact_mount(BACKUP_MOUNT, writable=False)
     _require_owned(BACKUP_MOUNT, owner="root", group=STORE_GROUP, mode=0o750)
-    modes = {
-        STORE: 0o2750,
-        BASE_ROOT: 0o2750,
-        WAL_ROOT: 0o2770,
-        STATUS_ROOT: 0o2770,
-        VERIFICATION_ROOT: 0o2750,
-        STAGING_ROOT: 0o2770,
+    contracts = {
+        STORE: (STORE_OWNER, STORE_GROUP, 0o2750),
+        BASE_ROOT: (STORE_OWNER, STORE_GROUP, 0o2750),
+        WAL_ROOT: (STORE_OWNER, STORE_GROUP, 0o2770),
+        STATUS_ROOT: (STORE_OWNER, STORE_GROUP, 0o2770),
+        VERIFICATION_ROOT: (RECOVERY_GROUP, STORE_GROUP, 0o2750),
+        STAGING_ROOT: (STORE_OWNER, STORE_GROUP, 0o2770),
     }
-    for path, mode in modes.items():
+    for path, (owner, group, mode) in contracts.items():
         _require_directory(path, mode=mode)
-        _require_owned(path, owner=STORE_OWNER, group=STORE_GROUP, mode=mode)
+        _require_owned(path, owner=owner, group=group, mode=mode)
     if not os.access(STORE, os.R_OK | os.X_OK):
         _fail("store_access_denied")
     if not all(os.access(path, os.W_OK | os.X_OK) for path in (STATUS_ROOT, STAGING_ROOT)):
         _fail("store_access_denied")
 
 
-def _require_regular_file(path: Path, *, max_bytes: int, private: bool = False) -> None:
+def _require_regular_file(
+    path: Path, *, max_bytes: int, private: bool = False, mode: int | None = None
+) -> None:
     try:
         info = path.lstat()
     except OSError as exc:
@@ -150,6 +174,8 @@ def _require_regular_file(path: Path, *, max_bytes: int, private: bool = False) 
         _fail("file_size_invalid")
     if private and stat.S_IMODE(info.st_mode) & 0o077:
         _fail("private_file_mode_invalid")
+    if mode is not None and stat.S_IMODE(info.st_mode) != mode:
+        _fail("file_mode_invalid")
 
 
 def _read_small_text(path: Path, *, code: str, max_bytes: int = 4096) -> str:
@@ -164,6 +190,7 @@ def _read_small_text(path: Path, *, code: str, max_bytes: int = 4096) -> str:
 
 
 def _validate_recipient() -> None:
+    _require_owned(RECIPIENT_FILE, owner="root", group=STORE_GROUP, mode=0o640)
     value = _read_small_text(RECIPIENT_FILE, code="recipient_invalid", max_bytes=256)
     if not AGE_RECIPIENT_RE.fullmatch(value):
         _fail("recipient_invalid")
@@ -172,7 +199,20 @@ def _validate_recipient() -> None:
 
 def _validate_identity() -> None:
     _require_regular_file(IDENTITY_FILE, max_bytes=4096, private=True)
+    _require_owned(IDENTITY_FILE, owner=RECOVERY_GROUP, group=RECOVERY_GROUP, mode=0o600)
     _require_executable(AGE)
+
+
+def _deployment_metadata() -> tuple[str, str]:
+    _require_owned(RELEASE_FILE, owner="root", group="root", mode=0o644)
+    release = _read_small_text(RELEASE_FILE, code="release_metadata_invalid", max_bytes=256)
+    _require_owned(CONFIG_DIGEST_FILE, owner="root", group="root", mode=0o644)
+    config_digest = _read_small_text(
+        CONFIG_DIGEST_FILE, code="configuration_metadata_invalid", max_bytes=256
+    )
+    if not re.fullmatch(r"[0-9a-f]{40,64}", release) or not SHA256_RE.fullmatch(config_digest):
+        _fail("recovery_metadata_invalid")
+    return release, config_digest
 
 
 def _require_executable(path: Path) -> None:
@@ -188,6 +228,64 @@ def _sha256(path: Path) -> str:
                 digest.update(block)
     except OSError as exc:
         raise BackupError("object_read_failed") from exc
+    return digest.hexdigest()
+
+
+def _sha256_fd(descriptor: int, *, max_bytes: int) -> str:
+    return _stream_stable_fd(descriptor, None, max_bytes=max_bytes)
+
+
+def _read_fd(descriptor: int, *, max_bytes: int) -> bytes:
+    before = os.fstat(descriptor)
+    _validate_source_info(before, max_bytes=max_bytes)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks = []
+    total = 0
+    while block := os.read(descriptor, min(CHUNK, max_bytes + 1 - total)):
+        total += len(block)
+        if total > max_bytes:
+            _fail("file_size_invalid")
+        chunks.append(block)
+    if _source_fingerprint(before) != _source_fingerprint(os.fstat(descriptor)):
+        _fail("source_changed_during_read")
+    return b"".join(chunks)
+
+
+def _source_fingerprint(info: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _validate_source_info(info: os.stat_result, *, max_bytes: int) -> None:
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        _fail("source_file_unsafe")
+    if info.st_size <= 0 or info.st_size > max_bytes:
+        _fail("source_file_size_invalid")
+
+
+def _stream_stable_fd(source_fd: int, sink: IO[bytes] | None, *, max_bytes: int) -> str:
+    before = os.fstat(source_fd)
+    _validate_source_info(before, max_bytes=max_bytes)
+    digest = hashlib.sha256()
+    consumed = 0
+    os.lseek(source_fd, 0, os.SEEK_SET)
+    while block := os.read(source_fd, CHUNK):
+        consumed += len(block)
+        if consumed > max_bytes:
+            _fail("source_file_size_invalid")
+        digest.update(block)
+        if sink is not None:
+            sink.write(block)
+    after = os.fstat(source_fd)
+    if consumed != before.st_size or _source_fingerprint(before) != _source_fingerprint(after):
+        _fail("source_changed_during_read")
     return digest.hexdigest()
 
 
@@ -245,11 +343,15 @@ def _replace_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def _read_index(path: Path, *, kind: str) -> dict[str, Any]:
-    _require_regular_file(path, max_bytes=64 * 1024)
+    _require_regular_file(path, max_bytes=64 * 1024, mode=STORE_FILE_MODE)
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise BackupError("manifest_invalid") from exc
+    return _validate_index(value, kind=kind)
+
+
+def _validate_index(value: object, *, kind: str) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("manifest_version") != MANIFEST_VERSION:
         _fail("manifest_invalid")
     if value.get("kind") != kind:
@@ -282,7 +384,7 @@ def _encrypted_manifest(
     root: Path, index: dict[str, Any], *, kind: str, temporary_root: Path
 ) -> dict[str, Any]:
     encrypted = root / "recovery-manifest.json.age"
-    _require_regular_file(encrypted, max_bytes=1024 * 1024)
+    _require_regular_file(encrypted, max_bytes=1024 * 1024, mode=STORE_FILE_MODE)
     if _sha256(encrypted) != index.get("manifest_ciphertext_sha256"):
         _fail("manifest_ciphertext_digest_mismatch")
     temporary = temporary_root / f"manifest-{secrets.token_hex(8)}.json"
@@ -296,6 +398,10 @@ def _encrypted_manifest(
     finally:
         with suppress(OSError):
             temporary.unlink()
+    return _validate_manifest(value, index=index, kind=kind)
+
+
+def _validate_manifest(value: object, *, index: dict[str, Any], kind: str) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("manifest_version") != MANIFEST_VERSION:
         _fail("manifest_invalid")
     if value.get("kind") != kind or value.get("object_id") != index.get("object_id"):
@@ -435,6 +541,55 @@ def _encrypt_file(source: Path, destination: Path) -> None:
         os.close(descriptor)
 
 
+def _encrypt_fd(source_fd: int, destination: Path, *, max_bytes: int) -> str:
+    _validate_recipient()
+    descriptor = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        STORE_FILE_MODE,
+    )
+    os.fchmod(descriptor, STORE_FILE_MODE)
+    process: subprocess.Popen[bytes] | None = None
+    success = False
+    try:
+        process = subprocess.Popen(
+            [str(AGE), "-R", str(RECIPIENT_FILE)],
+            stdin=subprocess.PIPE,
+            stdout=descriptor,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        if process.stdin is None:
+            _fail("dependency_execution_failed")
+        try:
+            plaintext_sha = _stream_stable_fd(source_fd, process.stdin, max_bytes=max_bytes)
+            process.stdin.close()
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        if process.wait() != 0:
+            _fail("dependency_failed")
+        os.fsync(descriptor)
+        success = True
+        return plaintext_sha
+    except (OSError, BrokenPipeError) as exc:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        raise BackupError("dependency_execution_failed") from exc
+    except BaseException:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        os.close(descriptor)
+        if not success:
+            with suppress(OSError):
+                destination.unlink()
+
+
 def _decrypt_file(source: Path, destination: Path) -> None:
     _validate_identity()
     descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -451,6 +606,25 @@ def _decrypt_file(source: Path, destination: Path) -> None:
         os.close(descriptor)
 
 
+def _decrypt_fd(source_fd: int, destination: Path) -> None:
+    _validate_identity()
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.lseek(source_fd, 0, os.SEEK_SET)
+        _run(
+            [str(AGE), "--decrypt", "-i", str(IDENTITY_FILE)],
+            stdin=source_fd,
+            stdout=descriptor,
+        )
+        os.fsync(descriptor)
+    except BaseException:
+        with suppress(OSError):
+            destination.unlink()
+        raise
+    finally:
+        os.close(descriptor)
+
+
 def _publish_directory(stage: Path, destination: Path) -> None:
     _fsync_dir(stage)
     try:
@@ -464,94 +638,196 @@ def archive_wal(source_arg: str, wal_name: str) -> None:
     if not WAL_RE.fullmatch(wal_name):
         _fail("wal_name_invalid")
     source = Path(source_arg)
-    if not source.is_absolute():
+    if not source.is_absolute() or source.parent != PG_WAL or source.name != wal_name:
         _fail("wal_source_invalid")
-    resolved = _resolved(source)
-    if resolved.parent != _resolved(PG_WAL) or resolved.name != wal_name:
+    if _resolved(PG_WAL) != PG_WAL:
         _fail("wal_source_invalid")
-    _require_regular_file(source, max_bytes=1024 * 1024 * 1024)
-    _ensure_store()
-    if not os.access(WAL_ROOT, os.W_OK | os.X_OK):
-        _fail("store_access_denied")
-    plaintext_sha = _sha256(source)
-    destination = WAL_ROOT / wal_name
-    if destination.exists():
-        index = _read_index(destination / "index.json", kind="wal")
-        encrypted = destination / "segment.age"
-        _require_regular_file(encrypted, max_bytes=2 * 1024 * 1024 * 1024)
-        if (
-            index.get("object_id") != wal_name
-            or index.get("plaintext_sha256") != plaintext_sha
-            or index.get("ciphertext_sha256") != _sha256(encrypted)
-        ):
-            _fail("wal_duplicate_mismatch")
-        _log("wal_archive", "duplicate_identical", wal_name.lower())
-        return
-    stage = STAGING_ROOT / f"wal-{wal_name}-{secrets.token_hex(8)}"
-    stage.mkdir(mode=STORE_DIRECTORY_MODE)
-    stage.chmod(STORE_DIRECTORY_MODE)
     try:
-        encrypted = stage / "segment.age"
-        _encrypt_file(source, encrypted)
-        encrypted_sha = _sha256(encrypted)
-        created_at = dt.datetime.now(dt.UTC).isoformat()
-        manifest_sha = _publish_encrypted_manifest(
-            stage,
-            {
-                "ciphertext_sha256": encrypted_sha,
-                "created_at": created_at,
-                "kind": "wal",
-                "manifest_version": MANIFEST_VERSION,
-                "object_id": wal_name,
-                "plaintext_sha256": plaintext_sha,
-            },
-        )
-        _write_json_exclusive(
-            stage / "index.json",
-            {
-                "ciphertext_sha256": encrypted_sha,
-                "created_at": created_at,
-                "kind": "wal",
-                "manifest_version": MANIFEST_VERSION,
-                "manifest_ciphertext_sha256": manifest_sha,
-                "object_id": wal_name,
-                "plaintext_sha256": plaintext_sha,
-            },
-        )
-        _publish_directory(stage, destination)
-    except BaseException:
-        shutil.rmtree(stage, ignore_errors=True)
-        raise
+        directory_fd = os.open(PG_WAL, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            source_fd = os.open(wal_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise BackupError("wal_source_invalid") from exc
+    try:
+        _ensure_store()
+        if not os.access(WAL_ROOT, os.W_OK | os.X_OK):
+            _fail("store_access_denied")
+        destination = WAL_ROOT / wal_name
+        if destination.exists():
+            _require_directory(destination, mode=STORE_DIRECTORY_MODE)
+            index = _read_index(destination / "index.json", kind="wal")
+            encrypted = destination / "segment.age"
+            _require_regular_file(encrypted, max_bytes=2 * 1024 * 1024 * 1024, mode=STORE_FILE_MODE)
+            recovery_manifest = destination / "recovery-manifest.json.age"
+            _require_regular_file(recovery_manifest, max_bytes=1024 * 1024, mode=STORE_FILE_MODE)
+            plaintext_sha = _stream_stable_fd(source_fd, None, max_bytes=1024 * 1024 * 1024)
+            if (
+                index.get("object_id") != wal_name
+                or index.get("plaintext_sha256") != plaintext_sha
+                or index.get("ciphertext_sha256") != _sha256(encrypted)
+                or index.get("manifest_ciphertext_sha256") != _sha256(recovery_manifest)
+            ):
+                _fail("wal_duplicate_mismatch")
+            _log("wal_archive", "duplicate_identical", wal_name.lower())
+            return
+        stage = STAGING_ROOT / f"wal-{wal_name}-{secrets.token_hex(8)}"
+        stage.mkdir(mode=STORE_DIRECTORY_MODE)
+        stage.chmod(STORE_DIRECTORY_MODE)
+        try:
+            encrypted = stage / "segment.age"
+            plaintext_sha = _encrypt_fd(source_fd, encrypted, max_bytes=1024 * 1024 * 1024)
+            encrypted_sha = _sha256(encrypted)
+            created_at = dt.datetime.now(dt.UTC).isoformat()
+            manifest_sha = _publish_encrypted_manifest(
+                stage,
+                {
+                    "ciphertext_sha256": encrypted_sha,
+                    "created_at": created_at,
+                    "kind": "wal",
+                    "manifest_version": MANIFEST_VERSION,
+                    "object_id": wal_name,
+                    "plaintext_sha256": plaintext_sha,
+                },
+            )
+            _write_json_exclusive(
+                stage / "index.json",
+                {
+                    "ciphertext_sha256": encrypted_sha,
+                    "created_at": created_at,
+                    "kind": "wal",
+                    "manifest_version": MANIFEST_VERSION,
+                    "manifest_ciphertext_sha256": manifest_sha,
+                    "object_id": wal_name,
+                    "plaintext_sha256": plaintext_sha,
+                },
+            )
+            _publish_directory(stage, destination)
+        except BaseException:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
+    finally:
+        os.close(source_fd)
     _replace_json(STATUS_ROOT / "latest-wal.json", {"object_id": wal_name, "result": "ok"})
     _log("wal_archive", "ok", wal_name.lower())
 
 
-def _walk_backup(root: Path) -> Iterable[Path]:
-    for current, directories, files in os.walk(root, topdown=True, followlinks=False):
-        directories.sort()
-        files.sort()
-        current_path = Path(current)
-        for name in directories + files:
-            path = current_path / name
-            info = path.lstat()
-            if stat.S_ISLNK(info.st_mode) or not (
-                stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)
-            ):
-                _fail("backup_member_unsafe")
-            yield path
+def _validate_tar_path(name: str) -> tuple[str, ...]:
+    if not name or name.startswith("/") or "\\" in name:
+        _fail("backup_member_unsafe")
+    parts = tuple(name.split("/"))
+    if (
+        any(part in {"", ".", ".."} for part in parts)
+        or len(parts) > MAX_TAR_DEPTH
+        or len(name.encode("utf-8")) > MAX_TAR_PATH_BYTES
+        or any(len(part.encode("utf-8")) > MAX_TAR_COMPONENT_BYTES for part in parts)
+        or PurePosixPath(name).parts != parts
+    ):
+        _fail("backup_member_unsafe")
+    return parts
+
+
+def _normalized_tar_info(name: str, info: os.stat_result) -> tarfile.TarInfo:
+    member = tarfile.TarInfo(name)
+    member.uid = 0
+    member.gid = 0
+    member.uname = ""
+    member.gname = ""
+    member.mtime = 0
+    member.pax_headers = {}
+    if stat.S_ISDIR(info.st_mode):
+        member.type = tarfile.DIRTYPE
+        member.mode = 0o700
+        member.size = 0
+    elif stat.S_ISREG(info.st_mode):
+        _validate_source_info(info, max_bytes=MAX_TAR_MEMBER_BYTES)
+        member.type = tarfile.REGTYPE
+        member.mode = 0o600
+        member.size = info.st_size
+    else:
+        _fail("backup_member_unsafe")
+    return member
+
+
+def _add_tree(
+    archive: tarfile.TarFile,
+    directory_fd: int,
+    prefix: tuple[str, ...],
+    totals: list[int],
+) -> None:
+    try:
+        names = sorted(os.listdir(directory_fd))
+    except OSError as exc:
+        raise BackupError("backup_source_read_failed") from exc
+    for name in names:
+        relative_parts = (*prefix, name)
+        relative = "/".join(relative_parts)
+        _validate_tar_path(relative)
+        totals[0] += 1
+        if totals[0] > MAX_TAR_MEMBERS:
+            _fail("backup_member_count_exceeded")
+        try:
+            path_info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise BackupError("backup_source_read_failed") from exc
+        member = _normalized_tar_info(relative, path_info)
+        totals[1] += member.size
+        if totals[1] > MAX_TAR_EXPANDED_BYTES:
+            _fail("backup_expanded_size_exceeded")
+        if member.isdir():
+            try:
+                child_fd = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+            except OSError as exc:
+                raise BackupError("backup_member_unsafe") from exc
+            try:
+                before = os.fstat(child_fd)
+                if _source_fingerprint(path_info) != _source_fingerprint(before):
+                    _fail("source_changed_during_read")
+                archive.addfile(member)
+                _add_tree(archive, child_fd, relative_parts, totals)
+                after = os.fstat(child_fd)
+                if _source_fingerprint(before) != _source_fingerprint(after):
+                    _fail("source_changed_during_read")
+            finally:
+                os.close(child_fd)
+        else:
+            try:
+                file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            except OSError as exc:
+                raise BackupError("backup_member_unsafe") from exc
+            try:
+                before = os.fstat(file_fd)
+                if _source_fingerprint(path_info) != _source_fingerprint(before):
+                    _fail("source_changed_during_read")
+                with os.fdopen(file_fd, "rb", closefd=False) as source_file:
+                    archive.addfile(member, source_file)
+                after = os.fstat(file_fd)
+                if _source_fingerprint(before) != _source_fingerprint(after):
+                    _fail("source_changed_during_read")
+            finally:
+                os.close(file_fd)
 
 
 def _create_tar(source: Path, destination: Path) -> None:
+    source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    source_before = os.fstat(source_fd)
     descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with (
             os.fdopen(descriptor, "wb", closefd=False) as output,
-            tarfile.open(fileobj=output, mode="w|") as archive,
+            tarfile.open(fileobj=output, mode="w|", format=tarfile.PAX_FORMAT) as archive,
         ):
-            for path in _walk_backup(source):
-                archive.add(path, arcname=str(path.relative_to(source)), recursive=False)
+            _add_tree(archive, source_fd, (), [0, 0])
+        if _source_fingerprint(source_before) != _source_fingerprint(os.fstat(source_fd)):
+            _fail("source_changed_during_read")
         _fsync_file(destination)
     finally:
+        os.close(source_fd)
         os.close(descriptor)
 
 
@@ -641,12 +917,7 @@ def base_backup() -> None:
         encrypted_sha = _sha256(encrypted)
         shutil.rmtree(plain)
         tar_path.unlink()
-        release = _read_small_text(RELEASE_FILE, code="release_metadata_invalid", max_bytes=256)
-        config_digest = _read_small_text(
-            CONFIG_DIGEST_FILE, code="configuration_metadata_invalid", max_bytes=256
-        )
-        if not re.fullmatch(r"[0-9a-f]{40,64}", release) or not SHA256_RE.fullmatch(config_digest):
-            _fail("recovery_metadata_invalid")
+        release, config_digest = _deployment_metadata()
         created_at = dt.datetime.now(dt.UTC).isoformat()
         recovery_manifest = {
             "ciphertext_sha256": encrypted_sha,
@@ -694,34 +965,208 @@ def base_backup() -> None:
     _log("base_backup", "ok", backup_id.lower())
 
 
-def _safe_extract(archive_path: Path, destination: Path) -> None:
-    with archive_path.open("rb") as source, tarfile.open(fileobj=source, mode="r|") as archive:
-        for member in archive:
-            relative = Path(member.name)
-            if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+def _scan_tar_fd(archive_fd: int) -> list[tuple[str, tuple[str, ...], bytes, int]]:
+    expected: list[tuple[str, tuple[str, ...], bytes, int]] = []
+    paths: set[str] = set()
+    file_paths: set[str] = set()
+    total = 0
+    try:
+        os.lseek(archive_fd, 0, os.SEEK_SET)
+        with (
+            os.fdopen(os.dup(archive_fd), "rb") as source,
+            tarfile.open(fileobj=source, mode="r:") as archive,
+        ):
+            for member in archive:
+                if len(expected) >= MAX_TAR_MEMBERS:
+                    _fail("backup_member_count_exceeded")
+                parts = _validate_tar_path(member.name)
+                if member.name in paths:
+                    _fail("backup_member_duplicate")
+                paths.add(member.name)
+                sparse = getattr(member, "sparse", None)
+                if member.type == tarfile.GNUTYPE_SPARSE or sparse is not None:
+                    _fail("backup_member_sparse")
+                if member.isdir():
+                    if member.size != 0:
+                        _fail("backup_member_invalid")
+                    kind = tarfile.DIRTYPE
+                elif member.isreg():
+                    if member.size < 0 or member.size > MAX_TAR_MEMBER_BYTES:
+                        _fail("backup_member_size_exceeded")
+                    total += member.size
+                    if total > MAX_TAR_EXPANDED_BYTES:
+                        _fail("backup_expanded_size_exceeded")
+                    kind = tarfile.REGTYPE
+                    file_paths.add(member.name)
+                else:
+                    _fail("backup_member_unsafe")
+                expected.append((member.name, parts, kind, member.size))
+    except (OSError, tarfile.TarError) as exc:
+        raise BackupError("backup_archive_invalid") from exc
+    for _name, parts, _kind, _size in expected:
+        for depth in range(1, len(parts)):
+            if "/".join(parts[:depth]) in file_paths:
                 _fail("backup_member_unsafe")
-            target = destination / relative
-            if target != destination and destination not in target.parents:
-                _fail("backup_member_unsafe")
-            if member.isdir():
-                target.mkdir(mode=member.mode & 0o700, parents=True, exist_ok=True)
-            elif member.isfile():
-                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                descriptor = os.open(
-                    target,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                    member.mode & 0o700,
+    return expected
+
+
+def _scan_tar(archive_path: Path) -> list[tuple[str, tuple[str, ...], bytes, int]]:
+    descriptor = os.open(archive_path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        return _scan_tar_fd(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _directory_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
+        _fail("recovery_directory_unsafe")
+    if info.st_uid != os.geteuid() or info.st_gid != os.getegid():
+        _fail("recovery_directory_unsafe")
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
+
+
+def _pinned_parent(
+    root_fd: int, parts: tuple[str, ...]
+) -> tuple[int, tuple[tuple[str, tuple[int, int, int, int, int]], ...]]:
+    current_fd = os.dup(root_fd)
+    chain: list[tuple[str, tuple[int, int, int, int, int]]] = []
+    try:
+        for component in parts:
+            try:
+                os.mkdir(component, mode=0o700, dir_fd=current_fd)
+                os.fsync(current_fd)
+            except FileExistsError:
+                pass
+            try:
+                child_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=current_fd,
                 )
-                extracted = archive.extractfile(member)
-                if extracted is None:
-                    os.close(descriptor)
-                    _fail("backup_member_invalid")
-                with os.fdopen(descriptor, "wb") as output:
-                    shutil.copyfileobj(extracted, output, CHUNK)
-                    output.flush()
-                    os.fsync(output.fileno())
-            else:
-                _fail("backup_member_unsafe")
+            except OSError as exc:
+                raise BackupError("recovery_directory_unsafe") from exc
+            identity = _directory_identity(os.fstat(child_fd))
+            chain.append((component, identity))
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd, tuple(chain)
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _revalidate_pinned_chain(
+    root_fd: int, chain: tuple[tuple[str, tuple[int, int, int, int, int]], ...]
+) -> None:
+    current_fd = os.dup(root_fd)
+    try:
+        for component, expected in chain:
+            try:
+                child_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=current_fd,
+                )
+            except OSError as exc:
+                raise BackupError("recovery_directory_changed") from exc
+            os.close(current_fd)
+            current_fd = child_fd
+            if _directory_identity(os.fstat(current_fd)) != expected:
+                _fail("recovery_directory_changed")
+    finally:
+        os.close(current_fd)
+
+
+def _safe_extract(archive_path: Path, destination: Path) -> None:
+    archive_fd = os.open(archive_path, os.O_RDONLY | os.O_NOFOLLOW)
+    root_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        _directory_identity(os.fstat(root_fd))
+        before = os.fstat(archive_fd)
+        _validate_source_info(before, max_bytes=MAX_TAR_ARCHIVE_BYTES)
+        expected = _scan_tar_fd(archive_fd)
+        if _source_fingerprint(before) != _source_fingerprint(os.fstat(archive_fd)):
+            _fail("backup_archive_changed")
+        os.lseek(archive_fd, 0, os.SEEK_SET)
+        with (
+            os.fdopen(os.dup(archive_fd), "rb") as source,
+            tarfile.open(fileobj=source, mode="r:") as archive,
+        ):
+            count = 0
+            for index, member in enumerate(archive):
+                count += 1
+                if index >= len(expected):
+                    _fail("backup_archive_changed")
+                name, parts, kind, size = expected[index]
+                actual_kind = tarfile.DIRTYPE if member.isdir() else tarfile.REGTYPE
+                if (member.name, actual_kind, member.size) != (name, kind, size):
+                    _fail("backup_archive_changed")
+                parent_fd, chain = _pinned_parent(root_fd, parts[:-1])
+                try:
+                    _revalidate_pinned_chain(root_fd, chain)
+                    if kind == tarfile.DIRTYPE:
+                        try:
+                            os.mkdir(parts[-1], mode=0o700, dir_fd=parent_fd)
+                            os.fsync(parent_fd)
+                        except FileExistsError:
+                            pass
+                        child_fd = os.open(
+                            parts[-1],
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=parent_fd,
+                        )
+                        try:
+                            identity = _directory_identity(os.fstat(child_fd))
+                        finally:
+                            os.close(child_fd)
+                        _revalidate_pinned_chain(root_fd, (*chain, (parts[-1], identity)))
+                    else:
+                        descriptor = os.open(
+                            parts[-1],
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                            0o600,
+                            dir_fd=parent_fd,
+                        )
+                        try:
+                            # Opening the final file is itself a race boundary.
+                            # Revalidate the path chain before writing one byte.
+                            _revalidate_pinned_chain(root_fd, chain)
+                            extracted = archive.extractfile(member)
+                            if extracted is None:
+                                _fail("backup_member_invalid")
+                            remaining = size
+                            with os.fdopen(descriptor, "wb") as output:
+                                descriptor = -1
+                                while remaining:
+                                    block = extracted.read(min(CHUNK, remaining))
+                                    if not block:
+                                        _fail("backup_member_truncated")
+                                    output.write(block)
+                                    remaining -= len(block)
+                                output.flush()
+                                os.fsync(output.fileno())
+                            os.fsync(parent_fd)
+                            _revalidate_pinned_chain(root_fd, chain)
+                        except BaseException:
+                            if descriptor >= 0:
+                                os.close(descriptor)
+                            with suppress(OSError):
+                                os.unlink(parts[-1], dir_fd=parent_fd)
+                                os.fsync(parent_fd)
+                            raise
+                    _revalidate_pinned_chain(root_fd, chain)
+                finally:
+                    os.close(parent_fd)
+            if count != len(expected):
+                _fail("backup_archive_changed")
+        if _source_fingerprint(before) != _source_fingerprint(os.fstat(archive_fd)):
+            _fail("backup_archive_changed")
+    except (OSError, tarfile.TarError) as exc:
+        raise BackupError("backup_archive_invalid") from exc
+    finally:
+        os.close(root_fd)
+        os.close(archive_fd)
 
 
 def _require_recovery_destination(destination: Path) -> bool:
@@ -765,7 +1210,7 @@ def _base_object(backup_id: str) -> tuple[Path, dict[str, Any]]:
     if manifest.get("object_id") != backup_id or manifest.get("postgres_major") != 17:
         _fail("manifest_invalid")
     encrypted = root / "backup.tar.age"
-    _require_regular_file(encrypted, max_bytes=16 * 1024**4)
+    _require_regular_file(encrypted, max_bytes=16 * 1024**4, mode=STORE_FILE_MODE)
     if _sha256(encrypted) != manifest["ciphertext_sha256"]:
         _fail("ciphertext_digest_mismatch")
     return encrypted, manifest
@@ -820,7 +1265,7 @@ def _write_recovery_settings(destination: Path, kind: str, target: str) -> None:
     if "\n" in escaped or "\r" in escaped:
         _fail("recovery_target_invalid")
     wal_destination = destination / "pg_wal" / "%f"
-    command = f"/usr/local/libexec/kivra-memory-postgres-backup restore-wal %f {wal_destination}"
+    command = f"{HELPER_PATH} restore-wal %f {wal_destination}"
     content = (
         f"restore_command = '{command}'\n"
         f"{setting} = '{escaped}'\n"
@@ -854,17 +1299,84 @@ def restore_wal(wal_name: str, destination_arg: str) -> None:
         or RECOVERY_MOUNT not in _resolved(destination.parent).parents
     ):
         _fail("wal_restore_destination_invalid")
-    root = WAL_ROOT / wal_name
-    index = _read_index(root / "index.json", kind="wal")
-    manifest = _encrypted_manifest(root, index, kind="wal", temporary_root=RECOVERY_MOUNT)
-    encrypted = root / "segment.age"
-    _require_regular_file(encrypted, max_bytes=2 * 1024**3)
-    if manifest.get("object_id") != wal_name or _sha256(encrypted) != manifest["ciphertext_sha256"]:
-        _fail("wal_object_invalid")
+    _require_directory(WAL_ROOT, mode=0o2770)
+    _require_owned(WAL_ROOT, owner=STORE_OWNER, group=STORE_GROUP, mode=0o2770)
+    wal_root_fd = os.open(WAL_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        object_fd = os.open(
+            wal_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=wal_root_fd,
+        )
+    except OSError as exc:
+        os.close(wal_root_fd)
+        raise BackupError("wal_object_invalid") from exc
+    os.close(wal_root_fd)
+    try:
+        _require_fd_owned(object_fd, owner="postgres", group=STORE_GROUP, mode=STORE_DIRECTORY_MODE)
+    except BaseException:
+        os.close(object_fd)
+        raise
+    member_fds: list[int] = []
+    try:
+        for name in ("index.json", "recovery-manifest.json.age", "segment.age"):
+            try:
+                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=object_fd)
+            except OSError as exc:
+                raise BackupError("wal_object_invalid") from exc
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != STORE_FILE_MODE
+            ):
+                os.close(descriptor)
+                _fail("wal_object_invalid")
+            member_fds.append(descriptor)
+        index_fd, manifest_fd, encrypted_fd = member_fds
+        try:
+            index_value = json.loads(_read_fd(index_fd, max_bytes=64 * 1024))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise BackupError("manifest_invalid") from exc
+        index = _validate_index(index_value, kind="wal")
+        manifest_before = os.fstat(manifest_fd)
+        if _sha256_fd(manifest_fd, max_bytes=1024 * 1024) != index["manifest_ciphertext_sha256"]:
+            _fail("manifest_ciphertext_digest_mismatch")
+        temporary_manifest = RECOVERY_MOUNT / f"manifest-{secrets.token_hex(8)}.json"
+        try:
+            _decrypt_fd(manifest_fd, temporary_manifest)
+            manifest = _validate_manifest(
+                json.loads(temporary_manifest.read_text(encoding="utf-8")),
+                index=index,
+                kind="wal",
+            )
+            if _source_fingerprint(manifest_before) != _source_fingerprint(os.fstat(manifest_fd)):
+                _fail("source_changed_during_read")
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise BackupError("manifest_invalid") from exc
+        finally:
+            with suppress(OSError):
+                temporary_manifest.unlink()
+        if (
+            manifest.get("object_id") != wal_name
+            or _sha256_fd(encrypted_fd, max_bytes=2 * 1024**3) != manifest["ciphertext_sha256"]
+        ):
+            _fail("wal_object_invalid")
+        encrypted_before = os.fstat(encrypted_fd)
+    except BaseException:
+        for descriptor in member_fds:
+            os.close(descriptor)
+        os.close(object_fd)
+        raise
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{secrets.token_hex(8)}.tmp")
     try:
-        _decrypt_file(encrypted, temporary)
+        _decrypt_fd(encrypted_fd, temporary)
+        if (
+            _source_fingerprint(encrypted_before) != _source_fingerprint(os.fstat(encrypted_fd))
+            or _sha256_fd(encrypted_fd, max_bytes=2 * 1024**3) != manifest["ciphertext_sha256"]
+        ):
+            _fail("source_changed_during_read")
         if _sha256(temporary) != manifest["plaintext_sha256"]:
             _fail("plaintext_digest_mismatch")
         if destination.exists():
@@ -872,6 +1384,9 @@ def restore_wal(wal_name: str, destination_arg: str) -> None:
         os.rename(temporary, destination)
         _fsync_dir(destination.parent)
     finally:
+        for descriptor in member_fds:
+            os.close(descriptor)
+        os.close(object_fd)
         with suppress(OSError):
             temporary.unlink()
 
@@ -915,7 +1430,7 @@ def verify_backup(backup_id: str) -> None:
 
 
 def _read_manifest_like_status(path: Path) -> str:
-    _require_regular_file(path, max_bytes=4096)
+    _require_regular_file(path, max_bytes=4096, mode=STORE_FILE_MODE)
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         object_id = value["object_id"]
@@ -940,7 +1455,7 @@ def _verified_bases() -> list[tuple[dt.datetime, Path, dict[str, Any]]]:
         marker_path = VERIFICATION_ROOT / f"{entry.name}.json"
         if not marker_path.exists():
             continue
-        _require_regular_file(marker_path, max_bytes=4096)
+        _require_regular_file(marker_path, max_bytes=4096, mode=STORE_FILE_MODE)
         try:
             marker = json.loads(marker_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -957,7 +1472,7 @@ def _verified_bases() -> list[tuple[dt.datetime, Path, dict[str, Any]]]:
         ):
             _fail("verification_marker_invalid")
         encrypted_manifest = entry / "recovery-manifest.json.age"
-        _require_regular_file(encrypted_manifest, max_bytes=1024 * 1024)
+        _require_regular_file(encrypted_manifest, max_bytes=1024 * 1024, mode=STORE_FILE_MODE)
         if _sha256(encrypted_manifest) != manifest["manifest_ciphertext_sha256"]:
             _fail("manifest_ciphertext_digest_mismatch")
         try:
@@ -975,46 +1490,26 @@ def retain() -> None:
     bases = _verified_bases()
     if not bases:
         _fail("no_verified_recovery_chain")
-    keep: set[str] = set()
-    days: set[dt.date] = set()
-    weeks: set[tuple[int, int]] = set()
-    for created, path, _manifest in bases:
-        if len(days) < 8 and created.date() not in days:
-            days.add(created.date())
-            keep.add(path.name)
-        iso = created.isocalendar()
-        week = (iso.year, iso.week)
-        if len(weeks) < 5 and week not in weeks:
-            weeks.add(week)
-            keep.add(path.name)
-    keep.add(bases[0][1].name)
+    # A decrypt-plus-pg_verifybackup marker is necessary but not sufficient to
+    # prove a recoverable chain. Until a separately authenticated PITR result
+    # and exact base/WAL/timeline/restore-point dependency catalog exist, every
+    # deletion target is ambiguous and retention is a validation-only no-op.
     for _created, path, _manifest in bases:
         hold = path / "HOLD"
         if hold.exists():
-            _require_regular_file(hold, max_bytes=4096)
-            keep.add(path.name)
-    if not keep:
-        _fail("last_recovery_chain_unprotected")
-    oldest = min((item for item in bases if item[1].name in keep), key=lambda item: item[0])
-    # Resolve and validate every deletion target before mutating the store.
-    expired = []
-    for _created, path, _manifest in bases:
-        if path.name not in keep:
-            if path.parent != BASE_ROOT or _resolved(path).parent != _resolved(BASE_ROOT):
-                _fail("retention_target_invalid")
-            expired.append(path)
-    # Without an external, verified chain-dependency watermark, WAL eligibility
-    # is ambiguous. Validate object names and retain all WAL/history fail closed.
+            _require_regular_file(hold, max_bytes=4096, mode=STORE_FILE_MODE)
     for entry in WAL_ROOT.iterdir():
         if not WAL_RE.fullmatch(entry.name) or entry.is_symlink() or not entry.is_dir():
             _fail("unexpected_wal_object")
-    for path in expired:
-        shutil.rmtree(path)
     _replace_json(
         STATUS_ROOT / "latest-retention.json",
-        {"kept_base_count": len(keep), "oldest_kept_id": oldest[1].name, "result": "ok"},
+        {
+            "kept_base_count": len(bases),
+            "newest_verified_id": bases[0][1].name,
+            "result": "no_prune_dependency_watermark_absent",
+        },
     )
-    _log("retention", "ok", oldest[1].name.lower())
+    _log("retention", "no_prune_dependency_watermark_absent", bases[0][1].name.lower())
 
 
 def _parser() -> argparse.ArgumentParser:
