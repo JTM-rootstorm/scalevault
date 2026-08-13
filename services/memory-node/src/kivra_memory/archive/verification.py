@@ -58,6 +58,11 @@ class ArchiveSignerEpoch:
     first_event_sequence: int
     last_event_sequence: int | None
     verifier: ArchiveCommitVerifier
+    epoch_id: str = "legacy"
+    public_key_fingerprint: str | None = None
+    transition_record_id: str | None = None
+    compromised_last_commit: str | None = None
+    compromised_last_event_sequence: int | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.first_event_sequence, bool) or self.first_event_sequence < 1:
@@ -67,6 +72,26 @@ class ArchiveSignerEpoch:
             or self.last_event_sequence < self.first_event_sequence
         ):
             raise ValueError("signer epoch last sequence is invalid")
+        if not self.epoch_id or len(self.epoch_id) > 128:
+            raise ValueError("signer epoch identity is invalid")
+        if (self.compromised_last_commit is None) != (self.compromised_last_event_sequence is None):
+            raise ValueError("compromised signer cutoff must bind commit and sequence")
+        if self.compromised_last_commit is not None and (
+            len(self.compromised_last_commit) not in {40, 64}
+            or any(
+                character not in "0123456789abcdef" for character in self.compromised_last_commit
+            )
+        ):
+            raise ValueError("compromised signer cutoff commit is invalid")
+        if self.compromised_last_event_sequence is not None and (
+            isinstance(self.compromised_last_event_sequence, bool)
+            or self.compromised_last_event_sequence < self.first_event_sequence
+            or (
+                self.last_event_sequence is not None
+                and self.compromised_last_event_sequence > self.last_event_sequence
+            )
+        ):
+            raise ValueError("compromised signer cutoff sequence is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,6 +389,7 @@ def verify_signed_archive_epochs(
 
     verified_commits: list[VerifiedArchiveCommit] = []
     expected_parent_sha: str | None = None
+    observed_cutoffs: set[str] = set()
     try:
         for candidate in candidates:
             verified_batch = verify_archive_batch(
@@ -384,11 +410,24 @@ def verify_signed_archive_epochs(
                 raise ArchiveVerificationError(
                     "archive batch crosses or misses an external signer epoch"
                 )
+            epoch = matching[0]
+            cutoff_sequence = epoch.compromised_last_event_sequence
+            if cutoff_sequence is not None:
+                if manifest.last_event_sequence > cutoff_sequence:
+                    raise ArchiveVerificationError(
+                        "archive signer commit is beyond its compromise cutoff"
+                    )
+                if manifest.last_event_sequence == cutoff_sequence:
+                    if candidate.commit_sha != epoch.compromised_last_commit:
+                        raise ArchiveVerificationError(
+                            "archive signer compromise cutoff commit does not match"
+                        )
+                    observed_cutoffs.add(epoch.epoch_id)
             expected_files = {
                 MANIFEST_PATH: verified_batch.manifest_bytes,
                 **verified_batch.files,
             }
-            verified_git = matching[0].verifier.verify_archive_commit(
+            verified_git = epoch.verifier.verify_archive_commit(
                 candidate.commit_sha,
                 expected_parent_sha=expected_parent_sha,
                 expected_message=archive_commit_message(
@@ -405,6 +444,11 @@ def verify_signed_archive_epochs(
 
     verified_batches = tuple(commit.batch for commit in verified_commits)
     verify_manifest_chain(verified_batches)
+    expected_cutoffs = {
+        epoch.epoch_id for epoch in policy if epoch.compromised_last_commit is not None
+    }
+    if observed_cutoffs != expected_cutoffs:
+        raise ArchiveVerificationError("archive signer compromise cutoff anchor is absent")
     return VerifiedArchive(commits=tuple(verified_commits))
 
 

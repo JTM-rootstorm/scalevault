@@ -209,3 +209,51 @@ def test_signer_epochs_apply_exact_bounded_ranges(monkeypatch: pytest.MonkeyPatc
                 ArchiveSignerEpoch(2, None, EpochVerifier((SHA,))),
             ),
         )
+
+    with pytest.raises(ArchiveVerificationError, match="beyond its compromise cutoff"):
+        verify_signed_archive_epochs(
+            (
+                ArchiveCommitBatch(SHA, first),
+                ArchiveCommitBatch(OTHER_SHA, second),
+            ),
+            (
+                ArchiveSignerEpoch(
+                    1,
+                    None,
+                    EpochVerifier((SHA,)),
+                    epoch_id="compromised",
+                    compromised_last_commit=SHA,
+                    compromised_last_event_sequence=1,
+                ),
+            ),
+        )
+
+    with pytest.raises(ArchiveVerificationError, match="cutoff commit does not match"):
+        verify_signed_archive_epochs(
+            (ArchiveCommitBatch(SHA, first),),
+            (
+                ArchiveSignerEpoch(
+                    1,
+                    None,
+                    EpochVerifier(()),
+                    epoch_id="compromised",
+                    compromised_last_commit=OTHER_SHA,
+                    compromised_last_event_sequence=1,
+                ),
+            ),
+        )
+
+    with pytest.raises(ArchiveVerificationError, match="cutoff anchor is absent"):
+        verify_signed_archive_epochs(
+            (ArchiveCommitBatch(SHA, first),),
+            (
+                ArchiveSignerEpoch(
+                    1,
+                    None,
+                    EpochVerifier((SHA,)),
+                    epoch_id="compromised",
+                    compromised_last_commit=OTHER_SHA,
+                    compromised_last_event_sequence=2,
+                ),
+            ),
+        )

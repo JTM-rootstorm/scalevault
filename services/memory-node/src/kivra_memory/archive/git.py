@@ -21,8 +21,9 @@ _IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@+-]{0,127}")
 _EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+")
 _SIGNATURE_STATUS = re.compile(
     rb'Good "git" signature for ([A-Za-z0-9][A-Za-z0-9_.@+\-]{0,127}) '
-    rb"with [A-Z0-9][A-Z0-9_-]{0,31} key SHA256:[A-Za-z0-9+/=]{4,128}"
+    rb"with [A-Z0-9][A-Z0-9_-]{0,31} key (SHA256:[A-Za-z0-9+/=]{4,128})"
 )
+_KEY_FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/=]{4,128}")
 _DEFAULT_STDOUT_LIMIT = 8 * 1024 * 1024
 _DEFAULT_STDERR_LIMIT = 256 * 1024
 _MAX_STDOUT_LIMIT = 64 * 1024 * 1024 + 1
@@ -246,6 +247,7 @@ class GitVerificationConfig:
     signer_principal: str
     author_name: str
     author_email: str
+    expected_key_fingerprint: str | None = None
     git_executable: Path = Path("/usr/bin/git")
     ssh_keygen_executable: Path = Path("/usr/bin/ssh-keygen")
     timeout_seconds: int = 30
@@ -264,6 +266,11 @@ class GitVerificationConfig:
             self.author_name,
             self.author_email,
         )
+        if (
+            self.expected_key_fingerprint is not None
+            and _KEY_FINGERPRINT.fullmatch(self.expected_key_fingerprint) is None
+        ):
+            raise ValueError("Git signer fingerprint is invalid")
         if isinstance(self.timeout_seconds, bool) or not 1 <= self.timeout_seconds <= 120:
             raise ValueError("Git timeout is outside the accepted range")
 
@@ -288,13 +295,17 @@ class GitCommitVerifier:
             stdout_limit_bytes=64 * 1024,
             stderr_limit_bytes=64 * 1024,
         )
-        principals = {
-            match.group(1).decode("ascii")
+        identities = {
+            (match.group(1).decode("ascii"), match.group(2).decode("ascii"))
             for line in (*result.stderr.splitlines(), *result.stdout.splitlines())
             if (match := _SIGNATURE_STATUS.fullmatch(line)) is not None
         }
-        if principals != {self._config.signer_principal}:
+        if {principal for principal, _fingerprint in identities} != {self._config.signer_principal}:
             raise GitSigningError("Git commit signer identity did not match the trust anchor")
+        if self._config.expected_key_fingerprint is not None and identities != {
+            (self._config.signer_principal, self._config.expected_key_fingerprint)
+        }:
+            raise GitSigningError("Git commit signer key did not match the trust anchor")
 
     def verify_archive_commit(
         self,

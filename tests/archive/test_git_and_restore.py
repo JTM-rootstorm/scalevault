@@ -12,8 +12,10 @@ import pytest
 from kivra_memory.archive.codec import SnapshotData, SnapshotTable
 from kivra_memory.archive.git import (
     GitCommitSigner,
+    GitCommitVerifier,
     GitSigningConfig,
     GitSigningError,
+    GitVerificationConfig,
     ProcessResult,
     SubprocessRunner,
     VerifiedGitCommit,
@@ -139,6 +141,40 @@ def test_signature_verification_requires_pinned_signer_identity() -> None:
     runner = RecordingRunner([ProcessResult(0, stderr=b'Good "git" signature for other')])
     with pytest.raises(GitSigningError, match="identity"):
         signer(runner).verify_commit(SHA)
+
+
+def test_verification_only_config_binds_exact_signer_fingerprint() -> None:
+    fingerprint = "SHA256:" + "A" * 43
+    signature = (
+        f'Good "git" signature for archive@scalevault with ED25519 key {fingerprint}\n'
+    ).encode("ascii")
+    runner = RecordingRunner([ProcessResult(0, stderr=signature)])
+    verifier = GitCommitVerifier(
+        GitVerificationConfig(
+            repository=Path("/archive"),
+            allowed_signers_file=Path("/etc/scalevault/allowed_signers"),
+            signer_principal="archive@scalevault",
+            author_name="ScaleVault Archive",
+            author_email="archive@scalevault.invalid",
+            expected_key_fingerprint=fingerprint,
+        ),
+        runner,
+    )
+    verifier.verify_commit(SHA)
+
+    mismatched = GitCommitVerifier(
+        GitVerificationConfig(
+            repository=Path("/archive"),
+            allowed_signers_file=Path("/etc/scalevault/allowed_signers"),
+            signer_principal="archive@scalevault",
+            author_name="ScaleVault Archive",
+            author_email="archive@scalevault.invalid",
+            expected_key_fingerprint="SHA256:" + "B" * 43,
+        ),
+        RecordingRunner([ProcessResult(0, stderr=signature)]),
+    )
+    with pytest.raises(GitSigningError, match="key did not match"):
+        mismatched.verify_commit(SHA)
 
     prefix = b'Good "git" signature for archive@scalevault.evil with ED25519 key SHA256:test\n'
     runner = RecordingRunner([ProcessResult(0, stderr=prefix)])
