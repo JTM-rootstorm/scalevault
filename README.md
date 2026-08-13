@@ -41,6 +41,14 @@ an isolated temporary cluster and removes it afterward. Release acceptance uses
 `make test-database-required`, which fails instead of skipping when PostgreSQL
 or any required extension is unavailable.
 
+Milestone 10 freezes the additional closeout lanes as `make verify-m10-local`
+for the complete repository, targeted deployment/permission, and Prometheus
+rule gates, plus `make test-m10-database-required` on the Debian PostgreSQL 17
+validation host. The latter explicitly requires database, production-helper
+PITR, and real encrypted-bundle tests and fails rather than silently accepting
+a missing required dependency. Override `M10_PG_BINDIR` only for a reviewed
+PostgreSQL 17 installation.
+
 For interactive development, start the checked-in PostgreSQL service and then
 run the Memory API:
 

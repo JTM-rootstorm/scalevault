@@ -1,4 +1,4 @@
-.PHONY: bootstrap build build-go format generate generate-protobuf lint migrate-database test test-fast test-database test-database-required verify verify-generated verify-go verify-go-build verify-locks verify-plugin verify-protobuf verify-python verify-schemas
+.PHONY: bootstrap build build-go format generate generate-protobuf lint migrate-database test test-fast test-database test-database-required test-m10-database-required test-m10-deployment verify verify-generated verify-go verify-go-build verify-locks verify-m10-local verify-m10-rules verify-plugin verify-protobuf verify-python verify-schemas
 
 UV_CACHE_DIR ?= .cache/uv
 GOCACHE ?= $(CURDIR)/.cache/go-build
@@ -7,6 +7,7 @@ PYTHON ?= UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --locked
 PNPM ?= pnpm
 PLUGIN_DIR ?= plugins/continuity-archive
 BUILD_DIR ?= bin
+M10_PG_BINDIR ?= /usr/lib/postgresql/17/bin
 GO_BUILD_FLAGS ?= -trimpath -buildvcs=false -ldflags=-buildid=
 
 bootstrap:
@@ -51,7 +52,33 @@ test-database:
 test-database-required:
 	SCALEVAULT_REQUIRE_DATABASE_TESTS=1 $(PYTHON) pytest tests/integration
 
+test-m10-database-required:
+	SCALEVAULT_TEST_PG_BINDIR=$(M10_PG_BINDIR) \
+	SCALEVAULT_REQUIRE_DATABASE_TESTS=1 \
+	SCALEVAULT_REQUIRE_BACKUP_TESTS=1 \
+	SCALEVAULT_REQUIRE_ARCHIVE_BUNDLE_TESTS=1 \
+	$(PYTHON) pytest tests/integration
+
+test-m10-deployment:
+	$(PYTHON) pytest \
+		tests/unit/deploy/test_backup_deployment.py \
+		tests/unit/deploy/test_m10_security_deployment.py \
+		tests/unit/deploy/test_metrics_exporter_deployment.py \
+		tests/unit/deploy/test_monitoring_rules.py \
+		tests/unit/deploy/test_operator_report_deployment.py \
+		tests/unit/deploy/test_release_deployment.py \
+		tests/unit/security/test_destruction_broker.py \
+		tests/unit/security/test_destruction_ledger.py \
+		tests/unit/security/test_local_key_provider.py \
+		tests/unit/security/test_operational_canary.py
+
 verify: verify-locks verify-python verify-go verify-go-build verify-schemas verify-plugin
+
+verify-m10-local: verify test-m10-deployment verify-m10-rules
+
+verify-m10-rules:
+	promtool check rules deploy/memory-node/monitoring/scalevault.rules.yml
+	promtool test rules deploy/memory-node/monitoring/scalevault.rules.test.yml
 
 verify-locks:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv lock --check

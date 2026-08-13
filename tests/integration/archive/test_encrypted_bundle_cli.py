@@ -88,6 +88,8 @@ def disposable_restore_database(
     encrypted_gate_root: Path,
 ) -> tuple[str, Path]:
     if shutil.which("age") is None or shutil.which("age-keygen") is None:
+        if os.environ.get("SCALEVAULT_REQUIRE_ARCHIVE_BUNDLE_TESTS") == "1":
+            pytest.fail("age and age-keygen are required for the archive bundle gate")
         pytest.skip("age and age-keygen are required")
     database_name = "scalevault_recovery_encrypted_bundle"
     with Connection.connect(postgresql_server.database_url, autocommit=True) as connection:
@@ -114,7 +116,8 @@ def disposable_restore_database(
 
 
 @pytest.mark.skipif(
-    shutil.which("age") is None or shutil.which("age-keygen") is None,
+    (shutil.which("age") is None or shutil.which("age-keygen") is None)
+    and os.environ.get("SCALEVAULT_REQUIRE_ARCHIVE_BUNDLE_TESTS") != "1",
     reason="age and age-keygen are required",
 )
 def test_cli_creates_and_restores_encrypted_signed_archive_object(
@@ -122,6 +125,8 @@ def test_cli_creates_and_restores_encrypted_signed_archive_object(
     disposable_restore_database: tuple[str, Path],
 ) -> None:
     if shutil.which("age") is None or shutil.which("age-keygen") is None:
+        if os.environ.get("SCALEVAULT_REQUIRE_ARCHIVE_BUNDLE_TESTS") == "1":
+            pytest.fail("age and age-keygen are required for the archive bundle gate")
         pytest.skip("age and age-keygen are required")
     tmp_path = encrypted_gate_root
     tmp_path.chmod(0o700)
