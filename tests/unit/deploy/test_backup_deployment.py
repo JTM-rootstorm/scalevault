@@ -77,7 +77,7 @@ def _index(backup_id: str, created: datetime) -> dict[str, object]:
 
 
 def _retention_base(module: Any, backup_id: str, created: datetime) -> Path:
-    root = module.BASE_ROOT / backup_id
+    root = cast(Path, module.BASE_ROOT) / backup_id
     root.mkdir(mode=0o770)
     root.chmod(0o770)
     encrypted_manifest = root / "recovery-manifest.json.age"
@@ -94,7 +94,7 @@ def _retention_base(module: Any, backup_id: str, created: datetime) -> Path:
 
 
 def _retention_wal(module: Any, wal_name: str, created: datetime) -> Path:
-    root = module.WAL_ROOT / wal_name
+    root = cast(Path, module.WAL_ROOT) / wal_name
     root.mkdir(mode=0o770)
     root.chmod(0o770)
     segment = root / "segment.age"
