@@ -14,3 +14,7 @@ scrape_configs:
     static_configs:
       - targets:
           - 127.0.0.1:9098
+  - job_name: scalevault-postgresql
+    static_configs:
+      - targets:
+          - 127.0.0.1:9187

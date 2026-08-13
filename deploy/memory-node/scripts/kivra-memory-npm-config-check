@@ -28,7 +28,8 @@ owner=$(stat -c '%u' -- "$configuration") || fail "configuration metadata is una
 # rewriting interactions remain an explicit manual review gate.
 if awk '
 function reset_counts() {
-    location_count = real_unix = recursive_off = upstream = 0
+    location_count = all_locations = real_unix = recursive_off = upstream = 0
+    method_guards = listeners = 0
     request_headers_off = retry_off = redirect_off = access_off = 0
     block_exploits = basic_auth = proxy_ssl = broad_trust = 0
     authorization_clear = force_redirect = 0
@@ -50,6 +51,13 @@ function evaluate_target() {
     if (failure == 0 && broad_trust != 0) failure = 22
     if (failure == 0 && authorization_clear != 0) failure = 23
     if (failure == 0 && force_redirect != 0) failure = 24
+    if (failure == 0 && method_guards != 1) failure = 25
+    if (failure == 0 && listeners < 1) failure = 26
+    selected_locations = all_locations
+    selected_listeners = listeners
+    selected_methods = method_guards
+    selected_proxies = upstream
+    selected_real_ip = real_unix + recursive_off
 }
 function brace_delta(value, opened, closed, copy) {
     copy = value
@@ -64,7 +72,10 @@ function brace_delta(value, opened, closed, copy) {
     reset_counts()
 }
 inside_server {
+    if ($0 ~ /^[[:space:]]*location[[:space:]]/) all_locations++
     if ($0 ~ /^[[:space:]]*location \/mcp([[:space:]]|\{)/) location_count++
+    if ($0 ~ /^[[:space:]]*listen[[:space:]]/) listeners++
+    if (index($0, "if ($request_method !~ ^(GET|POST|DELETE)$) { return 405; }") > 0) method_guards++
     if ($0 ~ /^[[:space:]]*set_real_ip_from unix:;/) real_unix++
     if ($0 ~ /^[[:space:]]*real_ip_recursive off;/) recursive_off++
     if ($0 ~ /^[[:space:]]*proxy_pass http:\/\/[^;]*:8443(\/mcp)?;/) upstream++
@@ -86,7 +97,8 @@ inside_server {
 }
 END {
     if (targets != 1) exit 10
-    exit failure
+    if (failure != 0) exit failure
+    printf "{\"ok\":true,\"counts\":{\"listener\":%d,\"location\":%d,\"method\":%d,\"proxy\":%d,\"real_ip\":%d,\"server\":%d}}\n", selected_listeners, selected_locations, selected_methods, selected_proxies, selected_real_ip, targets
 }
 ' "$configuration"; then
     result=0
@@ -111,7 +123,7 @@ case "$result" in
     22) fail "broad RFC1918 real-IP trust is forbidden in the ScaleVault server" ;;
     23) fail "the ScaleVault server must not clear Authorization" ;;
     24) fail "Force SSL redirects are forbidden" ;;
+    25) fail "expected exactly one fixed method policy" ;;
+    26) fail "expected at least one listener in the target server" ;;
     *) fail "configuration scan failed" ;;
 esac
-
-printf '%s\n' "NPM configuration contract satisfied"

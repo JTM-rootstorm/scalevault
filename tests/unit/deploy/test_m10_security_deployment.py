@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -77,9 +78,11 @@ def test_npm_checker_accepts_sanitized_contract(tmp_path: Path) -> None:
         "  location / { proxy_pass http://UNRELATED:9000; }\n"
         "}\n"
         "server {\n"
+        "  listen 443 ssl;\n"
         "  set_real_ip_from unix:;\n"
         "  real_ip_recursive off;\n"
         "  location /mcp {\n"
+        "    if ($request_method !~ ^(GET|POST|DELETE)$) { return 405; }\n"
         "    proxy_pass_request_headers off;\n"
         "    proxy_next_upstream off;\n"
         "    proxy_redirect off;\n"
@@ -100,7 +103,17 @@ def test_npm_checker_accepts_sanitized_contract(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0
-    assert result.stdout == "NPM configuration contract satisfied\n"
+    assert json.loads(result.stdout) == {
+        "ok": True,
+        "counts": {
+            "listener": 1,
+            "location": 2,
+            "method": 1,
+            "proxy": 1,
+            "real_ip": 2,
+            "server": 1,
+        },
+    }
     assert result.stderr == ""
 
 
@@ -122,9 +135,11 @@ def test_npm_checker_rejects_known_drift_without_dumping_configuration(
     canary = "PRIVATE_PAYLOAD_CANARY_MUST_NOT_BE_PRINTED"
     configuration.write_text(
         "server {\n"
+        "  listen 443 ssl;\n"
         "  set_real_ip_from unix:;\n"
         "  real_ip_recursive off;\n"
         "  location /mcp {\n"
+        "    if ($request_method !~ ^(GET|POST|DELETE)$) { return 405; }\n"
         "    proxy_pass_request_headers off;\n"
         "    proxy_next_upstream off;\n"
         "    proxy_redirect off;\n"
@@ -164,3 +179,45 @@ def test_npm_checker_rejects_linked_input(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "exactly one hard link" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected"),
+    (
+        ("listen 443 ssl;", "listener"),
+        ("if ($request_method !~ ^(GET|POST|DELETE)$) { return 405; }", "method policy"),
+    ),
+)
+def test_npm_checker_requires_listener_and_exact_method_policy(
+    tmp_path: Path, policy: str, expected: str
+) -> None:
+    configuration = tmp_path / "nginx.conf"
+    lines = [
+        "server {",
+        "  listen 443 ssl;",
+        "  set_real_ip_from unix:;",
+        "  real_ip_recursive off;",
+        "  location /mcp {",
+        "    if ($request_method !~ ^(GET|POST|DELETE)$) { return 405; }",
+        "    proxy_pass_request_headers off;",
+        "    proxy_next_upstream off;",
+        "    proxy_redirect off;",
+        "    access_log off;",
+        "    proxy_pass http://PRIVATE_BACKEND:8443;",
+        "  }",
+        "  location ~ ^/(?!mcp$) {",
+        "    access_log off;",
+        "    return 404;",
+        "  }",
+        "}",
+    ]
+    configuration.write_text("\n".join(line for line in lines if line.strip() != policy) + "\n")
+    configuration.chmod(0o600)
+
+    result = subprocess.run(
+        [NPM_CHECKER, configuration], text=True, capture_output=True, check=False
+    )
+
+    assert result.returncode != 0
+    assert expected in result.stderr
+    assert result.stdout == ""

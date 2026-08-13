@@ -37,6 +37,8 @@ def test_prometheus_scrapes_dedicated_exporter_only_on_loopback() -> None:
     config = (REPOSITORY_ROOT / "deploy/memory-node/monitoring/prometheus.yml.example").read_text()
     assert "job_name: scalevault-database-metrics" in config
     assert "127.0.0.1:9098" in config
+    assert "job_name: scalevault-postgresql" in config
+    assert "127.0.0.1:9187" in config
     assert "0.0.0.0" not in config
 
 
