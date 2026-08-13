@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Final, Literal
 
 from kivra_memory.domain.canonical_json import parse_json_strict
+from kivra_memory.security.credential_files import read_protected_file
 
 
 class LeakageReason(StrEnum):
@@ -44,6 +45,10 @@ class LeakageReason(StrEnum):
     LINK_OR_SPECIAL_FILE = "link_or_special_file"
     CANARY_INPUT_INVALID = "canary_input_invalid"
     INTERNAL_ERROR = "internal_error"
+
+
+class _UnsafeCandidateTree(Exception):
+    """Internal control flow after a fixed structural rejection is recorded."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,63 +95,175 @@ class LeakageScanResult:
         }
 
 
-_FORBIDDEN_FIELDS: Final = frozenset(
+_FORBIDDEN_FIELD_SPELLINGS: Final = frozenset(
     {
+        # Sealed envelope and authenticated-content material.
+        "aad",
         "aad_hash",
         "aad_sha256",
-        "access_token",
-        "api_key",
+        "additional_authenticated_data",
+        "authentication_tag",
+        "auth_tag",
+        "sealed_aad_sha256",
+        "sealed_algorithm",
+        "sealed_ciphertext",
+        "sealed_envelope",
+        "sealed_envelope_version",
+        "sealed_nonce",
+        "tag",
+        # Content-key provider material and destruction proof.
+        "content_key",
         "archive_manifest_digest",
-        "archive_previous_digest",
-        "authorization",
-        "bearer_token",
         "ciphertext",
-        "client_secret",
         "content_key_id",
+        "content_key_identifier",
         "content_key_reference",
-        "database_url",
-        "deployment_id",
-        "deployment_identifier",
+        "destruction_receipt",
+        "destruction_receipt_sha256",
+        "destruction_tombstone",
+        "key_destruction_receipt",
+        "key_provider",
+        "key_provider_name",
+        "key_reference",
+        "provider",
+        "provider_key_reference",
+        "provider_name",
+        # Canonical statement, rationale, evidence, and content metadata.
         "evidence",
+        "evidence_excerpt",
         "evidence_key",
         "evidence_references",
         "evidence_summary",
         "evidence_text",
+        "excerpt",
+        "interpretation_limits",
+        "metadata",
+        "memory_statement",
+        "payload",
+        "payload_canonical",
+        "rationale",
+        "reason",
+        "reason_to_remember",
+        "resolution_rationale",
+        "statement",
+        # Private source, transcript, manifest, and canonical event linkage.
+        "archive_source_path",
+        "archive_path",
+        "archive_previous_digest",
+        "causation_event_id",
+        "canonical_event_id",
+        "canonical_event_sequence",
+        "command_sha256",
+        "correlation_id",
+        "content_sha256",
+        "event_id",
+        "event_sequence",
         "git_commit_sha",
-        "installation_id",
-        "key_reference",
         "manifest_linkage",
+        "manifest_digest",
+        "manifest_id",
+        "manifest_path",
+        "manifest_sha256",
         "nonce",
-        "password",
+        "origin_session_id",
+        "payload_sha256",
         "postgres_timeline_id",
-        "private_key",
         "private_manifest_linkage",
+        "private_source",
+        "private_path",
         "private_source_reference",
         "previous_manifest_sha256",
-        "provider_key_reference",
+        "previous_event_id",
         "source_archive_path",
         "source_high_water_sequence",
         "source_ref",
         "source_reference",
+        "transcript",
+        "transcript_id",
+        "transcript_reference",
+        # Private identity and installation linkage.
+        "actor",
+        "actor_id",
+        "archive_target_id",
+        "branch",
+        "branch_id",
+        "client",
+        "client_id",
+        "credential",
+        "credential_id",
+        "deployment",
+        "deployment_id",
+        "deployment_identifier",
+        "host",
+        "host_id",
+        "host_identifier",
+        "host_name",
+        "hostname",
+        "ingress",
+        "ingress_id",
+        "installation",
+        "installation_id",
+        "lineage",
+        "lineage_id",
+        "memory_id",
+        "repository",
+        "repository_external_id",
+        "repository_id",
+        "repository_name",
+        "repository_owner",
+        "repository_url",
+        "session_id",
+        "source_memory_id",
+        "subject_id",
+        "target_memory_id",
+        "tenant",
+        "tenant_id",
+        "transport_binding_id",
+        "transport_installation_id",
+        # Credential-bearing structured fields are rejected independently of value.
+        "access_token",
+        "api_key",
+        "authorization",
+        "bearer_token",
+        "certificate_sha256",
+        "client_secret",
+        "database_url",
+        "password",
+        "private_key",
+        "secret_hash",
+        "secret_hash_key_id",
+        "secret_verifier",
         "token_pepper",
     }
 )
-_TEXT_FIELD = re.compile(rb"(?im)^[ \t]*[\"']?([a-zA-Z][a-zA-Z0-9_-]{0,63})[\"']?[ \t]*[:=]")
+_TEXT_FIELD = re.compile(r"(?m)^[ \t]*[\"']?([^:=\r\n]{1,128}?)[\"']?[ \t]*[:=]")
 _CREDENTIAL_PATTERNS: Final = (
     re.compile(rb"(?i)\bauthorization\s*[:=]\s*[\"']?(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(rb"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{32,}"),
+    re.compile(rb"(?i)\bbasic\s+[A-Za-z0-9+/]{12,}={0,2}\b"),
     re.compile(rb"\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,})\b"),
     re.compile(rb"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b"),
+    re.compile(rb"\b(?:glpat-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})\b"),
+    re.compile(rb"\bAKIA[A-Z0-9]{16}\b"),
+    re.compile(
+        rb"\bsvb1\.[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-"
+        rb"[0-9a-f]{12}\.[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-"
+        rb"[0-9a-f]{12}\.[A-Za-z0-9_-]{43}\b"
+    ),
+    re.compile(rb"\bhmac-sha256-v1:[A-Za-z0-9_-]{43}\b"),
     re.compile(rb"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"),
     re.compile(rb"(?i)\bpostgres(?:ql)?://[^\s/:@]+:[^\s/@]+@"),
+    re.compile(rb"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"),
     re.compile(
-        rb"(?i)[\"']?(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"
-        rb"[\"']?\s*[:=]\s*[\"'][^\s\"']{8,}[\"']"
+        rb"(?i)[\"']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|"
+        rb"client[_-]?secret|password|private[_-]?key|secret|token)[\"']?\s*[:=]\s*"
+        rb"(?:[\"'][^\s\"']{8,}[\"']|[A-Za-z0-9._~+/=-]{16,})"
     ),
 )
 _INCOMPLETE_ARTIFACT_SHA256: Final = hashlib.sha256(
     b"scalevault-incomplete-public-candidate-v1"
 ).hexdigest()
+_MOUNTINFO_MAXIMUM_BYTES: Final = 2 * 1024 * 1024
 
 
 def _artifact_digest(files: Sequence[CandidateFile]) -> str:
@@ -190,36 +307,190 @@ def _valid_relative_path(path: str, policy: LeakageScannerPolicy) -> bool:
     )
 
 
-def _canary_forms(
-    canary: bytes,
-) -> tuple[bytes, frozenset[bytes], frozenset[bytes], frozenset[bytes]]:
-    base64_forms = {
-        base64.b64encode(canary),
-        base64.urlsafe_b64encode(canary),
-        base64.b64encode(canary).rstrip(b"="),
-        base64.urlsafe_b64encode(canary).rstrip(b"="),
-    }
-    hex_forms = {canary.hex().encode("ascii"), canary.hex().upper().encode("ascii")}
-    digest_forms: set[bytes] = set()
-    value = hashlib.sha256(canary)
-    digest_forms.update(
-        {
-            value.hexdigest().encode("ascii"),
-            value.hexdigest().upper().encode("ascii"),
-            base64.b64encode(value.digest()),
-            base64.urlsafe_b64encode(value.digest()).rstrip(b"="),
-        }
+def _stable_directory_metadata(before: os.stat_result, after: os.stat_result) -> bool:
+    fields = (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_nlink",
+        "st_uid",
+        "st_gid",
+        "st_mtime_ns",
+        "st_ctime_ns",
     )
-    return canary, frozenset(base64_forms), frozenset(hex_forms), frozenset(digest_forms)
+    return all(getattr(before, field) == getattr(after, field) for field in fields)
 
 
-def _structured_fields(document: bytes, suffix: str) -> set[str]:
+def _directory_names(directory_descriptor: int, *, maximum_entries: int) -> tuple[str, ...]:
+    names: list[str] = []
+    with os.scandir(directory_descriptor) as entries:
+        for entry in entries:
+            names.append(entry.name)
+            if len(names) > maximum_entries:
+                raise ValueError
+    names.sort()
+    return tuple(names)
+
+
+def _unescape_mountinfo_path(value: str) -> str:
+    for encoded, decoded in (
+        ("\\040", " "),
+        ("\\011", "\t"),
+        ("\\012", "\n"),
+        ("\\134", "\\"),
+    ):
+        value = value.replace(encoded, decoded)
+    return value
+
+
+def _mountinfo_snapshot() -> tuple[tuple[str, str, str, str, str], ...]:
+    descriptor = os.open("/proc/self/mountinfo", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(65_536, _MOUNTINFO_MAXIMUM_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > _MOUNTINFO_MAXIMUM_BYTES:
+                raise ValueError
+        raw = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError:
+        raise ValueError from None
+    mounts: list[tuple[str, str, str, str, str]] = []
+    for line in text.splitlines():
+        fields = line.split(" ")
+        if len(fields) < 10 or "-" not in fields[6:]:
+            raise ValueError
+        mount_id, parent_id, device, mount_root, mount_point = fields[:5]
+        if not mount_id.isdecimal() or not parent_id.isdecimal() or ":" not in device:
+            raise ValueError
+        mounts.append(
+            (
+                mount_id,
+                parent_id,
+                device,
+                _unescape_mountinfo_path(mount_root),
+                _unescape_mountinfo_path(mount_point),
+            )
+        )
+    if not mounts:
+        raise ValueError
+    mounts.sort()
+    return tuple(mounts)
+
+
+def _contains_nested_mount(root: Path, mounts: Sequence[tuple[str, str, str, str, str]]) -> bool:
+    root_text = str(root)
+    prefix = root_text.rstrip("/") + "/"
+    return any(mount_point.startswith(prefix) for *_, mount_point in mounts)
+
+
+@dataclass(frozen=True, slots=True)
+class _CanaryForms:
+    exact: bytes
+    normalized: frozenset[bytes]
+    base64: frozenset[bytes]
+    hexadecimal: frozenset[bytes]
+    digest: frozenset[bytes]
+
+
+def _canary_forms(canary: bytes) -> _CanaryForms:
+    byte_forms = {canary}
+    try:
+        text = canary.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    else:
+        byte_forms.add(unicodedata.normalize("NFC", text).encode("utf-8"))
+        byte_forms.add(unicodedata.normalize("NFKC", text).encode("utf-8"))
+    normalized = byte_forms - {canary}
+    base64_forms: set[bytes] = set()
+    hex_forms: set[bytes] = set()
+    digest_forms: set[bytes] = set()
+    for value in byte_forms:
+        standard = base64.b64encode(value)
+        urlsafe = base64.urlsafe_b64encode(value)
+        base64_forms.update({standard, standard.rstrip(b"="), urlsafe, urlsafe.rstrip(b"=")})
+        hexadecimal = value.hex()
+        hex_forms.update({hexadecimal.encode("ascii"), hexadecimal.upper().encode("ascii")})
+        digest = hashlib.sha256(value).hexdigest()
+        digest_forms.update({digest.encode("ascii"), digest.upper().encode("ascii")})
+    return _CanaryForms(
+        exact=canary,
+        normalized=frozenset(normalized),
+        base64=frozenset(base64_forms),
+        hexadecimal=frozenset(hex_forms),
+        digest=frozenset(digest_forms),
+    )
+
+
+def _normalized_field_name(value: str) -> str:
+    return "".join(
+        character
+        for character in unicodedata.normalize("NFKC", value).casefold()
+        if character.isalnum()
+    )
+
+
+_FORBIDDEN_FIELDS: Final = frozenset(
+    _normalized_field_name(value) for value in _FORBIDDEN_FIELD_SPELLINGS
+)
+_PRIVATE_IDENTIFIER_ROOTS: Final = (
+    "actor",
+    "archivetarget",
+    "branch",
+    "client",
+    "conflict",
+    "credential",
+    "deployment",
+    "evidence",
+    "host",
+    "ingress",
+    "installation",
+    "lineage",
+    "link",
+    "memory",
+    "repository",
+    "session",
+    "subject",
+    "tenant",
+    "transportbinding",
+    "transportinstallation",
+)
+_PRIVATE_IDENTIFIER_SUFFIXES: Final = (
+    "externalid",
+    "id",
+    "identifier",
+    "name",
+    "owner",
+    "url",
+    "uuid",
+)
+
+
+def _is_forbidden_field(value: str) -> bool:
+    normalized = _normalized_field_name(value)
+    if normalized in _FORBIDDEN_FIELDS:
+        return True
+    return any(root in normalized for root in _PRIVATE_IDENTIFIER_ROOTS) and normalized.endswith(
+        _PRIVATE_IDENTIFIER_SUFFIXES
+    )
+
+
+def _structured_content(document: bytes, suffix: str) -> tuple[set[str], str]:
+    text = document.decode("utf-8")
     fields = {
-        match.group(1).decode("ascii").lower().replace("-", "_")
-        for match in _TEXT_FIELD.finditer(document)
+        match.group(1).strip() for match in _TEXT_FIELD.finditer(text) if match.group(1).strip()
     }
     if suffix not in {".json", ".jsonl"}:
-        return fields
+        return fields, ""
     values: list[object]
     if suffix == ".json":
         values = [parse_json_strict(document)]
@@ -227,18 +498,26 @@ def _structured_fields(document: bytes, suffix: str) -> set[str]:
         lines = [line for line in document.splitlines() if line.strip()]
         values = [parse_json_strict(line) for line in lines]
 
+    strings: list[str] = []
+
     def visit(value: object) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
-                fields.add(key.lower().replace("-", "_"))
+                fields.add(_normalized_field_name(key))
                 visit(child)
         elif isinstance(value, list):
             for child in value:
                 visit(child)
+        elif isinstance(value, str):
+            if "\x00" in value or any(
+                ord(character) < 0x20 and character not in "\n\r\t" for character in value
+            ):
+                raise ValueError
+            strings.append(value)
 
     for value in values:
         visit(value)
-    return fields
+    return fields, "\x00".join(strings)
 
 
 def scan_candidate_files(
@@ -272,21 +551,25 @@ def scan_candidate_files(
             supplied_canaries.append(canary)
             if len(supplied_canaries) > policy.maximum_canaries:
                 counts[LeakageReason.CANARY_INPUT_INVALID] += 1
+                artifact_complete = False
                 supplied_canaries = []
                 canary_overflow = True
                 break
         if not supplied_canaries and not canary_overflow:
             counts[LeakageReason.CANARY_INPUT_INVALID] += 1
+            artifact_complete = False
 
         canary_bytes: list[bytes] = []
         for canary in supplied_canaries:
             encoded = canary.encode("utf-8") if isinstance(canary, str) else canary
             if not policy.minimum_canary_bytes <= len(encoded) <= policy.maximum_canary_bytes:
                 counts[LeakageReason.CANARY_INPUT_INVALID] += 1
+                artifact_complete = False
                 continue
             canary_bytes.append(encoded)
         if len(set(canary_bytes)) != len(canary_bytes):
             counts[LeakageReason.CANARY_INPUT_INVALID] += 1
+            artifact_complete = False
         forms = [_canary_forms(canary) for canary in set(canary_bytes)]
 
         total_bytes = 0
@@ -321,40 +604,66 @@ def scan_candidate_files(
             ):
                 counts[LeakageReason.MALFORMED_ENCODING] += 1
 
+            fields: set[str] = set()
+            structured_strings = ""
+            if suffix in policy.allowed_suffixes and text:
+                try:
+                    fields, structured_strings = _structured_content(candidate.content, suffix)
+                except Exception:
+                    counts[LeakageReason.MALFORMED_ENCODING] += 1
+                else:
+                    if any(_is_forbidden_field(field) for field in fields):
+                        counts[LeakageReason.FORBIDDEN_FIELD] += 1
+
+            byte_segments = (candidate.content, structured_strings.encode("utf-8"))
+            text_segments = (text, structured_strings)
             per_file: set[LeakageReason] = set()
-            normalized_text = unicodedata.normalize("NFKC", text)
-            for raw, base64_forms, hex_forms, digest_forms in forms:
-                if raw in candidate.content:
+            normalized_text_segments = tuple(
+                unicodedata.normalize("NFKC", value) for value in text_segments
+            )
+            for canary_forms in forms:
+                if any(canary_forms.exact in segment for segment in byte_segments):
                     per_file.add(LeakageReason.CANARY_RAW)
                 try:
-                    raw_text = raw.decode("utf-8")
+                    exact_text = canary_forms.exact.decode("utf-8")
                 except UnicodeDecodeError:
-                    raw_text = ""
-                if (
-                    raw_text
-                    and unicodedata.normalize("NFKC", raw_text) in normalized_text
-                    and raw not in candidate.content
+                    exact_text = ""
+                if any(
+                    value and any(value in segment for segment in byte_segments)
+                    for value in canary_forms.normalized
+                ) or (
+                    exact_text
+                    and any(
+                        unicodedata.normalize("NFKC", exact_text) in segment
+                        for segment in normalized_text_segments
+                    )
+                    and not any(canary_forms.exact in segment for segment in byte_segments)
                 ):
                     per_file.add(LeakageReason.CANARY_NORMALIZED)
-                if any(value and value in candidate.content for value in base64_forms):
+                if any(
+                    value and any(value in segment for segment in byte_segments)
+                    for value in canary_forms.base64
+                ):
                     per_file.add(LeakageReason.CANARY_BASE64)
-                if any(value and value in candidate.content for value in hex_forms):
+                if any(
+                    value and any(value in segment for segment in byte_segments)
+                    for value in canary_forms.hexadecimal
+                ):
                     per_file.add(LeakageReason.CANARY_HEX)
-                if any(value and value in candidate.content for value in digest_forms):
+                if any(
+                    value and any(value in segment for segment in byte_segments)
+                    for value in canary_forms.digest
+                ):
                     per_file.add(LeakageReason.CANARY_DIGEST)
             for reason in per_file:
                 counts[reason] += 1
 
-            if any(pattern.search(candidate.content) for pattern in _CREDENTIAL_PATTERNS):
+            if any(
+                pattern.search(segment)
+                for pattern in _CREDENTIAL_PATTERNS
+                for segment in byte_segments
+            ):
                 counts[LeakageReason.CREDENTIAL_GRAMMAR] += 1
-            if suffix in policy.allowed_suffixes and text:
-                try:
-                    fields = _structured_fields(candidate.content, suffix)
-                except Exception:
-                    counts[LeakageReason.MALFORMED_ENCODING] += 1
-                else:
-                    if fields & _FORBIDDEN_FIELDS:
-                        counts[LeakageReason.FORBIDDEN_FIELD] += 1
 
         if total_bytes > policy.maximum_tree_bytes:
             counts[LeakageReason.TREE_TOO_LARGE] += 1
@@ -383,6 +692,7 @@ def scan_candidate_tree(
     structural: Counter[LeakageReason] = Counter()
     selected = Path(root)
     root_descriptor = -1
+    mountinfo_before: tuple[tuple[str, str, str, str, str], ...] = ()
     try:
         if not selected.is_absolute():
             raise ValueError
@@ -394,6 +704,10 @@ def scan_candidate_tree(
         ):
             structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
         else:
+            mountinfo_before = _mountinfo_snapshot()
+            if _contains_nested_mount(selected, mountinfo_before):
+                structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
+                raise _UnsafeCandidateTree
             root_descriptor = os.open(
                 selected, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
             )
@@ -412,73 +726,115 @@ def scan_candidate_tree(
                     structural[LeakageReason.TREE_TOO_LARGE] += 1
                     stopped = True
                     return
-                with os.scandir(directory_descriptor) as entries:
-                    for entry in entries:
-                        if stopped:
-                            return
-                        relative = f"{prefix}/{entry.name}" if prefix else entry.name
-                        before = entry.stat(follow_symlinks=False)
-                        if stat.S_ISDIR(before.st_mode) and not stat.S_ISLNK(before.st_mode):
-                            if not _valid_relative_path(relative, policy):
-                                structural[LeakageReason.PATH_INVALID] += 1
-                                continue
-                            child_descriptor = os.open(
-                                entry.name,
-                                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-                                dir_fd=directory_descriptor,
-                            )
-                            try:
-                                opened_directory = os.fstat(child_descriptor)
-                                if (opened_directory.st_dev, opened_directory.st_ino) != (
-                                    before.st_dev,
-                                    before.st_ino,
-                                ):
-                                    structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
-                                    continue
-                                materialize(child_descriptor, relative)
-                            finally:
-                                os.close(child_descriptor)
-                            continue
-                        file_count += 1
-                        if file_count > policy.maximum_files:
-                            structural[LeakageReason.TREE_TOO_LARGE] += 1
-                            stopped = True
-                            return
-                        if (
-                            stat.S_ISLNK(before.st_mode)
-                            or not stat.S_ISREG(before.st_mode)
-                            or before.st_nlink != 1
-                        ):
+                directory_before = os.fstat(directory_descriptor)
+                names_before = _directory_names(
+                    directory_descriptor,
+                    maximum_entries=policy.maximum_files + policy.maximum_directories,
+                )
+                for name in names_before:
+                    if stopped:
+                        return
+                    relative = f"{prefix}/{name}" if prefix else name
+                    before = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+                    if stat.S_ISDIR(before.st_mode) and not stat.S_ISLNK(before.st_mode):
+                        if before.st_dev != opened_root.st_dev:
                             structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
                             continue
-                        if before.st_size > policy.maximum_file_bytes:
-                            structural[LeakageReason.FILE_TOO_LARGE] += 1
-                            candidates.append(CandidateFile(relative, b""))
+                        if not _valid_relative_path(relative, policy):
+                            structural[LeakageReason.PATH_INVALID] += 1
                             continue
-                        if materialized_bytes + before.st_size > policy.maximum_tree_bytes:
-                            structural[LeakageReason.TREE_TOO_LARGE] += 1
-                            stopped = True
-                            return
-                        descriptor = os.open(
-                            entry.name,
-                            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                        child_descriptor = os.open(
+                            name,
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                             dir_fd=directory_descriptor,
                         )
                         try:
-                            opened = os.fstat(descriptor)
-                            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                            opened_directory = os.fstat(child_descriptor)
+                            if (opened_directory.st_dev, opened_directory.st_ino) != (
+                                before.st_dev,
+                                before.st_ino,
+                            ):
                                 structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
                                 continue
-                            content = os.read(descriptor, policy.maximum_file_bytes + 1)
-                            if len(content) > policy.maximum_file_bytes or os.read(descriptor, 1):
-                                structural[LeakageReason.FILE_TOO_LARGE] += 1
-                                content = b""
+                            materialize(child_descriptor, relative)
                         finally:
-                            os.close(descriptor)
-                        materialized_bytes += len(content)
-                        candidates.append(CandidateFile(relative, content))
+                            os.close(child_descriptor)
+                        continue
+                    file_count += 1
+                    if file_count > policy.maximum_files:
+                        structural[LeakageReason.TREE_TOO_LARGE] += 1
+                        stopped = True
+                        return
+                    if (
+                        stat.S_ISLNK(before.st_mode)
+                        or not stat.S_ISREG(before.st_mode)
+                        or before.st_nlink != 1
+                        or before.st_dev != opened_root.st_dev
+                    ):
+                        structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
+                        continue
+                    if before.st_size > policy.maximum_file_bytes:
+                        structural[LeakageReason.FILE_TOO_LARGE] += 1
+                        candidates.append(CandidateFile(relative, b""))
+                        continue
+                    if materialized_bytes + before.st_size > policy.maximum_tree_bytes:
+                        structural[LeakageReason.TREE_TOO_LARGE] += 1
+                        stopped = True
+                        return
+                    descriptor = os.open(
+                        name,
+                        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                        dir_fd=directory_descriptor,
+                    )
+                    try:
+                        opened = os.fstat(descriptor)
+                        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                            structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
+                            continue
+                        content = os.read(descriptor, policy.maximum_file_bytes + 1)
+                        if len(content) > policy.maximum_file_bytes or os.read(descriptor, 1):
+                            structural[LeakageReason.FILE_TOO_LARGE] += 1
+                            content = b""
+                        after = os.fstat(descriptor)
+                        if (
+                            after.st_mode != before.st_mode
+                            or after.st_nlink != before.st_nlink
+                            or after.st_size != before.st_size
+                            or after.st_mtime_ns != before.st_mtime_ns
+                            or after.st_ctime_ns != before.st_ctime_ns
+                        ):
+                            structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
+                            continue
+                    finally:
+                        os.close(descriptor)
+                    materialized_bytes += len(content)
+                    candidates.append(CandidateFile(relative, content))
+                names_after = _directory_names(
+                    directory_descriptor,
+                    maximum_entries=policy.maximum_files + policy.maximum_directories,
+                )
+                directory_after = os.fstat(directory_descriptor)
+                if names_before != names_after or not _stable_directory_metadata(
+                    directory_before, directory_after
+                ):
+                    structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
+                    stopped = True
 
             materialize(root_descriptor, "")
+            final_root_path = selected.lstat()
+            final_root_descriptor = os.fstat(root_descriptor)
+            if (final_root_path.st_dev, final_root_path.st_ino) != (
+                root_stat.st_dev,
+                root_stat.st_ino,
+            ) or not _stable_directory_metadata(opened_root, final_root_descriptor):
+                structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
+            mountinfo_after = _mountinfo_snapshot()
+            if mountinfo_before != mountinfo_after or _contains_nested_mount(
+                selected, mountinfo_after
+            ):
+                structural[LeakageReason.LINK_OR_SPECIAL_FILE] += 1
+    except _UnsafeCandidateTree:
+        pass
     except Exception:
         structural[LeakageReason.INTERNAL_ERROR] += 1
     finally:
@@ -490,33 +846,24 @@ def scan_candidate_tree(
         {LeakageReason(key): value for key, value in result.counts.items()}
     )
     combined.update(structural)
-    return _safe_result(candidates, combined, artifact_complete=not structural)
+    return _safe_result(
+        candidates,
+        combined,
+        artifact_complete=(
+            not structural and result.artifact_sha256 != _INCOMPLETE_ARTIFACT_SHA256
+        ),
+    )
 
 
 def _read_protected_canaries(path: Path, policy: LeakageScannerPolicy) -> tuple[bytes, ...]:
-    selected = Path(path)
-    if not selected.is_absolute() or selected.resolve(strict=True) != selected:
-        raise ValueError
-    metadata = selected.lstat()
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or stat.S_ISLNK(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) & 0o077
-        or metadata.st_size > policy.maximum_canaries * (policy.maximum_canary_bytes + 1)
-    ):
-        raise ValueError
-    descriptor = os.open(selected, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-    try:
-        opened = os.fstat(descriptor)
-        if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
-            raise ValueError
-        content = os.read(descriptor, metadata.st_size + 1)
-    finally:
-        os.close(descriptor)
-    if len(content) != metadata.st_size:
-        raise ValueError
-    return tuple(line for line in content.splitlines() if line)
+    content = read_protected_file(
+        Path(path),
+        minimum_bytes=0,
+        maximum_bytes=policy.maximum_canaries * (policy.maximum_canary_bytes + 1),
+        required_owner_uid=0,
+        allowed_modes=frozenset({0o600}),
+    )
+    return tuple(content.splitlines())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -534,7 +881,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = LeakageScanResult(
             ok=False,
             artifact_sha256=_INCOMPLETE_ARTIFACT_SHA256,
-            counts={LeakageReason.INTERNAL_ERROR.value: 1},
+            counts={LeakageReason.CANARY_INPUT_INVALID.value: 1},
         )
     print(json.dumps(result.as_dict(), sort_keys=True, separators=(",", ":")))
     return 0 if result.ok else 1
