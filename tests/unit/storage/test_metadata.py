@@ -34,6 +34,7 @@ EXPECTED_TABLES = {
     "memory_evidence",
     "memory_embeddings_v1",
     "memory_links",
+    "observability_tenant_bindings",
     "outbox_jobs",
     "personas",
     "sessions",
@@ -54,6 +55,7 @@ def test_metadata_registers_the_complete_initial_contract() -> None:
         - {
             "alembic_compatibility",
             "memory_event_counter",
+            "observability_tenant_bindings",
             "selection_decision_counter",
         }
         == TENANT_TABLE_NAMES
