@@ -263,10 +263,12 @@ def _source_fingerprint(info: os.stat_result) -> tuple[int, int, int, int, int, 
     )
 
 
-def _validate_source_info(info: os.stat_result, *, max_bytes: int) -> None:
+def _validate_source_info(
+    info: os.stat_result, *, max_bytes: int, allow_empty: bool = False
+) -> None:
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         _fail("source_file_unsafe")
-    if info.st_size <= 0 or info.st_size > max_bytes:
+    if info.st_size < (0 if allow_empty else 1) or info.st_size > max_bytes:
         _fail("source_file_size_invalid")
 
 
@@ -741,7 +743,9 @@ def _normalized_tar_info(name: str, info: os.stat_result) -> tarfile.TarInfo:
         member.mode = 0o700
         member.size = 0
     elif stat.S_ISREG(info.st_mode):
-        _validate_source_info(info, max_bytes=MAX_TAR_MEMBER_BYTES)
+        # PostgreSQL physical backups legitimately contain empty regular files.
+        # Other authenticated inputs remain non-empty by default.
+        _validate_source_info(info, max_bytes=MAX_TAR_MEMBER_BYTES, allow_empty=True)
         member.type = tarfile.REGTYPE
         member.mode = 0o600
         member.size = info.st_size

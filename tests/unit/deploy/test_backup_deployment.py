@@ -327,6 +327,8 @@ def test_tar_creation_is_normalized_deterministic_and_rejects_symlink_swap(
     (source / "directory").mkdir()
     payload = source / "directory" / "payload"
     payload.write_bytes(b"synthetic")
+    empty = source / "directory" / "empty"
+    empty.touch()
     first = tmp_path / "first.tar"
     second = tmp_path / "second.tar"
     module._create_tar(source, first)
@@ -340,6 +342,7 @@ def test_tar_creation_is_normalized_deterministic_and_rejects_symlink_swap(
     assert all(member.uid == member.gid == member.mtime == 0 for member in members)
     assert all(member.uname == member.gname == "" for member in members)
     assert {member.mode for member in members} == {0o600, 0o700}
+    assert {member.name: member.size for member in members}["directory/empty"] == 0
 
     victim = source / "victim"
     victim.write_bytes(b"original")
