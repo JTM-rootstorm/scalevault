@@ -579,6 +579,11 @@ class _GenesisTerminalParticipant:
     def transaction_binding_sha256(self) -> str:
         return self._command.transaction_binding_sha256
 
+    async def authorize(self, session: AsyncSession) -> None:
+        """Genesis authorization is enforced by its existing transaction checks."""
+
+        del session
+
     async def stage(
         self,
         session: AsyncSession,

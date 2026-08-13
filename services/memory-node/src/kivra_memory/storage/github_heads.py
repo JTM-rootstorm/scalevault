@@ -12,7 +12,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kivra_memory.domain.identifiers import require_uuid7
-from kivra_memory.storage.github_revocation import require_active_github_installation
+from kivra_memory.storage.github_revocation import (
+    GitHubInstallationEpoch,
+    require_active_github_installation,
+)
 from kivra_memory.storage.models import IngressProviderHead
 
 GITHUB_INGRESS_BOOTSTRAP_COMMIT = "84233835924ade0e3cf26bb995717c880c75ff5c"
@@ -69,12 +72,15 @@ class GitHubProviderHeadRepository:
         session: AsyncSession,
         identity: GitHubProviderIdentity,
         /,
+        *,
+        installation_epoch: GitHubInstallationEpoch | None = None,
     ) -> GitHubProviderHeadState:
         identity.validate()
         await require_active_github_installation(
             session,
             tenant_id=identity.tenant_id,
             installation_id=identity.installation_id,
+            expected_epoch=installation_epoch,
         )
         await session.execute(
             insert(IngressProviderHead)
@@ -113,12 +119,14 @@ class GitHubProviderHeadRepository:
         commit_id: str,
         tree_id: str,
         etag: str | None,
+        installation_epoch: GitHubInstallationEpoch | None = None,
     ) -> GitHubProviderHeadState:
         identity.validate()
         await require_active_github_installation(
             session,
             tenant_id=identity.tenant_id,
             installation_id=identity.installation_id,
+            expected_epoch=installation_epoch,
         )
         for value in (expected_commit_id, expected_tree_id, commit_id, tree_id):
             if _OBJECT_ID.fullmatch(value) is None:

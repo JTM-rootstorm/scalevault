@@ -43,7 +43,12 @@ from kivra_memory.storage.github_heads import (
     GitHubProviderHeadState,
     GitHubProviderIdentity,
 )
-from kivra_memory.storage.github_revocation import require_active_github_installation
+from kivra_memory.storage.github_revocation import (
+    GitHubInstallationEpoch,
+    GitHubInstallationRevoked,
+    capture_active_github_installation_epoch,
+    check_active_github_installation_epoch,
+)
 from kivra_memory.storage.models import IngressItem
 from kivra_memory.workers.github_ingress import (
     GitHubIngressIdentity,
@@ -346,15 +351,33 @@ class GitHubIngressPollLoop:
             branch_name=settings.identity.branch_name,
         )
 
-    async def _provider_head(self) -> GitHubProviderHeadState:
+    async def _installation_epoch(self) -> GitHubInstallationEpoch:
+        identity = self._settings.identity
+        async with self._ingress_database.tenant_session(identity.tenant_id) as session:
+            return await capture_active_github_installation_epoch(
+                session,
+                tenant_id=identity.tenant_id,
+                installation_id=identity.installation_id,
+            )
+
+    async def _check_installation_epoch(self, epoch: GitHubInstallationEpoch) -> None:
+        async with self._ingress_database.tenant_session(epoch.tenant_id) as session:
+            await check_active_github_installation_epoch(session, epoch=epoch)
+
+    async def _provider_head(self, epoch: GitHubInstallationEpoch) -> GitHubProviderHeadState:
         async with self._ingress_database.tenant_session(
             self._settings.identity.tenant_id
         ) as session:
-            return await self._head_repository.load_or_create(session, self._provider_identity)
+            return await self._head_repository.load_or_create(
+                session,
+                self._provider_identity,
+                installation_epoch=epoch,
+            )
 
-    async def _known_objects(self) -> dict[str, str]:
+    async def _known_objects(self, epoch: GitHubInstallationEpoch) -> dict[str, str]:
         identity = self._settings.identity
         async with self._ingress_database.tenant_session(identity.tenant_id) as session:
+            await check_active_github_installation_epoch(session, epoch=epoch)
             rows = await session.execute(
                 select(IngressItem.immutable_path, IngressItem.blob_id).where(
                     IngressItem.tenant_id == identity.tenant_id,
@@ -371,61 +394,59 @@ class GitHubIngressPollLoop:
 
     async def poll_once(self) -> int:
         identity = self._settings.identity
-        # Keep this share lock through provider fetch, validation, canonical
-        # selection, receipts, and checkpoint advancement. A local revocation
-        # update therefore cannot commit until this poll is finished; once it
-        # commits, no later poll can pass this guard.
-        async with self._ingress_database.tenant_session(identity.tenant_id) as guard_session:
-            await require_active_github_installation(
-                guard_session,
-                tenant_id=identity.tenant_id,
-                installation_id=identity.installation_id,
+        # Capture authorization, then close the transaction before provider I/O.
+        # Every later durable mutation takes its own exclusive installation-row
+        # fence and compares this epoch, so a committed revocation aborts the
+        # in-flight poll without creating a queued-lock deadlock.
+        epoch = await self._installation_epoch()
+        checkpoint = await self._provider_head(epoch)
+        known = await self._known_objects(epoch)
+        snapshot = await asyncio.to_thread(
+            self._poller.poll,
+            checkpoint.etag,
+            trusted_commit_id=checkpoint.last_verified_commit_id,
+            trusted_tree_id=checkpoint.last_verified_tree_id,
+            known_objects=known,
+        )
+        await self._check_installation_epoch(epoch)
+        if snapshot.unchanged:
+            return 0
+        discovered_at = datetime.now(UTC)
+        items = tuple(
+            work_item_from_proposal(
+                proposal,
+                identity=identity,
+                discovered_at=discovered_at,
+                installation_epoch=epoch,
             )
-            checkpoint = await self._provider_head()
-            known = await self._known_objects()
-            snapshot = await asyncio.to_thread(
-                self._poller.poll,
-                checkpoint.etag,
-                trusted_commit_id=checkpoint.last_verified_commit_id,
-                trusted_tree_id=checkpoint.last_verified_tree_id,
-                known_objects=known,
-            )
-            if snapshot.unchanged:
-                return 0
-            discovered_at = datetime.now(UTC)
-            items = tuple(
-                work_item_from_proposal(
-                    proposal,
-                    identity=identity,
-                    discovered_at=discovered_at,
+            for proposal in snapshot.proposals
+        )
+        results = await self._worker.process_batch(items)
+        terminal_states = {
+            IngressState.ACCEPTED,
+            IngressState.DUPLICATE,
+            IngressState.CONFLICT,
+            IngressState.REJECTED,
+            IngressState.QUARANTINED,
+        }
+        if all(
+            result.disposition in {"terminal", "unchanged"} and result.state in terminal_states
+            for result in results
+        ):
+            if snapshot.commit_id is None or snapshot.tree_id is None:
+                raise RuntimeError("github_ingress_snapshot_invalid")
+            async with self._ingress_database.tenant_session(identity.tenant_id) as session:
+                await self._head_repository.advance(
+                    session,
+                    self._provider_identity,
+                    expected_commit_id=checkpoint.last_verified_commit_id,
+                    expected_tree_id=checkpoint.last_verified_tree_id,
+                    commit_id=snapshot.commit_id,
+                    tree_id=snapshot.tree_id,
+                    etag=snapshot.next_etag,
+                    installation_epoch=epoch,
                 )
-                for proposal in snapshot.proposals
-            )
-            results = await self._worker.process_batch(items)
-            terminal_states = {
-                IngressState.ACCEPTED,
-                IngressState.DUPLICATE,
-                IngressState.CONFLICT,
-                IngressState.REJECTED,
-                IngressState.QUARANTINED,
-            }
-            if all(
-                result.disposition in {"terminal", "unchanged"} and result.state in terminal_states
-                for result in results
-            ):
-                if snapshot.commit_id is None or snapshot.tree_id is None:
-                    raise RuntimeError("github_ingress_snapshot_invalid")
-                async with self._ingress_database.tenant_session(identity.tenant_id) as session:
-                    await self._head_repository.advance(
-                        session,
-                        self._provider_identity,
-                        expected_commit_id=checkpoint.last_verified_commit_id,
-                        expected_tree_id=checkpoint.last_verified_tree_id,
-                        commit_id=snapshot.commit_id,
-                        tree_id=snapshot.tree_id,
-                        etag=snapshot.next_etag,
-                    )
-            return len(results)
+        return len(results)
 
     async def close(self) -> None:
         await self._ingress_database.dispose()
@@ -443,6 +464,9 @@ async def run_ingress(settings: GitHubIngressSettings) -> None:
         while not stop.is_set():
             try:
                 await worker.poll_once()
+            except GitHubInstallationRevoked:
+                print("ScaleVault GitHub ingress installation is revoked", file=sys.stderr)
+                break
             except GitHubProposalError as error:
                 if error.category == "integrity_failed":
                     raise

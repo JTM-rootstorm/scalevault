@@ -19,7 +19,10 @@ from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import IngressState, MemoryStatus
 from kivra_memory.domain.fingerprints import exact_memory_fingerprint
 from kivra_memory.domain.identifiers import require_uuid7
-from kivra_memory.storage.github_revocation import require_active_github_installation
+from kivra_memory.storage.github_revocation import (
+    GitHubInstallationEpoch,
+    require_active_github_installation,
+)
 from kivra_memory.storage.models import (
     IngressItem,
     IngressProviderViolation,
@@ -221,13 +224,19 @@ class GitHubIngressRepository:
         )
 
     async def register(
-        self, session: AsyncSession, discovery: GitHubIngressDiscovery, /
+        self,
+        session: AsyncSession,
+        discovery: GitHubIngressDiscovery,
+        /,
+        *,
+        installation_epoch: GitHubInstallationEpoch | None = None,
     ) -> IngressRegistration:
         discovery.validate()
         await require_active_github_installation(
             session,
             tenant_id=discovery.tenant_id,
             installation_id=discovery.installation_id,
+            expected_epoch=installation_epoch,
         )
         statement = (
             insert(IngressItem)
@@ -286,11 +295,13 @@ class GitHubIngressRepository:
         idempotency_key: str,
         payload_sha256: bytes,
         validated_at: datetime,
+        installation_epoch: GitHubInstallationEpoch | None = None,
     ) -> IngressRegistration:
         await require_active_github_installation(
             session,
             tenant_id=discovery.tenant_id,
             installation_id=discovery.installation_id,
+            expected_epoch=installation_epoch,
         )
         if not idempotency_key or len(idempotency_key) > 255 or len(payload_sha256) != 32:
             raise GitHubIngressStorageError("semantic_identity_invalid")
@@ -336,11 +347,13 @@ class GitHubIngressRepository:
         discovery: GitHubIngressDiscovery,
         error_code: str,
         processed_at: datetime,
+        installation_epoch: GitHubInstallationEpoch | None = None,
     ) -> IngressRegistration:
         await require_active_github_installation(
             session,
             tenant_id=discovery.tenant_id,
             installation_id=discovery.installation_id,
+            expected_epoch=installation_epoch,
         )
         if _SAFE_CODE.fullmatch(error_code) is None:
             raise ValueError("quarantine error code is invalid")
@@ -375,11 +388,13 @@ class GitHubIngressRepository:
         command: NominationCommandLike,
         result: SelectionResult,
         processed_at: datetime,
+        installation_epoch: GitHubInstallationEpoch | None = None,
     ) -> None:
         await require_active_github_installation(
             session,
             tenant_id=discovery.tenant_id,
             installation_id=discovery.installation_id,
+            expected_epoch=installation_epoch,
         )
         row = await self._load_locked(session, discovery)
         if row.state in _TERMINAL_STATES:

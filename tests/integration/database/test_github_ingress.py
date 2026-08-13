@@ -22,7 +22,11 @@ from kivra_memory.storage.github_ingress import (
     GitHubIngressRepository,
     IngressRegistration,
 )
-from kivra_memory.storage.github_revocation import GitHubInstallationRevoked
+from kivra_memory.storage.github_revocation import (
+    GitHubInstallationRevoked,
+    capture_active_github_installation_epoch,
+    check_active_github_installation_epoch,
+)
 from kivra_memory.storage.models import (
     IngressItem,
     IngressProviderHead,
@@ -109,6 +113,60 @@ async def test_local_revocation_fences_registration_and_provider_checkpoint(
             assert await session.scalar(select(IngressItem.ingress_id)) is None
             assert await session.scalar(select(IngressProviderHead.tenant_id)) is None
     finally:
+        await database.dispose()
+
+
+async def test_provider_io_epoch_does_not_block_revocation_or_allow_later_progress(
+    postgresql_server: PostgreSQLTestServer,
+    migrated_database: AlembicRunner,
+) -> None:
+    """Provider latency holds no DB lock; revocation fences the next mutation."""
+
+    _ = migrated_database
+    database = Database(postgresql_server.database_url)
+    discovery = _discovery()
+    repository = GitHubIngressRepository()
+    provider_started = asyncio.Event()
+    provider_release = asyncio.Event()
+    await _seed(database)
+
+    async with database.tenant_session(discovery.tenant_id) as session:
+        epoch = await capture_active_github_installation_epoch(
+            session,
+            tenant_id=discovery.tenant_id,
+            installation_id=discovery.installation_id,
+        )
+
+    async def blocked_provider_io() -> None:
+        provider_started.set()
+        await provider_release.wait()
+
+    provider_task = asyncio.create_task(blocked_provider_io())
+    await provider_started.wait()
+    try:
+        await asyncio.wait_for(
+            _revoke_installation(database, discovery.installation_id),
+            timeout=2,
+        )
+        provider_release.set()
+        await provider_task
+
+        with pytest.raises(GitHubInstallationRevoked, match="github_installation_revoked"):
+            async with database.tenant_session(discovery.tenant_id) as session:
+                await check_active_github_installation_epoch(session, epoch=epoch)
+        with pytest.raises(GitHubInstallationRevoked, match="github_installation_revoked"):
+            async with database.tenant_session(discovery.tenant_id) as session:
+                await repository.register(
+                    session,
+                    discovery,
+                    installation_epoch=epoch,
+                )
+
+        async with database.tenant_session(discovery.tenant_id) as session:
+            assert await session.scalar(select(IngressItem.ingress_id)) is None
+    finally:
+        provider_release.set()
+        await provider_task
         await database.dispose()
 
 

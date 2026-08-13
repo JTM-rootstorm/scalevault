@@ -173,6 +173,10 @@ class SelectionTransactionParticipant(Protocol):
     @property
     def transaction_binding_sha256(self) -> str: ...
 
+    async def authorize(self, session: AsyncSession) -> None:
+        """Authorize this participant before any transaction-owned progress."""
+        ...
+
     async def stage(
         self,
         session: AsyncSession,
@@ -666,6 +670,8 @@ class SelectionEngine:
                 raise SelectionExecutionError("forbidden")
 
             async def preflight(session: AsyncSession) -> SelectionResult | None:
+                if transaction_participant is not None:
+                    await transaction_participant.authorize(session)
                 receipt = await self._load_receipt(session, principal=principal, command=command)
                 return (
                     _replay_from_receipt(receipt, command_digest=command_digest)
@@ -883,6 +889,8 @@ class SelectionEngine:
         transaction_participant: SelectionTransactionParticipant | None,
         legacy_genesis_plaintext: bool,
     ) -> SelectionResult:
+        if transaction_participant is not None:
+            await transaction_participant.authorize(session)
         # A committed receipt is terminal even if the mutable persona, lineage,
         # branch, subject, or resolver state later changes. Serialize this check
         # before consulting any of those resources, then keep the lock through

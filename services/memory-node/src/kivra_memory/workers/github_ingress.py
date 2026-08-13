@@ -13,12 +13,14 @@ from kivra_memory.application.github_ingress import GitHubIngressProcessResult
 from kivra_memory.domain.identifiers import require_uuid7
 from kivra_memory.ingress.github_client import GitHubProposalObject
 from kivra_memory.storage.github_ingress import GitHubIngressDiscovery
+from kivra_memory.storage.github_revocation import GitHubInstallationEpoch
 
 
 @dataclass(frozen=True, slots=True)
 class GitHubIngressWorkItem:
     discovery: GitHubIngressDiscovery
     raw_bytes: bytes
+    installation_epoch: GitHubInstallationEpoch | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +55,7 @@ def work_item_from_proposal(
     *,
     identity: GitHubIngressIdentity,
     discovered_at: datetime,
+    installation_epoch: GitHubInstallationEpoch | None = None,
 ) -> GitHubIngressWorkItem:
     """Attach trusted local identity to exact bytes returned by the pinned poller."""
 
@@ -83,12 +86,21 @@ def work_item_from_proposal(
         discovered_at=discovered_at,
     )
     discovery.validate()
-    return GitHubIngressWorkItem(discovery=discovery, raw_bytes=proposal.raw_bytes)
+    return GitHubIngressWorkItem(
+        discovery=discovery,
+        raw_bytes=proposal.raw_bytes,
+        installation_epoch=installation_epoch,
+    )
 
 
 class GitHubIngressProcessor(Protocol):
     async def process(
-        self, discovery: GitHubIngressDiscovery, raw_bytes: bytes, /
+        self,
+        discovery: GitHubIngressDiscovery,
+        raw_bytes: bytes,
+        /,
+        *,
+        installation_epoch: GitHubInstallationEpoch | None = None,
     ) -> GitHubIngressProcessResult: ...
 
 
@@ -131,7 +143,11 @@ class GitHubIngressWorker:
 
         async def process_one(index: int, item: GitHubIngressWorkItem) -> None:
             async with semaphore:
-                results[index] = await self._processor.process(item.discovery, item.raw_bytes)
+                results[index] = await self._processor.process(
+                    item.discovery,
+                    item.raw_bytes,
+                    installation_epoch=item.installation_epoch,
+                )
 
         pending = tuple(range(len(items)))
         for attempt in range(1, self._max_process_attempts + 1):

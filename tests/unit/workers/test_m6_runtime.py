@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -13,6 +15,7 @@ from kivra_memory.application.mutations import CommandPrincipal
 from kivra_memory.application.selection import NominationCommandLike
 from kivra_memory.domain.canonical_json import canonical_json_bytes
 from kivra_memory.domain.enums import AuthorityClass, MemoryCategory
+from kivra_memory.ingress.poller import GitHubSnapshotPollResult
 from kivra_memory.policy import (
     EvidenceKind,
     EvidenceTrust,
@@ -22,14 +25,22 @@ from kivra_memory.policy import (
 from kivra_memory.storage.github_heads import (
     GITHUB_INGRESS_BOOTSTRAP_COMMIT,
     GITHUB_INGRESS_BOOTSTRAP_TREE,
+    GitHubProviderHeadState,
+    GitHubProviderIdentity,
+)
+from kivra_memory.storage.github_revocation import (
+    GitHubInstallationEpoch,
+    GitHubInstallationRevoked,
 )
 from kivra_memory.workers.github_ingress import GitHubIngressIdentity
 from kivra_memory.workers.github_ingress_main import (
+    GitHubIngressPollLoop,
     GitHubIngressSettings,
     PinnedGitHubNominationResolver,
     PinnedPromotionPrincipalProvider,
     _provider_backoff_seconds,
     _provider_failure_alert,
+    run_ingress,
 )
 
 
@@ -76,6 +87,125 @@ def _principal(settings: GitHubIngressSettings) -> CommandPrincipal:
         scopes=frozenset({"memory:propose"}),
         ingress_id=_uuid(9),
     )
+
+
+async def test_poll_rechecks_epoch_after_provider_io_before_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings()
+    identity = settings.identity
+    epoch = GitHubInstallationEpoch(
+        tenant_id=identity.tenant_id,
+        installation_id=identity.installation_id,
+        enrolled_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    checkpoint = GitHubProviderHeadState(
+        identity=GitHubProviderIdentity(
+            tenant_id=identity.tenant_id,
+            installation_id=identity.installation_id,
+            transport_binding_id=identity.transport_binding_id,
+            repository_id=identity.repository_id,
+            branch_name=identity.branch_name,
+        ),
+        bootstrap_commit_id=GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+        bootstrap_tree_id=GITHUB_INGRESS_BOOTSTRAP_TREE,
+        last_verified_commit_id=GITHUB_INGRESS_BOOTSTRAP_COMMIT,
+        last_verified_tree_id=GITHUB_INGRESS_BOOTSTRAP_TREE,
+        etag=None,
+        verified_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    provider_started = asyncio.Event()
+    provider_release = asyncio.Event()
+
+    class BlockingPoller:
+        def poll(self, *_args: object, **_kwargs: object) -> GitHubSnapshotPollResult:
+            raise AssertionError("provider call must run through the offload seam")
+
+    class ForbiddenWorker:
+        async def process_batch(self, _items: object) -> object:
+            raise AssertionError("revoked provider result reached processing")
+
+    loop = object.__new__(GitHubIngressPollLoop)
+    loop._settings = settings
+    loop._poller = cast(Any, BlockingPoller())
+    loop._worker = cast(Any, ForbiddenWorker())
+
+    async def capture() -> GitHubInstallationEpoch:
+        return epoch
+
+    async def provider_head(observed: GitHubInstallationEpoch) -> GitHubProviderHeadState:
+        assert observed == epoch
+        return checkpoint
+
+    async def known_objects(observed: GitHubInstallationEpoch) -> dict[str, str]:
+        assert observed == epoch
+        return {}
+
+    async def revoked_after_provider(observed: GitHubInstallationEpoch) -> None:
+        assert observed == epoch
+        raise GitHubInstallationRevoked("github_installation_revoked")
+
+    async def provider_io(
+        function: object, *_args: object, **_kwargs: object
+    ) -> GitHubSnapshotPollResult:
+        assert function == loop._poller.poll
+        provider_started.set()
+        await provider_release.wait()
+        return GitHubSnapshotPollResult(
+            next_etag=None,
+            unchanged=True,
+            commit_id=None,
+            tree_id=None,
+            proposals=(),
+        )
+
+    monkeypatch.setattr(loop, "_installation_epoch", capture)
+    monkeypatch.setattr(loop, "_provider_head", provider_head)
+    monkeypatch.setattr(loop, "_known_objects", known_objects)
+    monkeypatch.setattr(loop, "_check_installation_epoch", revoked_after_provider)
+    monkeypatch.setattr("kivra_memory.workers.github_ingress_main.asyncio.to_thread", provider_io)
+
+    poll_task = asyncio.create_task(loop.poll_once())
+    await provider_started.wait()
+    provider_release.set()
+    with pytest.raises(GitHubInstallationRevoked, match="github_installation_revoked"):
+        await poll_task
+
+
+async def test_revoked_installation_stops_loop_cleanly_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    polls = 0
+    closed = False
+
+    class RevokedPollLoop:
+        def __init__(self, _settings: GitHubIngressSettings) -> None:
+            return None
+
+        async def poll_once(self) -> int:
+            nonlocal polls
+            polls += 1
+            raise GitHubInstallationRevoked("must-not-be-rendered")
+
+        async def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr(
+        "kivra_memory.workers.github_ingress_main.GitHubIngressPollLoop",
+        RevokedPollLoop,
+    )
+    monkeypatch.setattr(asyncio.get_running_loop(), "add_signal_handler", lambda *_args: None)
+
+    await run_ingress(_settings())
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "ScaleVault GitHub ingress installation is revoked\n"
+    assert "must-not-be-rendered" not in captured.err
+    assert polls == 1
+    assert closed is True
 
 
 def _server_evidence_key(settings: GitHubIngressSettings) -> str:

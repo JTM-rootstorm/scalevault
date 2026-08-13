@@ -26,6 +26,7 @@ from kivra_memory.storage.github_ingress import (
     GitHubIngressRepository,
     IngressRegistration,
 )
+from kivra_memory.storage.github_revocation import GitHubInstallationEpoch
 from kivra_memory.storage.models import IngressItem
 from kivra_memory.workers.github_ingress import (
     GitHubIngressIdentity,
@@ -143,15 +144,22 @@ def test_poller_object_is_bound_to_pinned_local_identity_without_invented_fields
         repository_id=12345678,
         branch_name="main",
     )
+    epoch = GitHubInstallationEpoch(
+        tenant_id=identity.tenant_id,
+        installation_id=identity.installation_id,
+        enrolled_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
 
     item = work_item_from_proposal(
         proposal,
         identity=identity,
         discovered_at=datetime(2026, 8, 9, 12, tzinfo=UTC),
+        installation_epoch=epoch,
     )
 
     assert item.discovery == discovery
     assert item.raw_bytes is raw
+    assert item.installation_epoch == epoch
 
 
 async def test_duplicate_link_is_resolved_before_terminal_row_becomes_dirty(
@@ -278,7 +286,7 @@ async def test_terminal_provenance_violation_reports_unchanged_canonical_result(
     discovery = _discovery()
     orchestrator = GitHubIngressOrchestrator(cast(Any, None), cast(Any, None))
 
-    async def register(_: GitHubIngressDiscovery) -> IngressRegistration:
+    async def register(_: GitHubIngressDiscovery, _epoch: object) -> IngressRegistration:
         return IngressRegistration(
             ingress_id=discovery.ingress_id,
             state=IngressState.ACCEPTED,
@@ -327,8 +335,14 @@ class _ConcurrentProcessor:
         self.maximum = 0
 
     async def process(
-        self, discovery: GitHubIngressDiscovery, raw_bytes: bytes, /
+        self,
+        discovery: GitHubIngressDiscovery,
+        raw_bytes: bytes,
+        /,
+        *,
+        installation_epoch: object = None,
     ) -> GitHubIngressProcessResult:
+        del installation_epoch
         assert raw_bytes == b"{}"
         self.active += 1
         self.maximum = max(self.maximum, self.active)
@@ -362,8 +376,14 @@ class _RetryingProcessor:
         self.attempts: dict[UUID, int] = {}
 
     async def process(
-        self, discovery: GitHubIngressDiscovery, raw_bytes: bytes, /
+        self,
+        discovery: GitHubIngressDiscovery,
+        raw_bytes: bytes,
+        /,
+        *,
+        installation_epoch: object = None,
     ) -> GitHubIngressProcessResult:
+        del installation_epoch
         assert raw_bytes == b"{}"
         attempt = self.attempts.get(discovery.ingress_id, 0) + 1
         self.attempts[discovery.ingress_id] = attempt

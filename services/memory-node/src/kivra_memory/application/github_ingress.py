@@ -37,6 +37,10 @@ from kivra_memory.storage.github_ingress import (
     GitHubIngressStorageError,
     IngressRegistration,
 )
+from kivra_memory.storage.github_revocation import (
+    GitHubInstallationEpoch,
+    require_active_github_installation,
+)
 from kivra_memory.storage.transactions import run_serializable_transaction
 
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
@@ -64,6 +68,7 @@ class GitHubIngressTransactionParticipant:
         *,
         repository: GitHubIngressRepository,
         discovery: GitHubIngressDiscovery,
+        installation_epoch: GitHubInstallationEpoch | None,
         binding_sha256: str,
         clock: Callable[[], datetime],
     ) -> None:
@@ -71,12 +76,23 @@ class GitHubIngressTransactionParticipant:
             raise ValueError("binding_sha256 is invalid")
         self._repository = repository
         self._discovery = discovery
+        self._installation_epoch = installation_epoch
         self._binding_sha256 = binding_sha256
         self._clock = clock
 
     @property
     def transaction_binding_sha256(self) -> str:
         return self._binding_sha256
+
+    async def authorize(self, session: AsyncSession) -> None:
+        """Fence canonical work against revocation before it stages writes."""
+
+        await require_active_github_installation(
+            session,
+            tenant_id=self._discovery.tenant_id,
+            installation_id=self._discovery.installation_id,
+            expected_epoch=self._installation_epoch,
+        )
 
     async def stage(
         self,
@@ -96,6 +112,7 @@ class GitHubIngressTransactionParticipant:
             command=command,
             result=result,
             processed_at=self._clock(),
+            installation_epoch=self._installation_epoch,
         )
 
 
@@ -115,9 +132,15 @@ class GitHubIngressOrchestrator:
         self._repository = repository or GitHubIngressRepository()
         self._clock = clock
 
-    async def _register(self, discovery: GitHubIngressDiscovery) -> IngressRegistration:
+    async def _register(
+        self,
+        discovery: GitHubIngressDiscovery,
+        installation_epoch: GitHubInstallationEpoch | None,
+    ) -> IngressRegistration:
         async def operation(session: AsyncSession) -> IngressRegistration:
-            return await self._repository.register(session, discovery)
+            return await self._repository.register(
+                session, discovery, installation_epoch=installation_epoch
+            )
 
         return await run_serializable_transaction(
             self._session_factory, discovery.tenant_id, operation
@@ -129,6 +152,7 @@ class GitHubIngressOrchestrator:
         *,
         idempotency_key: str,
         payload_sha256: bytes,
+        installation_epoch: GitHubInstallationEpoch | None,
     ) -> IngressRegistration:
         async def operation(session: AsyncSession) -> IngressRegistration:
             return await self._repository.validate(
@@ -137,6 +161,7 @@ class GitHubIngressOrchestrator:
                 idempotency_key=idempotency_key,
                 payload_sha256=payload_sha256,
                 validated_at=self._clock(),
+                installation_epoch=installation_epoch,
             )
 
         return await run_serializable_transaction(
@@ -144,7 +169,11 @@ class GitHubIngressOrchestrator:
         )
 
     async def _quarantine(
-        self, discovery: GitHubIngressDiscovery, *, error_code: str
+        self,
+        discovery: GitHubIngressDiscovery,
+        *,
+        error_code: str,
+        installation_epoch: GitHubInstallationEpoch | None,
     ) -> GitHubIngressProcessResult:
         if _SAFE_CODE.fullmatch(error_code) is None:
             error_code = "ingress_invalid"
@@ -155,6 +184,7 @@ class GitHubIngressOrchestrator:
                 discovery=discovery,
                 error_code=error_code,
                 processed_at=self._clock(),
+                installation_epoch=installation_epoch,
             )
 
         registration = await run_serializable_transaction(
@@ -168,11 +198,16 @@ class GitHubIngressOrchestrator:
         )
 
     async def process(
-        self, discovery: GitHubIngressDiscovery, raw_bytes: bytes, /
+        self,
+        discovery: GitHubIngressDiscovery,
+        raw_bytes: bytes,
+        /,
+        *,
+        installation_epoch: GitHubInstallationEpoch | None = None,
     ) -> GitHubIngressProcessResult:
         """Process exact bytes without reflecting payload values in failures."""
 
-        registration = await self._register(discovery)
+        registration = await self._register(discovery, installation_epoch)
         if not registration.same_object:
             return GitHubIngressProcessResult(
                 ingress_id=registration.ingress_id,
@@ -213,15 +248,24 @@ class GitHubIngressOrchestrator:
                 transaction_binding_sha256=binding_sha256,
             )
         except IngressValidationError as error:
-            return await self._quarantine(discovery, error_code=error.code.value)
+            return await self._quarantine(
+                discovery,
+                error_code=error.code.value,
+                installation_epoch=installation_epoch,
+            )
         except (LiveProposalAdapterError, ValueError) as error:
             code = error.code if isinstance(error, LiveProposalAdapterError) else "proposal_invalid"
-            return await self._quarantine(discovery, error_code=code)
+            return await self._quarantine(
+                discovery,
+                error_code=code,
+                installation_epoch=installation_epoch,
+            )
 
         validation = await self._validate(
             discovery,
             idempotency_key=command.idempotency_key,
             payload_sha256=payload_sha256,
+            installation_epoch=installation_epoch,
         )
         if validation.terminal:
             return GitHubIngressProcessResult(
@@ -241,6 +285,7 @@ class GitHubIngressOrchestrator:
         participant = GitHubIngressTransactionParticipant(
             repository=self._repository,
             discovery=discovery,
+            installation_epoch=installation_epoch,
             binding_sha256=binding_sha256,
             clock=self._clock,
         )
@@ -258,10 +303,14 @@ class GitHubIngressOrchestrator:
                     disposition="retry",
                     code=error.code,
                 )
-            return await self._quarantine(discovery, error_code=f"selection_{error.code}")
+            return await self._quarantine(
+                discovery,
+                error_code=f"selection_{error.code}",
+                installation_epoch=installation_epoch,
+            )
 
         # The participant committed the terminal row with the selection result.
-        refreshed = await self._register(discovery)
+        refreshed = await self._register(discovery, installation_epoch)
         return GitHubIngressProcessResult(
             ingress_id=refreshed.ingress_id,
             state=refreshed.state,
