@@ -48,6 +48,7 @@ class TenantDatabase(Protocol):
 class ReportQuery:
     name: str
     statement: TextClause
+    tenant_qualifiers: tuple[str, ...]
 
 
 REPORT_QUERIES = (
@@ -58,12 +59,14 @@ REPORT_QUERIES = (
             SELECT date_trunc('day', decided_at) AS period_start,
                    actor_id, client_id, outcome, count(*) AS count
               FROM selection_decisions
-             WHERE decided_at >= :since
+             WHERE tenant_id = :tenant_id
+               AND decided_at >= :since
              GROUP BY period_start, actor_id, client_id, outcome
              ORDER BY period_start DESC, actor_id, client_id, outcome
              LIMIT :limit
             """
         ),
+        ("tenant_id",),
     ),
     ReportQuery(
         "writes_by_client_profile",
@@ -72,12 +75,14 @@ REPORT_QUERIES = (
             SELECT e.client_id, c.transport_kind AS profile, e.operation, count(*) AS count
               FROM memory_events AS e
               JOIN clients AS c ON c.tenant_id = e.tenant_id AND c.client_id = e.client_id
-             WHERE e.created_at >= :since
+             WHERE e.tenant_id = :tenant_id
+               AND e.created_at >= :since
              GROUP BY e.client_id, c.transport_kind, e.operation
              ORDER BY count DESC, e.client_id, e.operation
              LIMIT :limit
             """
         ),
+        ("e.tenant_id",),
     ),
     ReportQuery(
         "unresolved_conflicts",
@@ -85,11 +90,13 @@ REPORT_QUERIES = (
             """
             SELECT conflict_id, lineage_id, branch_id, subject_id, status, opened_at
               FROM memory_conflicts
-             WHERE status = 'open'
+             WHERE tenant_id = :tenant_id
+               AND status = 'open'
              ORDER BY opened_at DESC, conflict_id
              LIMIT :limit
             """
         ),
+        ("tenant_id",),
     ),
     ReportQuery(
         "sensitive_and_lifecycle_memory_metadata",
@@ -99,13 +106,15 @@ REPORT_QUERIES = (
                    category, scope, visibility, status, sensitivity,
                    content_protection, revision, updated_at
               FROM memories
-             WHERE sensitivity >= 3
-                OR visibility = 'public_seed'
-                OR status IN ('candidate', 'retired', 'tombstoned')
+             WHERE tenant_id = :tenant_id
+               AND (sensitivity >= 3
+                    OR visibility = 'public_seed'
+                    OR status IN ('candidate', 'retired', 'tombstoned'))
              ORDER BY updated_at DESC, memory_id
              LIMIT :limit
             """
         ),
+        ("tenant_id",),
     ),
     ReportQuery(
         "branch_metadata",
@@ -114,10 +123,12 @@ REPORT_QUERIES = (
             SELECT lineage_id, branch_id, parent_branch_id, fork_event_sequence,
                    visibility_ceiling, created_at, sealed_at
               FROM branches
+             WHERE tenant_id = :tenant_id
              ORDER BY created_at DESC, branch_id
              LIMIT :limit
             """
         ),
+        ("tenant_id",),
     ),
     ReportQuery(
         "credentials_nearing_expiry",
@@ -127,12 +138,14 @@ REPORT_QUERIES = (
                    cc.kind, cc.expires_at, cc.revoked_at
               FROM client_credentials AS cc
               JOIN clients AS c ON c.tenant_id = cc.tenant_id AND c.client_id = cc.client_id
-             WHERE cc.revoked_at IS NOT NULL
-                OR (cc.expires_at IS NOT NULL AND cc.expires_at <= :expiry_cutoff)
+             WHERE cc.tenant_id = :tenant_id
+               AND (cc.revoked_at IS NOT NULL
+                    OR (cc.expires_at IS NOT NULL AND cc.expires_at <= :expiry_cutoff))
              ORDER BY cc.expires_at NULLS LAST, cc.credential_id
              LIMIT :limit
             """
         ),
+        ("cc.tenant_id",),
     ),
     ReportQuery(
         "queue_status",
@@ -141,12 +154,14 @@ REPORT_QUERIES = (
             SELECT job_type, state, count(*) AS count,
                    min(available_at) AS oldest_available_at
               FROM outbox_jobs
-             WHERE state IN ('pending', 'leased', 'dead')
+             WHERE tenant_id = :tenant_id
+               AND state IN ('pending', 'leased', 'dead')
              GROUP BY job_type, state
              ORDER BY job_type, state
              LIMIT :limit
             """
         ),
+        ("tenant_id",),
     ),
     ReportQuery(
         "archive_status",
@@ -161,32 +176,44 @@ REPORT_QUERIES = (
               LEFT JOIN archive_export_checkpoints AS c
                 ON c.tenant_id = t.tenant_id
                AND c.archive_target_id = t.archive_target_id
+             WHERE t.tenant_id = :tenant_id
              GROUP BY t.archive_target_id, t.state, c.state
              ORDER BY t.archive_target_id, c.state
              LIMIT :limit
             """
         ),
+        ("t.tenant_id",),
     ),
     ReportQuery(
         "consistency_checks",
         text(
             """
-            SELECT 'memory_event_sequence' AS check_name,
-                   CASE WHEN COALESCE(max(e.sequence), 0) =
-                                  COALESCE(max(ec.next_sequence - 1), 0)
-                        THEN 'ok' ELSE 'inconsistent' END AS state
-              FROM memory_events AS e
-              FULL JOIN memory_event_counter AS ec ON ec.counter_id = 1
+            SELECT 'memory_last_event' AS check_name,
+                   CASE WHEN EXISTS (
+                            SELECT 1
+                              FROM memories AS m
+                              LEFT JOIN memory_events AS e
+                                ON e.tenant_id = m.tenant_id
+                               AND e.event_id = m.last_event_id
+                             WHERE m.tenant_id = :tenant_id
+                               AND e.event_id IS NULL
+                        ) THEN 'inconsistent' ELSE 'ok' END AS state
             UNION ALL
-            SELECT 'selection_sequence' AS check_name,
-                   CASE WHEN COALESCE(max(s.selection_sequence), 0) =
-                                  COALESCE(max(sc.next_sequence - 1), 0)
-                        THEN 'ok' ELSE 'inconsistent' END AS state
-              FROM selection_decisions AS s
-              FULL JOIN selection_decision_counter AS sc ON sc.counter_id = 1
+            SELECT 'selection_event' AS check_name,
+                   CASE WHEN EXISTS (
+                            SELECT 1
+                              FROM selection_decisions AS s
+                              LEFT JOIN memory_events AS e
+                                ON e.tenant_id = s.tenant_id
+                               AND e.event_id = s.event_id
+                             WHERE s.tenant_id = :tenant_id
+                               AND s.event_id IS NOT NULL
+                               AND e.event_id IS NULL
+                        ) THEN 'inconsistent' ELSE 'ok' END AS state
             ORDER BY check_name
             """
         ),
+        ("m.tenant_id", "s.tenant_id"),
     ),
 )
 
@@ -237,6 +264,7 @@ class OperatorReportRepository:
             raise ValueError("invalid_report_window")
         generated_at = (now or datetime.now(UTC)).astimezone(UTC)
         parameters = {
+            "tenant_id": tenant_id,
             "since": generated_at - timedelta(days=window_days),
             "expiry_cutoff": generated_at + timedelta(days=30),
             "limit": MAX_REPORT_ROWS,

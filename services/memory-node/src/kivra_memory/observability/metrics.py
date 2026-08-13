@@ -88,7 +88,7 @@ class BoundedMetric:
 
         self._validate_labels(labels)
 
-    def inc(self, amount: float = 1.0, **labels: str) -> None:
+    def inc(self, *, amount: float = 1.0, **labels: str) -> None:
         child = self._child(labels)
         if self.spec.kind not in {"counter", "gauge"}:
             raise TypeError(f"not_incrementable:{self.spec.name}")
@@ -286,6 +286,11 @@ METRIC_SPECS = (
         "gauge",
     ),
     MetricSpec(
+        "kivra_memory_github_poll_interval_seconds",
+        "Configured GitHub successful-poll interval.",
+        "gauge",
+    ),
+    MetricSpec(
         "kivra_memory_github_events_total",
         "GitHub ingress aggregate events.",
         "counter",
@@ -351,6 +356,11 @@ METRIC_SPECS = (
         _allowed(kind=("base", "git_bundle", "wal")),
     ),
     MetricSpec(
+        "kivra_memory_offsite_unverified_head_age_seconds",
+        "Age of a changed accepted archive head without a verified encrypted secondary copy.",
+        "gauge",
+    ),
+    MetricSpec(
         "kivra_memory_offsite_verification_results_total",
         "Offsite verification outcomes.",
         "counter",
@@ -362,14 +372,14 @@ METRIC_SPECS = (
         "Age of latest successful recovery drill.",
         "gauge",
         ("kind",),
-        _allowed(kind=("git", "pitr")),
+        _allowed(kind=("full", "pitr")),
     ),
     MetricSpec(
         "kivra_memory_recovery_drill_results_total",
         "Recovery drill outcomes.",
         "counter",
         ("kind", "result"),
-        _allowed(kind=("git", "pitr"), result=("failure", "success")),
+        _allowed(kind=("full", "pitr"), result=("failure", "success")),
     ),
     MetricSpec(
         "kivra_memory_service_exits_total",
@@ -422,6 +432,13 @@ METRIC_SPECS = (
     MetricSpec(
         "kivra_memory_storage_free_bytes",
         "Free bytes in bounded storage classes.",
+        "gauge",
+        ("component",),
+        _allowed(component=("backup", "database", "monitoring", "wal")),
+    ),
+    MetricSpec(
+        "kivra_memory_storage_free_ratio",
+        "Free-space ratio in bounded storage classes.",
         "gauge",
         ("component",),
         _allowed(component=("backup", "database", "monitoring", "wal")),

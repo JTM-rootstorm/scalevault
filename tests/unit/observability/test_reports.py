@@ -42,7 +42,7 @@ class FakeSession:
         query = str(statement)
         self.calls.append((query, parameters))
         if "AS check_name" in query:
-            return FakeResult([{"check_name": "memory_event_sequence", "state": "ok"}])
+            return FakeResult([{"check_name": "memory_last_event", "state": "ok"}])
         return FakeResult([])
 
 
@@ -64,6 +64,9 @@ def test_report_queries_have_explicit_payload_silent_column_lists() -> None:
         assert "select *" not in statement
         identifiers = set(re.findall(r"[a-z][a-z0-9_]*", statement))
         assert identifiers.isdisjoint(FORBIDDEN_REPORT_COLUMNS), query.name
+        assert query.tenant_qualifiers
+        for qualifier in query.tenant_qualifiers:
+            assert f"{qualifier} = :tenant_id" in statement, query.name
 
 
 @pytest.mark.asyncio
@@ -82,6 +85,7 @@ async def test_report_is_tenant_scoped_bounded_and_content_free() -> None:
     }
     assert len(session.calls) == len(REPORT_QUERIES)
     assert all(parameters["limit"] == MAX_REPORT_ROWS for _, parameters in session.calls)
+    assert all(parameters["tenant_id"] == TENANT_ID for _, parameters in session.calls)
 
 
 @pytest.mark.asyncio

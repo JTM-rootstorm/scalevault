@@ -4,60 +4,283 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  - interval: 1m
+  - name: adr-0031-age-and-ratio-boundaries-fire-and-recover
+    interval: 1m
     input_series:
       - series: 'kivra_memory_backup_age_seconds{kind="base"}'
-        values: '100000x20 0x20'
-      - series: 'kivra_memory_database_pool_saturation_ratio'
-        values: '1x20 0x20'
-      - series: 'kivra_memory_tunnel_connected'
-        values: '0x20 1x20'
-      - series: 'kivra_memory_github_poll_age_seconds'
-        values: '1000x20 0x20'
-      - series: 'kivra_memory_projection_inconsistencies{kind="event_gap"}'
-        values: '1x20 0x20'
-      - series: 'kivra_memory_queue_oldest_age_seconds{queue="purge"}'
-        values: '1000x20 0x20'
+        values: '93600 93601 0'
+      - series: 'kivra_memory_wal_oldest_age_seconds'
+        values: '600 601 901 0'
+      - series: 'kivra_memory_storage_free_ratio{component="database"}'
+        values: '0.20 0.19 0.09 0.30'
+      - series: 'kivra_memory_offsite_unverified_head_age_seconds'
+        values: '3600 3601 0'
+      - series: 'kivra_memory_archive_lag_seconds{stage="push"}'
+        values: '900 901 3601 0'
+      - series: 'kivra_memory_queue_oldest_age_seconds{queue="embedding"}'
+        values: '900 901 3601 0'
+      - series: 'kivra_memory_recovery_drill_age_seconds{kind="pitr"}'
+        values: '3024000 3024001 0'
+      - series: 'kivra_memory_recovery_drill_age_seconds{kind="full"}'
+        values: '8640000 8640001 0'
     alert_rule_test:
-      - eval_time: 20m
-        alertname: ScaleVaultBackupRPOBreach
+      - eval_time: 1m
+        alertname: ScaleVaultBackupRPOCritical
         exp_alerts:
           - exp_labels: {severity: critical, category: backup, kind: base}
-      - eval_time: 20m
-        alertname: ScaleVaultDatabasePoolSaturation
+            exp_annotations: {summary: "ScaleVault has no verified daily base backup within 26 hours", response: "backup_stale"}
+      - eval_time: 2m
+        alertname: ScaleVaultBackupRPOCritical
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultWALAgeWarning
+        exp_alerts:
+          - exp_labels: {severity: warning, category: wal}
+            exp_annotations: {summary: "ScaleVault has WAL unarchived for over 10 minutes", response: "wal_backlog"}
+      - eval_time: 2m
+        alertname: ScaleVaultWALAgeCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, category: wal}
+            exp_annotations: {summary: "ScaleVault has WAL unarchived for over 15 minutes", response: "wal_backlog"}
+      - eval_time: 3m
+        alertname: ScaleVaultWALAgeWarning
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultStorageFreeWarning
+        exp_alerts:
+          - exp_labels: {severity: warning, category: storage, component: database}
+            exp_annotations: {summary: "ScaleVault storage is below 20 percent free", response: "storage_pressure"}
+      - eval_time: 2m
+        alertname: ScaleVaultStorageFreeCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, category: storage, component: database}
+            exp_annotations: {summary: "ScaleVault storage is below 10 percent free", response: "storage_pressure"}
+      - eval_time: 3m
+        alertname: ScaleVaultStorageFreeWarning
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultOffsiteHeadUnverified
+        exp_alerts:
+          - exp_labels: {severity: warning, category: offsite}
+            exp_annotations: {summary: "A changed accepted archive head lacks a verified encrypted secondary copy", response: "offsite_stale"}
+      - eval_time: 2m
+        alertname: ScaleVaultOffsiteHeadUnverified
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultArchiveLagWarning
+        exp_alerts:
+          - exp_labels: {severity: warning, category: archive, stage: push}
+            exp_annotations: {summary: "ScaleVault archive work is over 15 minutes old", response: "archive_lag"}
+      - eval_time: 2m
+        alertname: ScaleVaultArchiveLagCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, category: archive, stage: push}
+            exp_annotations: {summary: "ScaleVault archive work is over one hour old", response: "archive_lag"}
+      - eval_time: 3m
+        alertname: ScaleVaultArchiveLagWarning
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultRunnableJobAgeWarning
+        exp_alerts:
+          - exp_labels: {severity: warning, category: queue, queue: embedding}
+            exp_annotations: {summary: "ScaleVault runnable work is over 15 minutes old", response: "queue_stall"}
+      - eval_time: 2m
+        alertname: ScaleVaultRunnableJobAgeCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, category: queue, queue: embedding}
+            exp_annotations: {summary: "ScaleVault runnable work is over one hour old", response: "queue_stall"}
+      - eval_time: 3m
+        alertname: ScaleVaultRunnableJobAgeWarning
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultPITRDrillOverdue
+        exp_alerts:
+          - exp_labels: {severity: warning, category: recovery, kind: pitr}
+            exp_annotations: {summary: "ScaleVault PITR drill is over 35 days old", response: "recovery_drill"}
+      - eval_time: 2m
+        alertname: ScaleVaultPITRDrillOverdue
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultFullRecoveryDrillOverdue
+        exp_alerts:
+          - exp_labels: {severity: warning, category: recovery, kind: full}
+            exp_annotations: {summary: "ScaleVault full recovery drill is over 100 days old", response: "recovery_drill"}
+      - eval_time: 2m
+        alertname: ScaleVaultFullRecoveryDrillOverdue
+        exp_alerts: []
+
+  - name: adr-0031-pool-and-tunnel-sustained-durations-and-recovery
+    interval: 1m
+    input_series:
+      - series: 'kivra_memory_database_pool_saturation_ratio'
+        values: '0.91 0.91 0.91 0.91 0.91 0.91 0'
+      - series: 'kivra_memory_tunnel_connected'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ScaleVaultDatabasePoolSaturationWarning
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ScaleVaultDatabasePoolSaturationWarning
         exp_alerts:
           - exp_labels: {severity: warning, category: database}
-      - eval_time: 20m
-        alertname: ScaleVaultTunnelDisconnected
+            exp_annotations: {summary: "ScaleVault database pool is over 80 percent saturated", response: "pool_saturation"}
+      - eval_time: 5m
+        alertname: ScaleVaultDatabasePoolSaturationCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, category: database}
+            exp_annotations: {summary: "ScaleVault database pool is over 90 percent saturated", response: "pool_saturation"}
+      - eval_time: 6m
+        alertname: ScaleVaultDatabasePoolSaturationWarning
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ScaleVaultTunnelDisconnectedWarning
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ScaleVaultTunnelDisconnectedWarning
+        exp_alerts:
+          - exp_labels: {severity: warning, category: tunnel}
+            exp_annotations: {summary: "ScaleVault private tunnel has been disconnected for five minutes", response: "tunnel_disconnected"}
+      - eval_time: 14m
+        alertname: ScaleVaultTunnelDisconnectedCritical
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ScaleVaultTunnelDisconnectedCritical
         exp_alerts:
           - exp_labels: {severity: critical, category: tunnel}
-      - eval_time: 20m
-        alertname: ScaleVaultGitHubPollStalled
+            exp_annotations: {summary: "ScaleVault private tunnel has been disconnected for 15 minutes", response: "tunnel_disconnected"}
+      - eval_time: 16m
+        alertname: ScaleVaultTunnelDisconnectedWarning
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ScaleVaultTunnelDisconnectedCritical
+        exp_alerts: []
+
+  - name: adr-0031-credential-and-github-relative-boundaries
+    interval: 1m
+    input_series:
+      - series: 'kivra_memory_credentials_total{profile="direct_private",expiry="le_30d",state="active"}'
+        values: '1 0 0 0'
+      - series: 'kivra_memory_credentials_total{profile="direct_private",expiry="le_7d",state="active"}'
+        values: '0 1 0 0'
+      - series: 'kivra_memory_github_poll_interval_seconds'
+        values: '60x4'
+      - series: 'kivra_memory_github_poll_age_seconds'
+        values: '120 121 241 0'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: ScaleVaultDirectCredentialExpiryWarning
+        exp_alerts:
+          - exp_labels: {severity: warning, category: credential}
+            exp_annotations: {summary: "A direct-private credential expires within 30 days", response: "credential_expiry"}
+      - eval_time: 0m
+        alertname: ScaleVaultDirectCredentialExpiryCritical
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultDirectCredentialExpiryCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, category: credential}
+            exp_annotations: {summary: "A direct-private credential expires within seven days", response: "credential_expiry"}
+      - eval_time: 2m
+        alertname: ScaleVaultDirectCredentialExpiryWarning
+        exp_alerts: []
+      - eval_time: 0m
+        alertname: ScaleVaultGitHubPollStalledWarning
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: ScaleVaultGitHubPollStalledWarning
         exp_alerts:
           - exp_labels: {severity: warning, category: github}
-      - eval_time: 20m
-        alertname: ScaleVaultProjectionInconsistency
+            exp_annotations: {summary: "ScaleVault GitHub poll age exceeds twice its configured interval", response: "github_poll_stall"}
+      - eval_time: 2m
+        alertname: ScaleVaultGitHubPollStalledCritical
         exp_alerts:
-          - exp_labels: {severity: critical, category: consistency}
-      - eval_time: 20m
-        alertname: ScaleVaultHardForgetPurgeBacklog
+          - exp_labels: {severity: critical, category: github}
+            exp_annotations: {summary: "ScaleVault GitHub poll age exceeds four times its configured interval", response: "github_poll_stall"}
+      - eval_time: 3m
+        alertname: ScaleVaultGitHubPollStalledWarning
+        exp_alerts: []
+
+  - name: scrape-down-and-absent-series-fail-visible-then-recover
+    interval: 1m
+    input_series:
+      - series: 'up{job="scalevault-memory-node",instance="loopback"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'up{job="scalevault-postgresql",instance="loopback"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'kivra_memory_backup_age_seconds{kind="base"}'
+        values: '_ _ _ _ _ _ _ _ _ 0'
+      - series: 'kivra_memory_wal_oldest_age_seconds'
+        values: '_ _ _ _ _ _ _ _ _ 0'
+      - series: 'kivra_memory_storage_free_ratio{component="database"}'
+        values: '_ _ _ _ _ _ _ _ _ 0.5'
+      - series: 'kivra_memory_tunnel_connected'
+        values: '_ _ _ _ _ _ 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ScaleVaultMemoryNodeScrapeUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: ScaleVaultMemoryNodeScrapeUnavailable
         exp_alerts:
-          - exp_labels: {severity: critical, category: erasure, queue: purge}
-      - eval_time: 40m
-        alertname: ScaleVaultBackupRPOBreach
+          - exp_labels: {severity: critical, category: monitoring, job: scalevault-memory-node, instance: loopback}
+            exp_annotations: {summary: "ScaleVault Memory Node metrics are unavailable", response: "monitoring_unavailable"}
+      - eval_time: 3m
+        alertname: ScaleVaultMemoryNodeScrapeUnavailable
         exp_alerts: []
-      - eval_time: 40m
-        alertname: ScaleVaultDatabasePoolSaturation
+      - eval_time: 2m
+        alertname: ScaleVaultPostgreSQLUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, category: database, job: scalevault-postgresql, instance: loopback}
+            exp_annotations: {summary: "ScaleVault PostgreSQL is unavailable", response: "database_unavailable"}
+      - eval_time: 3m
+        alertname: ScaleVaultPostgreSQLUnavailable
         exp_alerts: []
-      - eval_time: 40m
-        alertname: ScaleVaultTunnelDisconnected
+      - eval_time: 8m
+        alertname: ScaleVaultOperationalTelemetryMissing
+        exp_alerts:
+          - exp_labels: {severity: critical, category: monitoring, job: scalevault-memory-node, instance: loopback}
+            exp_annotations: {summary: "Required ScaleVault operational telemetry is absent", response: "telemetry_missing"}
+      - eval_time: 9m
+        alertname: ScaleVaultOperationalTelemetryMissing
         exp_alerts: []
-      - eval_time: 40m
-        alertname: ScaleVaultGitHubPollStalled
+      - eval_time: 4m
+        alertname: ScaleVaultTunnelTelemetryMissing
         exp_alerts: []
-      - eval_time: 40m
-        alertname: ScaleVaultProjectionInconsistency
+      - eval_time: 5m
+        alertname: ScaleVaultTunnelTelemetryMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, category: tunnel}
+            exp_annotations: {summary: "Required ScaleVault tunnel telemetry is absent", response: "tunnel_disconnected"}
+      - eval_time: 6m
+        alertname: ScaleVaultTunnelTelemetryMissing
         exp_alerts: []
-      - eval_time: 40m
-        alertname: ScaleVaultHardForgetPurgeBacklog
+
+  - name: entirely-absent-required-scrapes-still-alert
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ScaleVaultMemoryNodeScrapeUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, category: monitoring}
+            exp_annotations: {summary: "ScaleVault Memory Node metrics are unavailable", response: "monitoring_unavailable"}
+      - eval_time: 2m
+        alertname: ScaleVaultPostgreSQLUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, category: database}
+            exp_annotations: {summary: "ScaleVault PostgreSQL is unavailable", response: "database_unavailable"}
+
+  - name: optional-github-partial-telemetry-is-visible
+    interval: 1m
+    input_series:
+      - series: 'kivra_memory_github_poll_interval_seconds'
+        values: '60x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ScaleVaultGitHubTelemetryMissing
         exp_alerts: []
+      - eval_time: 2m
+        alertname: ScaleVaultGitHubTelemetryMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, category: github}
+            exp_annotations: {summary: "Enabled ScaleVault GitHub ingress telemetry is incomplete", response: "github_poll_stall"}

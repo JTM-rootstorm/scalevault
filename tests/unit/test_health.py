@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from kivra_memory.api import app as app_module
 from kivra_memory.api.app import create_app, main
 from kivra_memory.config import Settings, get_settings
 from kivra_memory.observability.metrics import REGISTRY
@@ -204,6 +205,52 @@ async def test_metrics_uses_the_explicit_bounded_registry() -> None:
     assert response.content == generate_latest(REGISTRY.prometheus)
 
 
+async def test_canonical_app_contains_exception_and_request_canaries(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exception_canary = "SYNTHETIC-CANONICAL-EXCEPTION-CANARY"
+    request_canary = "SYNTHETIC-CANONICAL-REQUEST-CANARY"
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Logger:
+        def info(self, event: str, **fields: object) -> None:
+            calls.append((event, fields))
+
+        def warning(self, event: str, **fields: object) -> None:
+            calls.append((event, fields))
+
+        def error(self, event: str, **fields: object) -> None:
+            calls.append((event, fields))
+
+    def fail_metrics(*_args: object, **_kwargs: object) -> bytes:
+        raise RuntimeError(exception_canary)
+
+    monkeypatch.setattr(app_module, "generate_latest", fail_metrics)
+    app = create_app(Settings(metrics_enabled=True), event_logger=Logger())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/metrics?canary={request_canary}",
+            headers={"x-private-canary": request_canary},
+        )
+
+    assert response.status_code == 500
+    assert set(response.json()) == {"error", "recovery_id"}
+    assert response.json()["error"] == "internal_error"
+    assert calls == [
+        (
+            "request_failed",
+            {
+                "error_code": "internal_error",
+                "recovery_id": response.json()["recovery_id"],
+            },
+        )
+    ]
+    combined = response.text + repr(calls) + capsys.readouterr().err
+    assert exception_canary not in combined
+    assert request_canary not in combined
+
+
 async def test_readiness_fails_closed_without_dependencies() -> None:
     app = create_app(Settings())
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -384,3 +431,5 @@ def test_uvicorn_does_not_trust_proxy_headers_or_advertise_its_version(
     assert captured["host"] == "127.0.0.1"
     assert captured["proxy_headers"] is False
     assert captured["server_header"] is False
+    assert captured["access_log"] is False
+    assert captured["log_config"] == app_module.SAFE_UVICORN_LOG_CONFIG

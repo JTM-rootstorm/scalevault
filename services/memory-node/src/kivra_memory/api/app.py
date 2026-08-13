@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
+import structlog
 import uvicorn
 from fastapi import FastAPI, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -29,6 +30,7 @@ from kivra_memory.api.mcp import (
 )
 from kivra_memory.application.sealed_runtime import SealedRuntime
 from kivra_memory.config import Settings, get_settings
+from kivra_memory.observability.logging import EventLogger, PayloadSafeExceptionMiddleware
 from kivra_memory.observability.metrics import REGISTRY
 from kivra_memory.runtime import (
     ChatGPTReadRuntime,
@@ -44,6 +46,30 @@ from kivra_memory.storage.readiness import (
 )
 
 HEALTH_REQUESTS = REGISTRY["kivra_memory_health_requests_total"]
+
+SAFE_UVICORN_LOG_CONFIG: dict[str, object] = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "safe": {"format": "%(levelname)s %(message)s"},
+    },
+    "handlers": {
+        "safe_stderr": {
+            "class": "logging.StreamHandler",
+            "formatter": "safe",
+            "stream": "ext://sys.stderr",
+        },
+    },
+    "loggers": {
+        "uvicorn": {"handlers": ["safe_stderr"], "level": "INFO", "propagate": False},
+        "uvicorn.error": {
+            "handlers": ["safe_stderr"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "uvicorn.access": {"handlers": [], "level": "CRITICAL", "propagate": False},
+    },
+}
 
 
 def create_app(
@@ -61,6 +87,7 @@ def create_app(
     sealed_runtime: SealedRuntime | None = None,
     runtime: MemoryNodeRuntime | None = None,
     chatgpt_runtime: ChatGPTReadRuntime | None = None,
+    event_logger: EventLogger | None = None,
 ) -> FastAPI:
     """Create an application without storing authoritative process-local state."""
 
@@ -123,6 +150,10 @@ def create_app(
         docs_url=None,
         redoc_url=None,
         lifespan=lifespan,
+    )
+    app.add_middleware(
+        PayloadSafeExceptionMiddleware,
+        logger=event_logger or structlog.get_logger("kivra_memory.api"),
     )
 
     @app.get("/healthz", tags=["operator"])
@@ -226,4 +257,6 @@ def main() -> None:
         log_level=settings.log_level.lower(),
         proxy_headers=False,
         server_header=False,
+        access_log=False,
+        log_config=SAFE_UVICORN_LOG_CONFIG,
     )

@@ -24,7 +24,7 @@ FORBIDDEN_LABELS = {
 
 def test_metric_contract_is_unique_complete_and_content_free() -> None:
     names = [spec.name for spec in METRIC_SPECS]
-    assert len(names) == len(set(names)) == 40
+    assert len(names) == len(set(names)) == 43
     assert all(name.startswith("kivra_memory_") for name in names)
 
     for spec in METRIC_SPECS:
@@ -55,7 +55,7 @@ def test_every_allowed_label_value_can_be_instantiated() -> None:
         metric = registry[spec.name]
         labels = {label: values[0] for label, values in spec.allowed_values}
         if spec.kind == "counter":
-            metric.inc(**labels)
+            metric.labels(**labels).inc()
         elif spec.kind == "gauge":
             metric.set(1, **labels)
         else:

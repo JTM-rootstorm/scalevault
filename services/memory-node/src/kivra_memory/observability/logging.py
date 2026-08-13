@@ -8,9 +8,12 @@ tracebacks therefore cannot accidentally cross the production log boundary.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Literal, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
+
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 LogLevel = Literal["info", "warning", "error"]
 SafeValue = bool | int | float | str
@@ -43,6 +46,7 @@ EVENT_SPECS: Mapping[str, EventSpec] = {
     "operator_report_rejected": EventSpec("warning", ("error_code",)),
     "queue_batch_completed": EventSpec("info", ("queue", "count", "duration_ms")),
     "queue_batch_failed": EventSpec("error", ("queue", "error_code", "recovery_id")),
+    "request_failed": EventSpec("error", ("error_code", "recovery_id")),
     "recovery_drill_completed": EventSpec("info", ("kind", "duration_ms")),
     "recovery_drill_failed": EventSpec("error", ("kind", "error_code", "recovery_id")),
     "service_started": EventSpec("info", ("service",)),
@@ -112,4 +116,68 @@ def log_event(logger: EventLogger, event: str, **fields: SafeValue) -> None:
     getattr(logger, level)(event, **checked)
 
 
-__all__ = ["ERROR_CODES", "EVENT_SPECS", "EventLogger", "EventSpec", "log_event", "safe_event"]
+class PayloadSafeExceptionMiddleware:
+    """Contain unexpected HTTP exceptions without logging request or exception data."""
+
+    def __init__(self, app: ASGIApp, *, logger: EventLogger) -> None:
+        self._app = app
+        self._logger = logger
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        response_started = False
+        response_completed = False
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal response_started, response_completed
+            if message["type"] == "http.response.start":
+                response_started = True
+            elif message["type"] == "http.response.body" and not message.get("more_body", False):
+                response_completed = True
+            await send(message)
+
+        try:
+            await self._app(scope, receive, guarded_send)
+        except Exception:
+            recovery_id = str(uuid4())
+            with suppress(Exception):
+                log_event(
+                    self._logger,
+                    "request_failed",
+                    error_code="internal_error",
+                    recovery_id=recovery_id,
+                )
+            if response_completed:
+                return
+            if response_started:
+                await send({"type": "http.response.body", "body": b"", "more_body": False})
+                return
+            body = (
+                b'{"error":"internal_error","recovery_id":"' + recovery_id.encode("ascii") + b'"}'
+            )
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 500,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode("ascii")),
+                        (b"cache-control", b"no-store"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": body})
+
+
+__all__ = [
+    "ERROR_CODES",
+    "EVENT_SPECS",
+    "EventLogger",
+    "EventSpec",
+    "PayloadSafeExceptionMiddleware",
+    "log_event",
+    "safe_event",
+]
