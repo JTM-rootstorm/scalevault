@@ -1759,6 +1759,14 @@ def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
                 ),
                 {"job_uuid": job_uuid, "tenant_id": tenant_id, "key": key},
             )
+        connection.execute(
+            text(
+                "INSERT INTO observability_tenant_bindings (login_role, tenant_id) VALUES "
+                "('kivra_memory_metrics', :tenant_id), "
+                "('kivra_memory_operator_report_login', :tenant_id)"
+            ),
+            {"tenant_id": TENANT_A},
+        )
 
     metrics_engine = _login_engine(postgresql_server, "kivra_memory_metrics", metrics_password)
     report_engine = _login_engine(
@@ -1781,7 +1789,7 @@ def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
                 ),
                 {"tenant_id": TENANT_A},
             ).all()
-            assert rows == [("queue_depth", "lifecycle", "pending", 1.0)]
+            assert [tuple(row) for row in rows] == [("queue_depth", "lifecycle", "pending", 1.0)]
             with pytest.raises(DBAPIError) as denied, connection.begin_nested():
                 connection.execute(text("SELECT payload FROM public.outbox_jobs"))
             assert _sqlstate(denied.value) == "42501"
@@ -1818,6 +1826,10 @@ def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
                 "scalevault_operator_report_archive(:tenant_id, 500)",
                 "scalevault_operator_report_consistency(:tenant_id)",
             )
+            connection.execute(
+                text("SELECT set_config('scalevault.tenant_id', :tenant_id, true)"),
+                {"tenant_id": str(TENANT_B)},
+            )
             for function_call in mismatched_calls:
                 with pytest.raises(DBAPIError) as mismatch, connection.begin_nested():
                     connection.execute(
@@ -1825,18 +1837,39 @@ def test_observability_and_report_roles_are_function_only_and_tenant_scoped(
                         {"tenant_id": TENANT_B},
                     )
                 assert _sqlstate(mismatch.value) == "42501"
+            for statement in (
+                "SELECT * FROM public.observability_tenant_bindings",
+                "INSERT INTO public.observability_tenant_bindings "
+                "(login_role, tenant_id) VALUES ('kivra_memory_metrics', :tenant_id)",
+                "UPDATE public.observability_tenant_bindings "
+                "SET tenant_id = :tenant_id WHERE login_role = SESSION_USER::name",
+            ):
+                with pytest.raises(DBAPIError) as denied, connection.begin_nested():
+                    connection.execute(text(statement), {"tenant_id": TENANT_B})
+                assert _sqlstate(denied.value) == "42501"
 
         with metrics_engine.begin() as connection:
             connection.execute(
                 text("SELECT set_config('scalevault.tenant_id', :tenant_id, true)"),
-                {"tenant_id": str(TENANT_A)},
+                {"tenant_id": str(TENANT_B)},
             )
-            with pytest.raises(DBAPIError) as mismatch:
+            with pytest.raises(DBAPIError) as mismatch, connection.begin_nested():
                 connection.execute(
                     text("SELECT * FROM public.scalevault_observability_snapshot(:tenant_id)"),
                     {"tenant_id": TENANT_B},
                 )
             assert _sqlstate(mismatch.value) == "42501"
+            for statement in (
+                "SELECT * FROM public.observability_tenant_bindings",
+                "INSERT INTO public.observability_tenant_bindings "
+                "(login_role, tenant_id) VALUES "
+                "('kivra_memory_operator_report_login', :tenant_id)",
+                "UPDATE public.observability_tenant_bindings "
+                "SET tenant_id = :tenant_id WHERE login_role = SESSION_USER::name",
+            ):
+                with pytest.raises(DBAPIError) as denied, connection.begin_nested():
+                    connection.execute(text(statement), {"tenant_id": TENANT_B})
+                assert _sqlstate(denied.value) == "42501"
     finally:
         metrics_engine.dispose()
         report_engine.dispose()

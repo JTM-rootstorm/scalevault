@@ -47,6 +47,10 @@ def _scope() -> str:
         "IF pg_catalog.current_setting('scalevault.tenant_id', true) "
         "IS DISTINCT FROM p_tenant_id::text THEN "
         "RAISE EXCEPTION 'tenant scope mismatch' USING ERRCODE = '42501'; END IF; "
+        "IF NOT EXISTS (SELECT 1 FROM public.observability_tenant_bindings AS binding "
+        "WHERE binding.login_role = SESSION_USER::name "
+        "AND binding.tenant_id = p_tenant_id) THEN "
+        "RAISE EXCEPTION 'tenant binding mismatch' USING ERRCODE = '42501'; END IF; "
     )
 
 
@@ -58,6 +62,16 @@ def _limit() -> str:
 
 
 def upgrade() -> None:
+    op.execute(
+        sa.text(
+            "CREATE TABLE public.observability_tenant_bindings ("
+            "login_role name PRIMARY KEY, tenant_id uuid NOT NULL, "
+            "CONSTRAINT tenant FOREIGN KEY (tenant_id) REFERENCES public.tenants(tenant_id) "
+            "ON DELETE RESTRICT, CONSTRAINT fixed_login CHECK (login_role IN "
+            "('kivra_memory_metrics'::name, 'kivra_memory_operator_report_login'::name)))"
+        )
+    )
+    op.execute(sa.text("REVOKE ALL ON TABLE public.observability_tenant_bindings FROM PUBLIC"))
     _create_function(
         "scalevault_observability_snapshot(p_tenant_id uuid)",
         "metric_name text, label_one text, label_two text, label_three text, metric_value double precision",
@@ -206,3 +220,4 @@ def downgrade() -> None:
     )
     for signature in reversed(_FUNCTIONS):
         op.execute(sa.text(f"DROP FUNCTION public.{signature}"))
+    op.drop_table("observability_tenant_bindings")
