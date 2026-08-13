@@ -55,7 +55,7 @@ async def _database(database_url: str) -> AsyncIterator[Database]:
 
 
 @pytest.mark.database
-async def test_verified_head_reconstructs_one_pushed_checkpoint_on_new_target(
+async def test_verified_head_reconstructs_local_committed_checkpoint_on_disabled_target(
     postgresql_server: PostgreSQLTestServer,
     migrated_database: object,
 ) -> None:
@@ -103,7 +103,8 @@ async def test_verified_head_reconstructs_one_pushed_checkpoint_on_new_target(
             tenant_id=event.tenant_id,
             checkpoint_id=checkpoint_id,
             target_name="recovered-primary",
-            repository_reference="ssh://git@archive.invalid/recovered.git",
+            local_repository=_ROOT,
+            repository_reference=_ROOT.as_uri(),
             branch_name="main",
         )
         plan = await reconstruct_new_target_checkpoint(
@@ -121,7 +122,8 @@ async def test_verified_head_reconstructs_one_pushed_checkpoint_on_new_target(
                 ArchiveExportCheckpoint.checkpoint_id == checkpoint_id
             )
         )
-        assert target is not None and target.state == "active"
-        assert checkpoint is not None and checkpoint.state == "pushed"
-        assert checkpoint.remote_git_commit_sha == plan.git_commit_sha
+        assert target is not None and target.state == "disabled"
+        assert checkpoint is not None and checkpoint.state == "committed"
+        assert checkpoint.git_commit_sha == plan.git_commit_sha
+        assert checkpoint.remote_git_commit_sha is None
         assert bytes(checkpoint.manifest_sha256).hex() == plan.manifest_sha256

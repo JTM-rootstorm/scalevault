@@ -32,7 +32,6 @@ from kivra_memory.storage.archive import (
     archive_event_dto,
     commit_archive_checkpoint,
     prepare_archive_checkpoint,
-    push_archive_checkpoint,
     try_acquire_archive_target_lock,
 )
 from kivra_memory.storage.models import (
@@ -129,13 +128,14 @@ class ContinuationCheckpointPlan:
 
 @dataclass(slots=True)
 class DatabaseCheckpointReconstructor:
-    """Reconstruct one pushed checkpoint through the existing storage handlers."""
+    """Reconstruct one local committed checkpoint through existing handlers."""
 
     session: AsyncSession
     verified_archive: VerifiedArchive
     tenant_id: UUID
     checkpoint_id: UUID
     target_name: str
+    local_repository: Path
     repository_reference: str
     branch_name: str
 
@@ -151,6 +151,16 @@ class DatabaseCheckpointReconstructor:
             raise ArchiveContinuationError("new archive target identity is invalid") from None
         if not self.session.in_transaction():
             raise ArchiveContinuationError("checkpoint reconstruction requires a transaction")
+        try:
+            expected_reference = self.local_repository.resolve(strict=True).as_uri()
+        except OSError:
+            raise ArchiveContinuationError("local continuation target is unavailable") from None
+        if (
+            not self.local_repository.is_absolute()
+            or self.local_repository.is_symlink()
+            or self.repository_reference != expected_reference
+        ):
+            raise ArchiveContinuationError("local continuation target binding does not match")
         if not await try_acquire_archive_target_lock(
             self.session,
             tenant_id=self.tenant_id,
@@ -228,7 +238,7 @@ class DatabaseCheckpointReconstructor:
             target_kind="forgejo_git",
             repository_reference=self.repository_reference,
             branch_name=self.branch_name,
-            state="active",
+            state="disabled",
         )
         self.session.add(target)
         try:
@@ -263,12 +273,6 @@ class DatabaseCheckpointReconstructor:
                 checkpoint,
                 git_commit_sha=plan.git_commit_sha,
                 committed_at=exported_at,
-            )
-            await push_archive_checkpoint(
-                self.session,
-                checkpoint,
-                remote_git_commit_sha=plan.git_commit_sha,
-                pushed_at=exported_at,
             )
         except (ArchiveStorageError, ValueError):
             raise ArchiveContinuationError("checkpoint reconstruction failed") from None

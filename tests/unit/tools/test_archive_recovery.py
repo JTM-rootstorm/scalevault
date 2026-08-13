@@ -100,6 +100,7 @@ def test_continue_new_target_cli_passes_explicit_operator_contract(
     target.mkdir()
     target_id = str(new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=910))
     checkpoint_id = str(new_uuid7(timestamp_ms=1_786_000_000_000, random_bits=911))
+    repository_reference = target.resolve().as_uri()
     sentinel = object()
     called: dict[str, object] = {}
 
@@ -119,7 +120,7 @@ def test_continue_new_target_cli_passes_explicit_operator_contract(
             "checkpoint_id": checkpoint_id,
             "head": "a" * 40,
             "final_high_water_sequence": 42,
-            "continuation": "normal_exporter_activation_required",
+            "continuation": "verified_remote_promotion_required",
         }
 
     monkeypatch.setattr(module, "_continue_new_target", continuation)
@@ -139,7 +140,7 @@ def test_continue_new_target_cli_passes_explicit_operator_contract(
             "--target-name",
             "recovered-primary",
             "--repository-reference",
-            "ssh://git@archive.invalid/recovered.git",
+            repository_reference,
             "--target-branch",
             "main",
         )
@@ -151,11 +152,11 @@ def test_continue_new_target_cli_passes_explicit_operator_contract(
         "target_id": target_id,
         "checkpoint_id": checkpoint_id,
         "target_name": "recovered-primary",
-        "repository_reference": "ssh://git@archive.invalid/recovered.git",
+        "repository_reference": repository_reference,
         "target_branch": "main",
     }
     output = json.loads(capsys.readouterr().out)
-    assert output["continuation"] == "normal_exporter_activation_required"
+    assert output["continuation"] == "verified_remote_promotion_required"
     assert "signing_key" not in output
 
 
@@ -176,6 +177,46 @@ async def test_continue_new_target_rejects_before_copy_without_exact_confirmatio
             target_id=str(new_uuid7()),
             checkpoint_id=str(new_uuid7()),
             target_name="recovered-primary",
-            repository_reference="ssh://git@archive.invalid/recovered.git",
+            repository_reference=(tmp_path / "target.git").resolve().as_uri(),
             target_branch="main",
         )
+
+
+@pytest.mark.asyncio
+async def test_continue_new_target_rejects_unbound_remote_before_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "recovery.json"
+    value = _config(tmp_path)
+    database_url = tmp_path / "database-url"
+    database_url.write_text("postgresql+psycopg://user@localhost/scalevault_recovery_test")
+    database_url.chmod(0o600)
+    value["database_url_file"] = str(database_url)
+    value["disposable_database_name"] = "scalevault_recovery_test"
+    config.write_text(json.dumps(value))
+    settings = ArchiveRecoverySettings.load(config)
+    target = tmp_path / "target.git"
+    target.mkdir()
+    copied = False
+
+    def copy(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        nonlocal copied
+        copied = True
+        raise AssertionError("wrong remote must reject before copying")
+
+    monkeypatch.setattr(module, "copy_and_verify_new_target", copy)
+    with pytest.raises(RecoveryConfigurationError, match="repository reference"):
+        await module._continue_new_target(
+            settings,
+            object(),  # type: ignore[arg-type]
+            confirmation="continue-to-new-immutable-target",
+            target_repository=target,
+            target_id=str(new_uuid7()),
+            checkpoint_id=str(new_uuid7()),
+            target_name="recovered-primary",
+            repository_reference="ssh://git@archive.invalid/typo.git",
+            target_branch="main",
+        )
+    assert not copied

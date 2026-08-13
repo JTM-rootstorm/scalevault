@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Never
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 from uuid import UUID
 
 from pydantic import PostgresDsn, TypeAdapter, ValidationError
@@ -445,14 +445,14 @@ async def _continue_new_target(
         raise RecoveryConfigurationError("continuation database is not explicitly disposable")
     if target_branch != settings.branch_name:
         raise RecoveryConfigurationError("continuation branch topology does not match")
-    parsed_reference = urlsplit(repository_reference)
+    try:
+        expected_reference = target_repository.resolve(strict=True).as_uri()
+    except OSError:
+        raise RecoveryConfigurationError("continuation target is unavailable") from None
     if (
-        parsed_reference.scheme != "ssh"
-        or not parsed_reference.hostname
-        or not parsed_reference.path
-        or parsed_reference.query
-        or parsed_reference.fragment
-        or parsed_reference.password is not None
+        not target_repository.is_absolute()
+        or target_repository.is_symlink()
+        or repository_reference != expected_reference
         or len(repository_reference) > 1024
     ):
         raise RecoveryConfigurationError("continuation repository reference is invalid")
@@ -495,6 +495,7 @@ async def _continue_new_target(
                     tenant_id=tenant_id,
                     checkpoint_id=checkpoint_uuid,
                     target_name=target_name,
+                    local_repository=target_repository,
                     repository_reference=repository_reference,
                     branch_name=target_branch,
                 ),
@@ -507,7 +508,7 @@ async def _continue_new_target(
         "checkpoint_id": str(checkpoint_uuid),
         "head": target_source.expected_head,
         "final_high_water_sequence": plan.source_high_water_sequence,
-        "continuation": "normal_exporter_activation_required",
+        "continuation": "verified_remote_promotion_required",
     }
 
 
