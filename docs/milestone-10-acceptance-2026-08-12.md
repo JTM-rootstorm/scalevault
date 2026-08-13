@@ -2,8 +2,8 @@
 
 - **Review date:** 2026-08-12
 - **Status:** Not accepted; implementation and evidence collection in progress
-- **Implementation baseline:** `dddf3fe9994752f889345da7b484ac709d43afcb`
-- **Accepted source:** Pending final reviewed commit
+- **Implementation baseline:** `c66edf0`
+- **Accepted source:** Pending final installed-system acceptance
 - **Source archive checksum:** Pending final immutable source archive
 - **Database migration revision:** Pending installed-system verification
 
@@ -33,17 +33,17 @@ protected operator store and transfer only permitted fields here.
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
 | Architecture and threat decisions accepted | Review | Pending | ADRs 0027-0032 are accepted; final threat/runbook mapping review remains pending |
-| Complete repository verification | Repository | Pending | `make PNPM='npx --yes pnpm@10.15.0' verify` not yet recorded |
-| Required PostgreSQL 17 integration gate | Durable local | Pending | Zero-skip required database suite not yet recorded |
-| Production-relevant PITR durability | Durable local | Pending | Separate WAL/fsync recovery suite not yet recorded |
+| Complete repository verification | Repository | Passed | `make PNPM='npx --yes pnpm@10.15.0' verify`: 1526 passed, 179 environment-gated skips; all remaining language/schema/plugin gates passed |
+| Required PostgreSQL 17 integration gate | Durable local | Passed | Debian recovery LXC: 192 passed, zero skipped, PostgreSQL 17 |
+| Production-relevant PITR durability | Durable local | Passed | Debian recovery LXC: production helper archive/restore path, 1 passed, zero skipped |
 | Installed services and credentials hardened | Installed LXC | Pending | Exact installed units/credentials/hardening not yet audited |
 | Encrypted base backup and WAL current | Installed LXC/storage | Pending | Verified complete chain not yet recorded |
-| Isolated PostgreSQL PITR succeeds | Recovery drill | Pending | Real PITR drill not yet run/recorded |
+| Isolated PostgreSQL PITR succeeds | Recovery drill | Passed (repository durability gate) | Disposable PostgreSQL 17 A/B-not-C recovery and corrupt manifest/ciphertext rejection passed; installed-storage drill remains pending |
 | Primary Forgejo clean restore succeeds | Provider/recovery drill | Pending | Real read-only clone and restore not yet run/recorded |
 | Secondary encrypted bundle restore succeeds | Offsite/recovery drill | Pending | Independent failure-domain drill not yet run/recorded |
 | Archive continuation policy succeeds | Recovery drill | Pending | New-target reconstruction, verified remote promotion, and normal exporter append not yet run |
 | Credential revoke/rotation bounds pass | Installed/provider | Pending | Per-class current gates not yet recorded |
-| Privacy-safe observability and alerts pass | Repository/installed | Pending | Rule tests, delivery, fault injection, and canary scans pending |
+| Privacy-safe observability and alerts pass | Repository/installed | Partial | Prometheus syntax and rule scenarios pass; installed delivery, fault injection, and canary scans pending |
 | Leakage scanner detects every synthetic canary | Repository/durable local | Pending | Current complete scanner suite not yet recorded |
 | Hard forget dominates all retained recovery copies | Durable local/recovery | Pending | Database/archive/key-backup non-resurrection pending |
 | NPM/public-exposure boundary remains closed | Installed/external | Pending | Fresh generated-config and spoof/backend-counter proof pending |
@@ -67,16 +67,23 @@ non-applicable and unprovisioned.
 
 ## Repository verification
 
-Status: **Pending**.
+Status: **Passed for implementation baseline `c66edf0`**.
 
-Record the final source commit and immutable source checksum, targeted suite
-result counts, complete `make verify` result, deterministic generated-artifact
-checks, alert syntax/tests, systemd/NPM static checks, and approved package
-manager substitution if required. The current repository includes migration
+The complete verification command passed with 1526 Python tests passed and 179
+environment-gated skips, followed by successful Go vet/tests, deterministic
+protobuf verification, 11 schema validations, and plugin format, lint,
+TypeScript, and six test gates. The local PostgreSQL skips were caused by the
+missing `vector` extension and are superseded for the required database scope
+by the zero-skip PostgreSQL 17 LXC result below. The separately gated PITR test
+is likewise recorded below. Alert syntax/scenarios passed independently with
+the installed `promtool`.
+
+The current repository includes migration
 `0011_observability_aggregates`, the least-privilege metrics/report role and
 function boundary, the loopback metrics exporter, archive dual-signed
-transition/compromise verification, and `continue-new-target`; final gate
-results are not claimed here yet.
+transition/compromise verification, and `continue-new-target`. The immutable
+source archive checksum remains pending the final installed-system acceptance
+candidate.
 
 ## Durable PostgreSQL 17 verification
 
@@ -91,9 +98,17 @@ SCALEVAULT_REQUIRE_DATABASE_TESTS=1 \
 uv run --locked pytest tests/integration
 ```
 
-Record zero skipped required tests. Run the PITR durability suite separately
-with production-relevant WAL, checksums, and fsync behavior; a skipped or
-synthetic-only recovery test does not satisfy M10.
+The required database suite completed with 192 passed and zero skipped while
+PostgreSQL 17 binaries were explicitly selected. It covered zero-to-head and
+upgrade/downgrade migrations, metadata convergence, RLS and capability-role
+denials, cross-tenant isolation, observability/report functions, archive
+continuation checkpoint reconstruction, and destruction-ledger recovery.
+
+The separate production-helper PITR test completed with one passed and zero
+skipped. PostgreSQL continuously invoked the checked-in archive and restore
+helper paths; recovery included the required A/B-not-C assertion and corrupt
+manifest/ciphertext negative cases. This closes the repository durability
+gate, not the installed backup-store, custody, timer, or offsite drill gates.
 
 ## Installed service and credential hardening
 
@@ -121,9 +136,12 @@ dependency/hold authority exist.
 
 ## PostgreSQL PITR drill
 
-Status: **Pending; not run or accepted by this record**.
+Status: **Repository durability drill passed; installed-storage drill pending**.
 
-Follow [PostgreSQL PITR](runbooks/postgresql-pitr.md). Record selected target
+The disposable PostgreSQL 17 production-helper drill passed as described in
+the durable verification section. Follow [PostgreSQL PITR](runbooks/postgresql-pitr.md)
+on the installed encrypted backup and WAL stores before installed-system
+acceptance. Record selected target
 kind/value, achieved recovery point, timeline/system result codes, exact
 migration and extension results, aggregate counts/digests, archive-prefix and
 canary results, credential/destruction reconciliation, RPO/RTO, write-disable
@@ -168,7 +186,7 @@ blockers. Divergence is preserved and fails the gate.
 
 ## Observability, alerts, and retention
 
-Status: **Pending repository and live evidence**.
+Status: **Repository rule and database-boundary gates passed; live evidence pending**.
 
 Record fixed-label/cardinality test results; Prometheus rule syntax and unit
 tests; installed scrape and rule health; backup, WAL, offsite, archive, queue,
@@ -179,6 +197,13 @@ Record migration `0011_observability_aggregates`; denial/isolation proofs for
 both login/capability role pairs and fixed security-definer functions; the
 dedicated `memory-metrics` exporter on `127.0.0.1:9098`; collector clear/down
 behavior; and protected systemd report publication with no stdout.
+
+Prometheus rule syntax and all checked-in rule scenarios passed with the
+installed `promtool`. The PostgreSQL 17 suite also passed the function-only
+metrics/report principals, owner-controlled tenant bindings, arbitrary-tenant
+denial, payload/table denial, bounded report limits including NULL rejection,
+and all nine report function families. These repository gates do not replace
+installed scrape freshness, alert delivery, or operator-report publication.
 
 Retention remains **pending** until operator-chosen byte caps are installed for
 the 30-day journal/alert and 400-day content-free report maxima and the alert
