@@ -45,6 +45,7 @@ from kivra_memory.storage.archive import RestorePlan as DatabaseRestorePlan
 from kivra_memory.storage.base import Base
 from kivra_memory.storage.database import Database
 from kivra_memory.storage.models import (
+    AlembicCompatibility,
     MemoryEvent,
     MemoryEventCounter,
     SelectionDecisionCounter,
@@ -57,6 +58,13 @@ from kivra_memory.workers.archive_restore import (
 
 _RESTORE_CONFIRMATION = "restore-into-disposable-empty-database"
 _CONTINUATION_CONFIRMATION = "continue-to-new-immutable-target"
+_CLEAN_DATABASE_EXEMPT_TABLES = frozenset(
+    {
+        AlembicCompatibility.__table__,
+        MemoryEventCounter.__table__,
+        SelectionDecisionCounter.__table__,
+    }
+)
 
 
 class RecoveryConfigurationError(ValueError):
@@ -562,14 +570,10 @@ async def _require_clean_database(
         or await session.scalar(select(SelectionDecisionCounter.next_sequence)) != 1
     ):
         raise RecoveryConfigurationError("restore database counters are not clean")
-    counter_tables = {
-        MemoryEventCounter.__table__,
-        SelectionDecisionCounter.__table__,
-    }
-    for table in Base.metadata.sorted_tables:
-        if table in counter_tables:
+    for table in sorted(Base.metadata.tables.values(), key=lambda item: item.name):
+        if table in _CLEAN_DATABASE_EXEMPT_TABLES:
             continue
-        present = await session.scalar(select(table).limit(1))
+        present = await session.scalar(select(1).select_from(table).limit(1))
         if present is not None:
             raise RecoveryConfigurationError("restore database is not empty")
 

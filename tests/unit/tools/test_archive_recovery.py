@@ -6,14 +6,17 @@ import base64
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from kivra_memory.domain.identifiers import new_uuid7
+from kivra_memory.storage.base import Base
 from kivra_memory.tools import archive_recovery as module
 from kivra_memory.tools.archive_recovery import (
     ArchiveRecoverySettings,
     RecoveryConfigurationError,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _config(tmp_path: Path) -> dict[str, object]:
@@ -87,6 +90,61 @@ def test_config_rejects_private_key_fields_and_gapped_epochs(tmp_path: Path) -> 
     config.write_text(json.dumps(value))
     with pytest.raises(RecoveryConfigurationError):
         ArchiveRecoverySettings.load(config)
+
+
+@pytest.mark.asyncio
+async def test_clean_database_preflight_allows_migration_metadata() -> None:
+    checked_tables = tuple(
+        table
+        for table in Base.metadata.tables.values()
+        if table not in module._CLEAN_DATABASE_EXEMPT_TABLES
+    )
+    session = AsyncMock(spec=AsyncSession)
+    session.scalar.side_effect = [
+        "scalevault_recovery_test",
+        "0011_observability_aggregates",
+        False,
+        1,
+        1,
+        *(None for _table in checked_tables),
+    ]
+
+    await module._require_clean_database(
+        session,
+        database_name="scalevault_recovery_test",
+        expected_revision="0011_observability_aggregates",
+    )
+
+    exempt_names = {str(table) for table in module._CLEAN_DATABASE_EXEMPT_TABLES}
+    checked_names = {table.name for table in checked_tables}
+    assert exempt_names == {
+        "alembic_compatibility",
+        "memory_event_counter",
+        "selection_decision_counter",
+    }
+    assert "memory_events" in checked_names
+    assert "outbox_jobs" in checked_names
+    assert session.scalar.await_count == 5 + len(checked_tables)
+
+
+@pytest.mark.asyncio
+async def test_clean_database_preflight_rejects_application_row() -> None:
+    session = AsyncMock(spec=AsyncSession)
+    session.scalar.side_effect = [
+        "scalevault_recovery_test",
+        "0011_observability_aggregates",
+        False,
+        1,
+        1,
+        1,
+    ]
+
+    with pytest.raises(RecoveryConfigurationError, match="database is not empty"):
+        await module._require_clean_database(
+            session,
+            database_name="scalevault_recovery_test",
+            expected_revision="0011_observability_aggregates",
+        )
 
 
 def test_continue_new_target_cli_passes_explicit_operator_contract(
