@@ -839,12 +839,15 @@ def test_units_are_mount_gated_sandboxed_and_have_bounded_schedules() -> None:
 
     assert "ConditionPathIsMountPoint=/mnt/memory-backup" in base
     assert "ConditionPathIsMountPoint=/mnt/memory-backup-staging" in base
+    assert "ConditionFileNotEmpty=/etc/kivra-memory/backup-age-recipient" in base
     assert "LoadCredential=postgres-pgpass:" in base
     assert "PGPASSFILE=/run/credentials/" in base
     assert "backup-age-identity" not in base
     assert "Group=kivra-backup" in base
     assert "ConditionPathIsMountPoint=/mnt/memory-recovery" in verify
-    assert "ConditionPathIsRegularFile=/etc/kivra-memory/backup-age-identity" in verify
+    assert "ConditionFileNotEmpty=/etc/kivra-memory/backup-age-identity" in verify
+    assert "ConditionPathIsRegularFile=" not in base
+    assert "ConditionPathIsRegularFile=" not in verify
     assert "Group=memory-recovery" in verify
     assert "SupplementaryGroups=kivra-backup" in verify
     assert "ReadOnlyPaths=/mnt/memory-backup/kivra-memory-postgres\n" in retention

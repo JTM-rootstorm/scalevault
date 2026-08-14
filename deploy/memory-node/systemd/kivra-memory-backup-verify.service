@@ -3,7 +3,7 @@ Description=Verify latest ScaleVault encrypted PostgreSQL base backup
 RequiresMountsFor=/mnt/memory-backup /mnt/memory-recovery
 ConditionPathIsMountPoint=/mnt/memory-backup
 ConditionPathIsMountPoint=/mnt/memory-recovery
-ConditionPathIsRegularFile=/etc/kivra-memory/backup-age-identity
+ConditionFileNotEmpty=/etc/kivra-memory/backup-age-identity
 
 [Service]
 Type=oneshot

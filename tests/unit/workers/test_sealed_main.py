@@ -341,7 +341,8 @@ def test_destruction_broker_unit_is_non_root_bounded_and_hardened() -> None:
     assert (
         "LoadCredential=destruction-ledger-anchor:/etc/kivra-memory/destruction-ledger-anchor"
     ) in unit
-    assert "ConditionPathIsRegularFile=/etc/kivra-memory/destruction-ledger-anchor" in unit
+    assert "ConditionFileNotEmpty=/etc/kivra-memory/destruction-ledger-anchor" in unit
+    assert "ConditionPathIsRegularFile=" not in unit
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/purge-requests" in unit
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/destruction-ledger" in unit
     assert "ReadWritePaths=/var/lib/kivra-memory-destruction-anchor" in unit
@@ -382,6 +383,8 @@ def test_api_activation_requires_offline_restore_reconciliation() -> None:
 
     assert "User=memory-destruction" in reconcile
     assert "LoadCredential=destruction-ledger-anchor:" in reconcile
+    assert "ConditionFileNotEmpty=/etc/kivra-memory/destruction-ledger-anchor" in reconcile
+    assert "ConditionPathIsRegularFile=" not in reconcile
     assert "ReadOnlyPaths=/var/lib/kivra-memory-sealed/destruction-ledger" in reconcile
     assert "ReadOnlyPaths=/var/lib/kivra-memory-destruction-anchor" in reconcile
     assert "ReadWritePaths=/var/lib/kivra-memory-sealed/keys/control" in reconcile

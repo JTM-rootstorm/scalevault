@@ -5,7 +5,7 @@ Requires=postgresql@17-main.service
 RequiresMountsFor=/mnt/memory-backup /mnt/memory-backup-staging
 ConditionPathIsMountPoint=/mnt/memory-backup
 ConditionPathIsMountPoint=/mnt/memory-backup-staging
-ConditionPathIsRegularFile=/etc/kivra-memory/backup-age-recipient
+ConditionFileNotEmpty=/etc/kivra-memory/backup-age-recipient
 
 [Service]
 Type=oneshot

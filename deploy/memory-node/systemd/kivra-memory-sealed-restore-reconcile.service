@@ -6,7 +6,7 @@ ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys/control
 ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/keys/material
 ConditionPathIsDirectory=/var/lib/kivra-memory-sealed/destruction-ledger
 ConditionPathIsDirectory=/var/lib/kivra-memory-destruction-anchor
-ConditionPathIsRegularFile=/etc/kivra-memory/destruction-ledger-anchor
+ConditionFileNotEmpty=/etc/kivra-memory/destruction-ledger-anchor
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
