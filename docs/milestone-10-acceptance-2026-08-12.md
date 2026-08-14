@@ -1,30 +1,30 @@
 # Milestone 10 security, backup, and operations acceptance
 
-- **Review date:** 2026-08-13
+- **Review date:** 2026-08-14
 - **Status:** Not accepted; implementation and evidence collection in progress
 - **Implementation baseline:** `368b302`
-- **Frozen release:** `e5a6e90e4ef10d2316f1902aacf7533428d55e09`
+- **Frozen release:** `ea30b71722d47a87d58798ae8e028694839f60b9`
 - **Frozen release archive checksum:**
-  `77b47fb145f852b7f43f7a6de69b7e9b46e83c3efdce0dd503a1f9a795d36184`
-- **Evidence revision:** Pending evidence-only acceptance update
+  `cacae6a43a46ebdc7c3ca83fb9b59ae9bd58a2cf1404198797a432803086bfb8`
+- **Evidence revision:** Pending final installed-evidence update
 - **Database migration revision:** Candidate `0011_observability_aggregates`;
   installed preflight remains at `0010_ingress_provider_heads`
 
 This is the final record structure required by the M10 plan. It deliberately
 does not turn source implementation, unrun commands, or prior Milestone 9
-evidence into M10 acceptance. Every required row remains pending until the
-named frozen release, durable PostgreSQL 17, installed-host, and recovery gates
+evidence into M10 acceptance. The milestone remains unaccepted until the
+remaining required installed-host, installed-storage, and recovery gates
 produce reviewed content-free evidence. Excluded and non-blocking rows are not
 closure gates and must remain explicitly unevaluated unless separately tested.
 
-The frozen release is the immutable source revision whose executable behavior,
-configuration, migrations, generated artifacts, and source archive checksum are
-installed and tested. The evidence revision is the later commit that records
-reviewed bounded results. It may differ only by evidence and acceptance text
-that cannot affect runtime behavior. Any executable, configuration, schema,
-migration, generated-artifact, or dependency change creates a new release
-candidate and requires a new freeze, checksum, installation, and applicable
-reruns.
+The frozen release is the immutable source candidate selected for installation.
+Its repository and durable-local gates are tested and its source archive
+checksum is fixed; installed equality remains pending. The evidence revision is
+the later commit that records reviewed bounded results. It may differ only by
+evidence and acceptance text that cannot affect runtime behavior. Any
+executable, configuration, schema, migration, generated-artifact, or dependency
+change creates a new release candidate and requires a new freeze, checksum,
+installation, and applicable reruns.
 
 ## Content-free evidence boundary
 
@@ -46,15 +46,15 @@ protected operator store and transfer only permitted fields here.
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
 | Architecture and threat decisions accepted | Review | Passed | ADRs 0034 and 0035 are accepted and every active threat row maps implementation, tests, runbooks, and evidence |
-| Complete repository verification | Repository | Passed | Frozen release passed 1,579 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
-| Required PostgreSQL 17 integration gate | Durable local | Partial | Baseline passed with 192 passed and zero skipped; final frozen-release rerun remains pending |
-| Production-relevant PITR durability | Durable local | Partial | Baseline production-helper gate passed; final frozen-release rerun remains pending |
+| Complete repository verification | Repository | Passed | Frozen release passed 1,581 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
+| Required PostgreSQL 17 integration gate | Durable local | Passed | Frozen release passed all 203 required integration tests with zero skipped and zero failed |
+| Production-relevant PITR durability | Durable local | Passed | Frozen release production-helper PITR gate passed A/B-not-C and corrupt-object rejection; installed-storage drill remains separate |
 | Installed services and credentials hardened | Installed LXC | Pending | Read-only preflight found the prior `c95d66c` layout and migration `0010`; exact M10 installation and audit remain pending |
 | Encrypted base backup and WAL current | Installed LXC/local recovery storage | Pending | Verified complete local chain not yet recorded; Backblaze transfer is operator-managed and non-blocking |
 | No-prune recovery retention validates without deletion | Installed recovery storage | Pending | Fixed result, per-class before/after inventory equality, zero deletion attempts, unchanged restore points/holds, and capacity remain pending |
 | Isolated PostgreSQL PITR succeeds | Recovery drill | Partial | Repository A/B-not-C gate passed; installed-storage drill remains pending |
 | Primary Forgejo clean restore succeeds | Provider/recovery drill | Excluded / not evaluated | No Forgejo provider recovery claim is permitted for M10 |
-| Secondary encrypted bundle restore succeeds | Local recovery drill | Partial | Same-anchor clean disposable-database restore is implemented; final PostgreSQL 17/`age` frozen-release rerun remains pending |
+| Secondary encrypted bundle restore succeeds | Local recovery drill | Passed | Frozen release restored the exact verified encrypted bundle into a clean PostgreSQL 17 database with the same anchor and zero skips |
 | Archive continuation policy succeeds | Recovery drill | Excluded / not evaluated | No reconstruction, promotion, continuation, or resumed-exporter claim is permitted for M10 |
 | Credential revoke/rotation bounds pass | Installed/provider | Pending | Per-class current gates not yet recorded |
 | Privacy-safe observability, alerts, reports, and caps pass | Repository/installed | Partial | All 38 rules and repository scenarios pass at the frozen release; production activation, fault recovery, reports, and enforced caps remain pending |
@@ -86,7 +86,7 @@ and unprovisioned.
 
 Status: **Passed at the frozen release**.
 
-The complete verification command passed with 1,579 Python tests passed and 181
+The complete verification command passed with 1,581 Python tests passed and 181
 environment-gated skips, followed by successful Go vet/tests, deterministic
 protobuf verification, 11 schema validations, and plugin format, lint,
 TypeScript, and six test gates. The local PostgreSQL skips were caused by the
@@ -106,7 +106,7 @@ manifest/tree immutability checks passed.
 
 ## Durable PostgreSQL 17 verification
 
-Status: **Baseline passed on the designated Debian recovery LXC; final rerun pending**.
+Status: **Passed at the frozen release on the designated Debian recovery LXC**.
 
 The clean Debian gate must run with PostgreSQL 17 binaries explicitly selected
 and database tests required:
@@ -115,18 +115,20 @@ and database tests required:
 make test-m10-database-required
 ```
 
-The required database suite completed with 192 passed and zero skipped while
-PostgreSQL 17 binaries were explicitly selected. It covered zero-to-head and
-upgrade/downgrade migrations, metadata convergence, RLS and capability-role
-denials, cross-tenant isolation, observability/report functions, archive
-continuation checkpoint reconstruction, and destruction-ledger recovery.
+The required database suite completed with 203 passed, zero skipped, and zero
+failed while PostgreSQL 17 binaries were explicitly selected. It covered
+zero-to-head and upgrade/downgrade migrations, metadata convergence, RLS and
+capability-role denials, cross-tenant isolation, observability/report
+functions, archive continuation checkpoint reconstruction,
+destruction-ledger recovery, the production-helper PITR gate, and the real
+encrypted-bundle recovery gate.
 
-The separate production-helper PITR test completed with one passed and zero
-skipped. PostgreSQL continuously invoked the checked-in archive and restore
-helper paths; recovery included the required A/B-not-C assertion and corrupt
-manifest/ciphertext negative cases. This closes the repository durability
-gate, not the installed backup-store, custody, or timer gates. Backblaze offsite
-handling is an operator-managed concern and is not an M10 acceptance blocker.
+PostgreSQL continuously invoked the checked-in archive and restore helper
+paths during the PITR gate; recovery included the required A/B-not-C assertion
+and corrupt manifest/ciphertext negative cases. This closes the repository
+durability gate, not the installed backup-store, custody, or timer gates.
+Backblaze offsite handling is an operator-managed concern and is not an M10
+acceptance blocker.
 
 ## Read-only installed preflight
 
@@ -209,7 +211,7 @@ makes no Forgejo restore or remote-custody claim. The historical
 
 ## Secondary encrypted bundle drill
 
-Status: **Partial; same-anchor clean database restore pending**.
+Status: **Passed at the frozen release**.
 
 The Debian recovery LXC created a real ephemeral SSH-signed archive history,
 created an offsite-suitable full-history bundle, encrypted it to an ephemeral
@@ -217,15 +219,18 @@ created an offsite-suitable full-history bundle, encrypted it to an ephemeral
 materialized it through the checked-in recovery CLI. The restored ref/head and
 reachable object closure were byte-identical to the source, and signed-history
 verification passed against the protected unpublished clone before atomic
-publication. Wrong-identity and corrupted-ciphertext attempts returned only the
-fixed safe failure and created no output repository. The gate removed the
-ephemeral signing and recovery identities, plaintext bundle, scratch, source,
-and restored repositories; the staging root was independently removed after
-the run. This proves materialization and exact archive recovery only. M10 still
-requires the materialized history to restore into a clean disposable database,
-bound to the same source head, manifest, high-water mark, signer policy, and
-object bytes. Until that passes at the frozen release, the bundle gate remains
-partial.
+publication. The same materialized history then restored into a freshly
+migrated disposable PostgreSQL 17 database, bound to the same source head,
+manifest, high-water mark, signer policy, and object bytes. Wrong-identity and
+corrupted-ciphertext attempts returned only the fixed safe failure and created
+no output repository.
+
+The exact frozen-release gate passed with zero skips. It removed the ephemeral
+signing and recovery identities, plaintext bundle, scratch, source and restored
+repositories, disposable database storage, and the transferred source
+workspace. An independent second check found no remaining test workspace or
+pytest scratch root on the LXC. This closes the local encrypted-bundle recovery
+gate; it does not make an external-provider custody or restore claim.
 
 Backblaze handles the offsite failure domain. Provider placement, freshness,
 retention, and retrieval validation are operator-managed and non-blocking. In
@@ -258,22 +263,23 @@ behavior; and protected systemd report publication with no stdout.
 Prometheus rule syntax and all checked-in rule scenarios passed with the
 installed Debian `promtool`: all 38 rules loaded, and the fixtures exercised
 exact threshold, pending, firing, recovery, absent-series, and scrape-down
-behavior. An isolated Debian Prometheus process also reached ready state,
-reported healthy evaluation with zero evaluation errors, and self-scraped with
-`up=1`; its temporary listener, storage, and configuration were removed without
-changing the production Prometheus process. The PostgreSQL 17 suite also passed
-the function-only metrics/report principals, owner-controlled tenant bindings,
-arbitrary-tenant denial, payload/table denial, bounded report limits including
-NULL rejection, and all nine report function families. These repository gates
-do not replace installed scrape freshness or operator-report publication.
+behavior. Those exact rule artifacts are unchanged from the earlier isolated
+Debian Prometheus evaluation that reached ready state, reported zero evaluation
+errors, and self-scraped with `up=1`; that earlier temporary listener, storage,
+and configuration were removed without changing the production Prometheus
+process. The PostgreSQL 17 suite also passed the function-only metrics/report
+principals, owner-controlled tenant bindings, arbitrary-tenant denial,
+payload/table denial, bounded report limits including NULL rejection, and all
+nine report function families. These repository gates do not replace installed
+scrape freshness or operator-report publication.
 External alert delivery is explicitly not required for M10; local rule evaluation and visible
 collector/rule health remain required. When no receiver is configured, this
 record must not claim notification delivery.
 
-The production Prometheus process is healthy, but currently loads no ScaleVault
-rule groups or ScaleVault scrape jobs. Installed production activation and
-fault injection therefore remain pending even though the local evaluation gate
-passes.
+At the read-only installed preflight, the production Prometheus process was
+healthy but loaded no ScaleVault rule groups or ScaleVault scrape jobs.
+Installed production activation and fault injection therefore remain pending
+even though the local evaluation gate passes.
 
 The checked-in Backblaze/offsite rule scenarios remain validated repository
 contracts, but no installed provider-series producer or provider fault
@@ -367,9 +373,10 @@ relay/OAuth/node-agent surfaces also remain outside this acceptance.
 
 ## Acceptance decision
 
-**Decision: NOT ACCEPTED.** This draft contains no completed M10 live recovery,
-installed-system, or final frozen-release evidence. Update the individual rows
-only from reviewed current evidence, record the later evidence-only revision
-separately, and change this decision only after every required gate passes,
-cleanup is confirmed, and remaining risks are explicitly accepted by the
-operator.
+**Decision: NOT ACCEPTED.** Repository, required PostgreSQL 17, production-helper
+PITR, rule, and local encrypted-bundle gates are complete at the frozen
+release. Installed-system, installed backup/PITR storage, credential,
+monitoring activation, scanner, hard-forget, NPM, and final cleanup evidence
+remain pending. Record the later evidence-only revision separately, and change
+this decision only after every required gate passes, cleanup is confirmed, and
+remaining risks are explicitly accepted by the operator.
