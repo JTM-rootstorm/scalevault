@@ -55,11 +55,14 @@ systemd units continue to resolve through `/opt/kivra-memory/app`.
 record. It verifies the atomic pointer, root-owned read-only release and source
 archive, revision, source checksum, expected and installed migration, every
 console-entry digest, exact installed unit digests, systemd verification, and
-bounded unit states. Its digest inventory also requires the exact checked-in
-`client-auth` and `sealed-content` drop-ins at their target service directories
-and rejects extra `.conf` files in those directories. The sole local adaptation
-is the exact installed filename
-`kivra-memory-codex-ingress.service.d/10-network-policy.conf`; supply its
+bounded unit states. Its digest inventory always requires the exact checked-in
+`client-auth` drop-in. By default it requires the optional `sealed-content`
+drop-ins to be absent; pass `--sealed-content-enabled` only after their provider,
+ledger, accepted anchor, digest-binding credential, accounts, directories, and
+restore-reconciliation gate are genuinely provisioned. In that mode the audit
+requires the exact checked-in sealed drop-ins. It rejects extra `.conf` files in
+either target directory. The sole local adaptation is the exact installed
+filename `kivra-memory-codex-ingress.service.d/10-network-policy.conf`; supply its
 independently reviewed SHA-256 and the audit binds the verified digest into its
 output. A missing or changed policy, invalid digest, or any other extra
 `.conf` file fails closed. Credential files are never opened; only credential

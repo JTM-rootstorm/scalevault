@@ -160,6 +160,61 @@ def test_installed_audit_inventories_exact_security_drop_ins(tmp_path: Path) -> 
     }
 
 
+def test_installed_audit_requires_disabled_sealed_drop_ins_absent(tmp_path: Path) -> None:
+    module, source, installed, manifest, reviewed_digest = _drop_in_fixture(tmp_path)
+    for target in (
+        installed / "kivra-memory-api.service.d" / "20-sealed-content.conf",
+        installed / "kivra-memory-codex-ingress.service.d" / "20-sealed-content.conf",
+    ):
+        target.unlink()
+
+    result = module._installed_systemd_drop_ins(
+        source,
+        installed,
+        manifest,
+        reviewed_digest,
+        enabled_profiles=frozenset({"client-auth"}),
+        required_uid=os.geteuid(),
+    )
+
+    assert result == {
+        "client-auth/kivra-memory-api.service.d/30-client-token-auth.conf": manifest[
+            "client-auth/kivra-memory-api.service.d/30-client-token-auth.conf"
+        ],
+        (
+            "reviewed-local/kivra-memory-codex-ingress.service.d/10-network-policy.conf"
+        ): reviewed_digest,
+    }
+
+
+def test_installed_audit_rejects_sealed_drop_ins_when_profile_disabled(
+    tmp_path: Path,
+) -> None:
+    module, source, installed, manifest, reviewed_digest = _drop_in_fixture(tmp_path)
+
+    with pytest.raises(module.AuditError, match=r"^installed_systemd_drop_in_set_mismatch$"):
+        module._installed_systemd_drop_ins(
+            source,
+            installed,
+            manifest,
+            reviewed_digest,
+            enabled_profiles=frozenset({"client-auth"}),
+            required_uid=os.geteuid(),
+        )
+
+
+def test_installed_audit_sealed_profile_requires_explicit_flag() -> None:
+    module = _load_audit()
+
+    disabled = module._parser().parse_args(["--codex-network-policy-sha256", "a" * 64])
+    enabled = module._parser().parse_args(
+        ["--codex-network-policy-sha256", "a" * 64, "--sealed-content-enabled"]
+    )
+
+    assert disabled.sealed_content_enabled is False
+    assert enabled.sealed_content_enabled is True
+
+
 @pytest.mark.parametrize(
     ("nasty", "expected"),
     (

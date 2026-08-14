@@ -152,10 +152,15 @@ def _installed_systemd_drop_ins(
     manifest: object,
     reviewed_local_sha256: str,
     *,
+    enabled_profiles: frozenset[str] = frozenset(SYSTEMD_DROP_IN_PROFILES),
     required_uid: int = 0,
 ) -> dict[str, str]:
     if not isinstance(manifest, dict):
         _fail("release_manifest_invalid")
+    if "client-auth" not in enabled_profiles or not enabled_profiles <= frozenset(
+        SYSTEMD_DROP_IN_PROFILES
+    ):
+        _fail("installed_systemd_drop_in_profile_invalid")
     source_drop_ins = _source_systemd_drop_ins(source_unit_root)
     source_digests = {name: _sha256(path) for name, path in source_drop_ins.items()}
     if manifest != source_digests:
@@ -172,6 +177,8 @@ def _installed_systemd_drop_ins(
             ".service.d"
         ):
             _fail("release_systemd_drop_in_invalid")
+        if profile_name not in enabled_profiles:
+            continue
         target = installed_unit_root / target_directory
         expected_by_target.setdefault(target, set()).add(filename)
         installed = target / filename
@@ -351,11 +358,18 @@ def _audit(args: argparse.Namespace) -> None:
     release, result, manifest = _release(args)
     source_unit_root = release / "deploy" / "memory-node" / "systemd"
     installed_unit_root = Path(args.unit_root)
+    enabled_drop_in_profiles = frozenset(
+        {
+            "client-auth",
+            *(("sealed-content",) if args.sealed_content_enabled else ()),
+        }
+    )
     systemd_drop_in_digests = _installed_systemd_drop_ins(
         source_unit_root,
         installed_unit_root,
         manifest["systemd_drop_in_sha256"],
         args.codex_network_policy_sha256,
+        enabled_profiles=enabled_drop_in_profiles,
     )
     source_units = sorted(
         (
@@ -416,6 +430,10 @@ def _audit(args: argparse.Namespace) -> None:
             "result": "installed_audit_satisfied",
             "systemd_verify": "pass",
             "systemd_drop_in_sha256": systemd_drop_in_digests,
+            "systemd_drop_in_profiles": {
+                name: "enabled" if name in enabled_drop_in_profiles else "disabled"
+                for name in SYSTEMD_DROP_IN_PROFILES
+            },
             "units": units,
             "version": 1,
         }
@@ -435,6 +453,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--runuser", default="/usr/sbin/runuser")
     parser.add_argument("--psql", default="/usr/bin/psql")
     parser.add_argument("--codex-network-policy-sha256", required=True)
+    parser.add_argument("--sealed-content-enabled", action="store_true")
     return parser
 
 
