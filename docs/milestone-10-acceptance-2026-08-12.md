@@ -1,12 +1,14 @@
 # Milestone 10 security, backup, and operations acceptance
 
-- **Review date:** 2026-08-12
+- **Review date:** 2026-08-13
 - **Status:** Not accepted; implementation and evidence collection in progress
 - **Implementation baseline:** `368b302`
-- **Frozen release:** Pending final installed-system acceptance
-- **Frozen release archive checksum:** Pending final immutable source archive
+- **Frozen release:** `e5a6e90e4ef10d2316f1902aacf7533428d55e09`
+- **Frozen release archive checksum:**
+  `77b47fb145f852b7f43f7a6de69b7e9b46e83c3efdce0dd503a1f9a795d36184`
 - **Evidence revision:** Pending evidence-only acceptance update
-- **Database migration revision:** Pending installed-system verification
+- **Database migration revision:** Candidate `0011_observability_aggregates`;
+  installed preflight remains at `0010_ingress_provider_heads`
 
 This is the final record structure required by the M10 plan. It deliberately
 does not turn source implementation, unrun commands, or prior Milestone 9
@@ -43,22 +45,22 @@ protected operator store and transfer only permitted fields here.
 
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
-| Architecture and threat decisions accepted | Review | Partial | ADRs 0034 and 0035 are accepted; final threat/runbook mapping review remains pending |
-| Complete repository verification | Repository | Partial | Baseline passed; final frozen-release rerun and immutable checksum remain pending |
+| Architecture and threat decisions accepted | Review | Passed | ADRs 0034 and 0035 are accepted and every active threat row maps implementation, tests, runbooks, and evidence |
+| Complete repository verification | Repository | Passed | Frozen release passed 1,579 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
 | Required PostgreSQL 17 integration gate | Durable local | Partial | Baseline passed with 192 passed and zero skipped; final frozen-release rerun remains pending |
 | Production-relevant PITR durability | Durable local | Partial | Baseline production-helper gate passed; final frozen-release rerun remains pending |
-| Installed services and credentials hardened | Installed LXC | Pending | Exact installed units/credentials/hardening not yet audited |
+| Installed services and credentials hardened | Installed LXC | Pending | Read-only preflight found the prior `c95d66c` layout and migration `0010`; exact M10 installation and audit remain pending |
 | Encrypted base backup and WAL current | Installed LXC/local recovery storage | Pending | Verified complete local chain not yet recorded; Backblaze transfer is operator-managed and non-blocking |
 | No-prune recovery retention validates without deletion | Installed recovery storage | Pending | Fixed result, per-class before/after inventory equality, zero deletion attempts, unchanged restore points/holds, and capacity remain pending |
 | Isolated PostgreSQL PITR succeeds | Recovery drill | Partial | Repository A/B-not-C gate passed; installed-storage drill remains pending |
 | Primary Forgejo clean restore succeeds | Provider/recovery drill | Excluded / not evaluated | No Forgejo provider recovery claim is permitted for M10 |
-| Secondary encrypted bundle restore succeeds | Local recovery drill | Partial | Real `age` materialization and archive equality passed; same-anchor clean disposable-database restore remains pending |
+| Secondary encrypted bundle restore succeeds | Local recovery drill | Partial | Same-anchor clean disposable-database restore is implemented; final PostgreSQL 17/`age` frozen-release rerun remains pending |
 | Archive continuation policy succeeds | Recovery drill | Excluded / not evaluated | No reconstruction, promotion, continuation, or resumed-exporter claim is permitted for M10 |
 | Credential revoke/rotation bounds pass | Installed/provider | Pending | Per-class current gates not yet recorded |
-| Privacy-safe observability, alerts, reports, and caps pass | Repository/installed | Partial | All 38 rules and repository scenarios pass; production scrape/rules, per-family fault recovery, protected reports, and per-class age/byte caps remain pending |
-| Leakage scanners and cross-process canaries pass | Repository/durable local | Pending | Exact offline `ok`/digest/counts, negative classes, cross-process zero matches, and scanner cleanup remain pending |
-| Hard forget dominates the accepted recovery boundary | Durable local/recovery | Pending | PostgreSQL, local key-provider, destruction-ledger, and installed-PITR non-resurrection pending; archive and bundle copies are outside this claim |
-| NPM/public-exposure boundary remains closed | Installed/external | Pending | Fresh identity/static-check counts, spoof matrix, zero rejected-request backend contacts, exact `/mcp`, invalid-request, direct-path, canary, and cleanup results remain pending |
+| Privacy-safe observability, alerts, reports, and caps pass | Repository/installed | Partial | All 38 rules and repository scenarios pass at the frozen release; production activation, fault recovery, reports, and enforced caps remain pending |
+| Leakage scanners and cross-process canaries pass | Repository/durable local | Partial | Offline and protected operational scanners pass repository gates; installed captures, zero-match result, and cleanup remain pending |
+| Hard forget dominates the accepted recovery boundary | Durable local/recovery | Partial | Composed requester/broker/anchor/stale-copy reconciliation passes in source; installed PITR non-resurrection remains pending |
+| NPM/public-exposure boundary remains closed | Installed/external | Partial | Static checker/count contracts pass; external spoof/backend-counter/path/canary proof and cleanup remain pending |
 | Drill cleanup completes | Installed/recovery | Pending | Exact cleanup inventory, expected production-state result, residue count, and independent second check remain pending |
 
 The milestone remains **not accepted** while any required row is pending,
@@ -66,7 +68,7 @@ failed, or skipped.
 
 ## Architecture and threat decisions
 
-Status: **ADRs accepted; final mapping review pending**.
+Status: **Passed**.
 
 ADRs 0027 through 0033 accept encrypted PostgreSQL PITR/recovery sets;
 monotonic destruction across key backups; archive signer epochs, dual-signed
@@ -75,30 +77,32 @@ lifecycle; privacy-safe telemetry, retention and evidence; and fail-closed
 leakage scanning. ADR 0033 records operator-managed Backblaze custody and local
 alert evaluation without requiring external notification delivery. ADRs 0034
 and 0035 accept the narrowed local archive boundary and validation-only
-no-prune posture. Final acceptance still requires mapping every implementation,
-test, and runbook to the active-topology threat matrix. Dormant relay,
-node-agent, OAuth, public plugin/submission, and generic enrollment paths remain
-non-applicable and unprovisioned.
+no-prune posture. Every active-topology threat row maps its implementation,
+tests, runbook, and bounded evidence class. Dormant relay, node-agent, OAuth,
+public plugin/submission, and generic enrollment paths remain non-applicable
+and unprovisioned.
 
 ## Repository verification
 
-Status: **Baseline passed; final frozen-release rerun pending**.
+Status: **Passed at the frozen release**.
 
-The complete verification command passed with 1526 Python tests passed and 181
+The complete verification command passed with 1,579 Python tests passed and 181
 environment-gated skips, followed by successful Go vet/tests, deterministic
 protobuf verification, 11 schema validations, and plugin format, lint,
 TypeScript, and six test gates. The local PostgreSQL skips were caused by the
 missing `vector` extension and are superseded for the required database scope
 by the zero-skip PostgreSQL 17 LXC result below. The separately gated PITR test
-is likewise recorded below. Alert syntax/scenarios passed independently with
-the installed `promtool`.
+is likewise recorded below. The M10 deployment lane passed 126 tests with only
+the local `promtool` availability skip. The designated LXC's `promtool` loaded
+all 38 frozen-release rules and passed every checked-in rule scenario.
 
 The current repository includes migration
 `0011_observability_aggregates`, the least-privilege metrics/report role and
 function boundary, the loopback metrics exporter, archive dual-signed
 transition/compromise verification, and `continue-new-target`. Those archive
-continuation capabilities are not exercised or accepted by M10. The immutable
-frozen-release source archive checksum and final rerun remain pending.
+continuation capabilities are not exercised or accepted by M10. A second raw
+`git archive` digest independently matched the frozen checksum, and the release
+manifest/tree immutability checks passed.
 
 ## Durable PostgreSQL 17 verification
 
@@ -108,9 +112,7 @@ The clean Debian gate must run with PostgreSQL 17 binaries explicitly selected
 and database tests required:
 
 ```bash
-SCALEVAULT_TEST_PG_BINDIR=/usr/lib/postgresql/17/bin \
-SCALEVAULT_REQUIRE_DATABASE_TESTS=1 \
-uv run --locked pytest tests/integration
+make test-m10-database-required
 ```
 
 The required database suite completed with 192 passed and zero skipped while
@@ -125,6 +127,21 @@ helper paths; recovery included the required A/B-not-C assertion and corrupt
 manifest/ciphertext negative cases. This closes the repository durability
 gate, not the installed backup-store, custody, or timer gates. Backblaze offsite
 handling is an operator-managed concern and is not an M10 acceptance blocker.
+
+## Read-only installed preflight
+
+Status: **Preflight complete; mutation not authorized**.
+
+The designated LXC is healthy on PostgreSQL 17.10 with `vector`, `pg_trgm`,
+`citext`, and `pgcrypto`, and its canonical data directory is the expected
+mounted path. It remains on the prior `c95d66c` release layout and migration
+`0010_ingress_provider_heads`. Only the API unit is presently installed from
+the M10 inventory; the M10 metrics, backup, retention, destruction, worker, and
+timer units are absent. The three dedicated backup/staging/recovery mounts and
+backup public recipient are absent, and no routine-node recovery private
+identity is present. These are clean stop conditions, not failures or inferred
+authorization. Phase 1 installation, a pre-upgrade recovery point, storage and
+recipient provisioning, and an isolated recovery environment remain pending.
 
 ## Installed service and credential hardening
 
