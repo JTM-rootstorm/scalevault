@@ -105,6 +105,14 @@ class BoundedMetric:
             raise TypeError(f"not_gauge:{self.spec.name}")
         child.set(value)
 
+    def set_counter_absolute(self, value: float, **labels: str) -> None:
+        """Restore a durable counter value from a monotonic local source."""
+
+        child = self._child(labels)
+        if self.spec.kind != "counter" or value < 0:
+            raise TypeError(f"not_absolute_counter:{self.spec.name}")
+        child._value.set(value)
+
     def observe(self, value: float, **labels: str) -> None:
         child = self._child(labels)
         if self.spec.kind != "histogram":
@@ -461,6 +469,21 @@ METRIC_SPECS = (
     MetricSpec(
         "kivra_memory_database_collector_last_success_unixtime",
         "Unix time of the last successful least-privilege database snapshot.",
+        "gauge",
+    ),
+    MetricSpec(
+        "kivra_memory_operational_collector_up",
+        "Whether the fixed-schema local operational snapshot last succeeded.",
+        "gauge",
+    ),
+    MetricSpec(
+        "kivra_memory_operational_collector_failures_total",
+        "Fixed-schema local operational snapshot collection failures.",
+        "counter",
+    ),
+    MetricSpec(
+        "kivra_memory_operational_collector_last_success_unixtime",
+        "Unix time of the last successful fixed-schema operational snapshot.",
         "gauge",
     ),
 )

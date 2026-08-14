@@ -100,6 +100,25 @@ systemd-analyze verify /etc/systemd/system/kivra-memory-metrics-exporter.service
 systemctl enable --now kivra-memory-metrics-exporter.service
 ```
 
+The backup/WAL/storage families use a separate one-way metadata seam. Install
+`kivra-memory-operational-metrics-publish` as a root-owned libexec helper and
+install both `kivra-memory-operational-metrics.service` and its timer. The
+publisher has read-only access to the fixed latest-base status, PostgreSQL
+`archive_status`, and four fixed local storage roots. It writes only the exact
+root:`memory-metrics` mode-`0640` status below
+`/run/kivra-memory-metrics`; the exporter reads that file and receives no
+`kivra-backup` membership or backup-store path access. Enable the timer before
+the exporter:
+
+```sh
+systemctl enable --now kivra-memory-operational-metrics.timer
+systemctl restart kivra-memory-metrics-exporter.service
+```
+
+Missing, malformed, future-dated, or more than 120-second-old status clears
+the prior backup/WAL/storage samples and marks the operational collector down.
+Repository presence does not prove the fixed roots exist or the timer is live.
+
 The Milestone 6 services have separate Unix users and PostgreSQL roles. The
 exporter uses `kivra_memory_exporter`. GitHub discovery and validation use
 `kivra_memory_ingress`, while the canonical selection transaction uses a

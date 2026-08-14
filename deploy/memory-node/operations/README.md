@@ -39,6 +39,20 @@ fixed security-definer functions, the exact loopback database metrics exporter,
 and protected systemd report publication. Repository presence is not installed
 acceptance.
 
+Copy `retention-caps.json.example` to a protected root-owned mode-`0600`
+operator location and replace every zero byte cap with a positive locally
+chosen limit. Validate its fixed seven-surface schema with:
+
+```sh
+kivra-memory-retention-cap-check --manifest /absolute/protected/retention-caps.json
+```
+
+The content-free result binds the manifest digest and surface count only. It
+does not configure journald, PostgreSQL, NPM/container logging, Prometheus,
+local alert state, tunnel output, or protected-report cleanup, and it does not
+delete anything. M10 acceptance still requires live evidence that each named
+surface applies its selected age and byte cap to synthetic artifacts.
+
 Create one `credential_class_results` entry for every active non-Forgejo class:
 direct Codex ingress; Secure MCP Tunnel; OpenAI association/control plane when
 provisioned; applicable PostgreSQL application, metrics, report, worker, backup,

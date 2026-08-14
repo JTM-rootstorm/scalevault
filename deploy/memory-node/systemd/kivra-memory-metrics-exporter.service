@@ -1,7 +1,8 @@
 [Unit]
-Description=ScaleVault least-privilege database metrics exporter
-After=network.target postgresql@17-main.service
+Description=ScaleVault bounded local metrics exporter
+After=network.target postgresql@17-main.service kivra-memory-operational-metrics.service
 Requires=postgresql@17-main.service
+Wants=kivra-memory-operational-metrics.timer
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -50,6 +51,7 @@ IPAddressAllow=localhost
 SocketBindDeny=any
 SocketBindAllow=tcp:9098
 CapabilityBoundingSet=
+ReadOnlyPaths=-/run/kivra-memory-metrics/status.json
 
 [Install]
 WantedBy=multi-user.target

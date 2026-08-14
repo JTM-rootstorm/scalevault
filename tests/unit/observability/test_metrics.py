@@ -24,7 +24,7 @@ FORBIDDEN_LABELS = {
 
 def test_metric_contract_is_unique_complete_and_content_free() -> None:
     names = [spec.name for spec in METRIC_SPECS]
-    assert len(names) == len(set(names)) == 46
+    assert len(names) == len(set(names)) == 49
     assert all(name.startswith("kivra_memory_") for name in names)
 
     for spec in METRIC_SPECS:

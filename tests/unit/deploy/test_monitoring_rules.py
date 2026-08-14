@@ -97,6 +97,8 @@ def test_alert_thresholds_match_accepted_adr_0031() -> None:
     assert all(fragment in rules for fragment in required_fragments)
     assert "absent(kivra_memory_database_collector_last_success_unixtime)" in rules
     assert "time() - kivra_memory_database_collector_last_success_unixtime > 120" in rules
+    assert "absent(kivra_memory_operational_collector_last_success_unixtime)" in rules
+    assert "time() - kivra_memory_operational_collector_last_success_unixtime > 120" in rules
     assert rules.count("for: 5m") >= 5
     assert "for: 15m" in rules
 
@@ -104,6 +106,7 @@ def test_alert_thresholds_match_accepted_adr_0031() -> None:
 def test_promtool_cases_cover_boundaries_durations_recovery_and_missing_series() -> None:
     tests = (MONITORING / "scalevault.rules.test.yml").read_text()
     for case in (
+        "durable-local-backup-failure-counters-fire-and-recover",
         "adr-0031-age-and-ratio-boundaries-fire-and-recover",
         "adr-0031-pool-and-tunnel-sustained-durations-and-recovery",
         "adr-0031-credential-and-github-relative-boundaries",

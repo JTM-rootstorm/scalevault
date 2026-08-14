@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import stat
+import sys
 import tarfile
 from datetime import UTC, datetime, timedelta
 from importlib.machinery import SourceFileLoader
@@ -74,6 +75,92 @@ def _index(backup_id: str, created: datetime) -> dict[str, object]:
         "object_id": backup_id,
         "verification": "source_pg_verifybackup_ok",
     }
+
+
+def test_operational_result_counters_are_durable_and_monotonic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load()
+    _configure(module, tmp_path, monkeypatch)
+
+    module._record_operational_result("base_backup", success=True)
+    module._record_operational_result("base_backup", success=False)
+    module._record_operational_result("backup_verification", success=True)
+    module._record_operational_result("backup_verification", success=False)
+    module._record_operational_result("wal_archive", success=True)
+    module._record_operational_result("wal_archive", success=False, failure_reason="storage")
+    base_counter = module.STATUS_ROOT / "operational-counters-base-backup.json"
+    wal_counter = module.STATUS_ROOT / "operational-counters-wal-archive.json"
+    verification_counter = module.STATUS_ROOT / "operational-counters-backup-verification.json"
+    first_base = json.loads(base_counter.read_text())
+    first_wal = json.loads(wal_counter.read_text())
+    first_verification = json.loads(verification_counter.read_text())
+    module._record_operational_result("wal_archive", success=False, failure_reason="storage")
+    second_wal = json.loads(wal_counter.read_text())
+
+    assert first_base["base_backup_success"] == 1
+    assert first_base["base_backup_failure"] == 1
+    assert first_verification["backup_verification_success"] == 1
+    assert first_verification["backup_verification_failure"] == 1
+    assert first_wal["wal_archive_success"] == 1
+    assert first_wal["wal_archive_failure_storage"] == 1
+    assert second_wal["wal_archive_failure_storage"] == 2
+    assert second_wal["wal_archive_failure_command"] == 0
+    assert base_counter.stat().st_mode & 0o777 == 0o640
+    assert verification_counter.stat().st_mode & 0o777 == 0o640
+    assert wal_counter.stat().st_mode & 0o777 == 0o640
+
+
+def test_main_records_fixed_wal_failure_category(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load()
+    _configure(module, tmp_path, monkeypatch)
+    source = module.PG_WAL / ("0" * 24)
+    source.write_bytes(b"wal")
+    monkeypatch.setattr(
+        module, "archive_wal", lambda *_args: module._fail("required_mount_missing")
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(module.HELPER_PATH), "archive-wal", str(source), source.name],
+    )
+
+    assert module.main() == 1
+
+    status = json.loads((module.STATUS_ROOT / "operational-counters-wal-archive.json").read_text())
+    assert status["wal_archive_failure_storage"] == 1
+    assert (
+        sum(value for name, value in status.items() if name.startswith("wal_archive_failure_")) == 1
+    )
+
+
+def test_counter_publish_failure_does_not_mask_original_helper_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load()
+    _configure(module, tmp_path, monkeypatch)
+    source = module.PG_WAL / ("0" * 24)
+    source.write_bytes(b"wal")
+    monkeypatch.setattr(module, "archive_wal", lambda *_args: module._fail("original_failure"))
+    monkeypatch.setattr(
+        module,
+        "_record_operational_result",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("PRIVATE_CANARY")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(module.HELPER_PATH), "archive-wal", str(source), source.name],
+    )
+
+    assert module.main() == 1
+    output = capsys.readouterr()
+    assert "original_failure" in output.out
+    assert "PRIVATE_CANARY" not in output.out + output.err
 
 
 def _retention_base(module: Any, backup_id: str, created: datetime) -> Path:

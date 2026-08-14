@@ -345,6 +345,76 @@ def _replace_json(path: Path, value: dict[str, Any]) -> None:
     _fsync_dir(path.parent)
 
 
+def _record_operational_result(
+    metric: str,
+    *,
+    success: bool,
+    failure_reason: str = "command",
+) -> None:
+    """Durably increment one fixed content-free operational result counter."""
+
+    if metric not in {"base_backup", "backup_verification", "wal_archive"}:
+        _fail("operational_counter_invalid")
+    schemas: dict[str, dict[str, int]] = {
+        "base_backup": {
+            "base_backup_failure": 0,
+            "base_backup_success": 0,
+            "version": 1,
+        },
+        "backup_verification": {
+            "backup_verification_failure": 0,
+            "backup_verification_success": 0,
+            "version": 1,
+        },
+        "wal_archive": {
+            "version": 1,
+            "wal_archive_failure_command": 0,
+            "wal_archive_failure_storage": 0,
+            "wal_archive_failure_timeout": 0,
+            "wal_archive_failure_unavailable": 0,
+            "wal_archive_success": 0,
+        },
+    }
+    path = STATUS_ROOT / f"operational-counters-{metric.replace('_', '-')}.json"
+    value: dict[str, Any] = schemas[metric]
+    if path.exists():
+        _require_regular_file(path, max_bytes=4096, mode=STORE_FILE_MODE)
+        try:
+            parsed = json.loads(path.read_text(encoding="ascii"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise BackupError("operational_counter_invalid") from exc
+        if not isinstance(parsed, dict) or set(parsed) != set(value) or parsed.get("version") != 1:
+            _fail("operational_counter_invalid")
+        if any(
+            isinstance(item, bool) or not isinstance(item, int) or not 0 <= item < (1 << 53) - 1
+            for name, item in parsed.items()
+            if name != "version"
+        ):
+            _fail("operational_counter_invalid")
+        value = parsed
+    if failure_reason not in {"command", "storage", "timeout", "unavailable"}:
+        _fail("operational_counter_invalid")
+    result = "success" if success else "failure"
+    field = f"{metric}_{result}"
+    if metric == "wal_archive" and not success:
+        field += f"_{failure_reason}"
+    value[field] += 1
+    try:
+        _replace_json(path, value)
+    except OSError:
+        raise BackupError("operational_counter_publish_failed") from None
+
+
+def _wal_failure_reason(code: str) -> str:
+    if "timeout" in code:
+        return "timeout"
+    if any(word in code for word in ("mount", "store", "storage", "capacity")):
+        return "storage"
+    if any(word in code for word in ("missing", "unavailable")):
+        return "unavailable"
+    return "command"
+
+
 def _read_index(path: Path, *, kind: str) -> dict[str, Any]:
     _require_regular_file(path, max_bytes=64 * 1024, mode=STORE_FILE_MODE)
     try:
@@ -1728,7 +1798,10 @@ def _retention_inventory() -> tuple[dict[str, dict[str, object]], dict[str, int]
         )
 
     for status_path in STATUS_ROOT.iterdir():
-        if not re.fullmatch(r"latest-(?:base|wal|verification|retention)\.json", status_path.name):
+        if not re.fullmatch(
+            r"(?:latest-(?:base|wal|verification|retention)|operational-counters-(?:base-backup|backup-verification|wal-archive))\.json",
+            status_path.name,
+        ):
             _fail("status_invalid")
         if not isinstance(_read_inventory_json(status_path, max_bytes=4096), dict):
             _fail("status_invalid")
@@ -1819,6 +1892,11 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     arguments = _parser().parse_args()
+    operational_metric = {
+        "archive-wal": "wal_archive",
+        "base-backup": "base_backup",
+        "verify": "backup_verification",
+    }.get(arguments.command)
     try:
         if arguments.command == "archive-wal":
             archive_wal(arguments.source, arguments.wal_name)
@@ -1840,8 +1918,17 @@ def main() -> int:
             prepare_restore(arguments.backup_id, arguments.destination, kind, target)
         elif arguments.command == "restore-wal":
             restore_wal(arguments.wal_name, arguments.destination)
+        if operational_metric is not None:
+            _record_operational_result(operational_metric, success=True)
         return 0
     except BackupError as exc:
+        if operational_metric is not None:
+            with suppress(Exception):
+                _record_operational_result(
+                    operational_metric,
+                    success=False,
+                    failure_reason=_wal_failure_reason(str(exc)),
+                )
         _log(arguments.command.replace("-", "_"), str(exc))
         return 1
 

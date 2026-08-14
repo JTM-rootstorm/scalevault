@@ -9,7 +9,7 @@ or a dependency-failed process ready.
 | Process | Default listener | Liveness | Readiness | Metrics |
 |---|---|---|---|---|
 | Memory API | `127.0.0.1:8080` | `GET /healthz` returns `200` with the version | `GET /readyz` returns `200` only when PostgreSQL is reachable, the database is at the exact compatible Alembic head, and `vector`, `pg_trgm`, `citext`, and `pgcrypto` are installed; otherwise it returns a sanitized `503` dependency state | `GET /metrics` returns Prometheus text, or `404` when `KIVRA_MEMORY_METRICS_ENABLED=false` |
-| Database metrics exporter | `127.0.0.1:9098` | `kivra_memory_database_collector_up` | Each 30-second collection has a hard 10-second timeout; failure clears database-derived samples | `GET /metrics` exposes only fixed-shape aggregates from the dedicated observability function |
+| Local metrics exporter | `127.0.0.1:9098` | `kivra_memory_database_collector_up` and `kivra_memory_operational_collector_up` | Each 30-second database collection has a hard 10-second timeout; the separate fixed-schema operational status expires after 120 seconds; either failure clears its sourced samples | `GET /metrics` exposes only fixed-shape database aggregates and backup/WAL/storage numbers from the one-way local publisher seam |
 | Codex private ingress | exact private address, port `8443` | Not exposed | Not exposed; exact `/mcp` requests require a direct-private bearer | Not exposed |
 | Secure MCP Tunnel | `127.0.0.1:8081` | `GET /healthz` is owned by `tunnel-client` | `GET /readyz` is owned by `tunnel-client` and depends on tunnel control-plane and MCP initialization | Not owned by ScaleVault |
 
@@ -91,6 +91,14 @@ tables; the capability can execute only the reviewed aggregate function.
 Prometheus scrapes the dedicated `scalevault-database-metrics` job on
 loopback port 9098. Do not point it at a private interface or reuse an API
 database credential.
+
+Backup age, unarchived-WAL age, and the four fixed local storage classes come
+from `kivra-memory-operational-metrics.service`. That metadata-only root
+one-shot can read the fixed backup/PostgreSQL/monitoring roots and writes only
+root:`memory-metrics` mode-`0640` JSON below `/run/kivra-memory-metrics`.
+`memory-metrics` never receives `kivra-backup` membership or backup-store
+access. Missing, malformed, future-dated, or stale status removes those series
+and sets `kivra_memory_operational_collector_up` to zero.
 
 PostgreSQL host availability is supplied separately by the checked-in
 `scalevault-postgresql` scrape job at exactly `127.0.0.1:9187`. Keep that

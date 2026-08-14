@@ -1,0 +1,325 @@
+#!/usr/bin/python3
+"""Publish one fixed-schema local operational metrics snapshot."""
+
+from __future__ import annotations
+
+import datetime as dt
+import grp
+import json
+import os
+import pwd
+import re
+import secrets
+import stat
+import sys
+from contextlib import suppress
+from pathlib import Path
+from typing import Never
+
+BASE_STATUS = Path("/mnt/memory-backup/kivra-memory-postgres/status/latest-base.json")
+COUNTER_STATUS = {
+    "base_backup": Path(
+        "/mnt/memory-backup/kivra-memory-postgres/status/operational-counters-base-backup.json"
+    ),
+    "backup_verification": Path(
+        "/mnt/memory-backup/kivra-memory-postgres/status/operational-counters-backup-verification.json"
+    ),
+    "wal_archive": Path(
+        "/mnt/memory-backup/kivra-memory-postgres/status/operational-counters-wal-archive.json"
+    ),
+}
+PG_ARCHIVE_STATUS = Path("/mnt/memory/kivra-memory/postgresql/17/main/pg_wal/archive_status")
+OUTPUT_ROOT = Path("/run/kivra-memory-metrics")
+OUTPUT_PATH = OUTPUT_ROOT / "status.json"
+STORAGE_ROOTS = {
+    "backup": Path("/mnt/memory-backup"),
+    "database": Path("/mnt/memory/kivra-memory/postgresql/17/main"),
+    "monitoring": Path("/var/lib/prometheus"),
+    "wal": Path("/mnt/memory/kivra-memory/postgresql/17/main/pg_wal"),
+}
+BASE_ID_RE = re.compile(r"\A([0-9]{8}T[0-9]{6}Z)-[0-9a-f]{16}\Z")
+WAL_STATUS_RE = re.compile(
+    r"\A(?:[0-9A-F]{24}(?:\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)\.(ready|done)\Z"
+)
+MAXIMUM_ARCHIVE_STATUS_ENTRIES = 100_000
+MAXIMUM_BASE_STATUS_BYTES = 4096
+
+
+class PublishError(RuntimeError):
+    """Fixed-vocabulary operational publication failure."""
+
+
+def _fail(code: str) -> Never:
+    raise PublishError(code)
+
+
+def _backup_status_ids() -> tuple[int, int]:
+    try:
+        return pwd.getpwnam("memory-backup").pw_uid, grp.getgrnam("kivra-backup").gr_gid
+    except KeyError:
+        raise PublishError("operational_metrics_input_invalid") from None
+
+
+def _counter_status_ids() -> dict[str, tuple[int, int]]:
+    try:
+        group_id = grp.getgrnam("kivra-backup").gr_gid
+        return {
+            "base_backup": (pwd.getpwnam("memory-backup").pw_uid, group_id),
+            "backup_verification": (pwd.getpwnam("memory-recovery").pw_uid, group_id),
+            "wal_archive": (pwd.getpwnam("postgres").pw_uid, group_id),
+        }
+    except KeyError:
+        raise PublishError("operational_metrics_input_invalid") from None
+
+
+def _read_regular(
+    path: Path,
+    *,
+    maximum_bytes: int,
+    mode: int,
+    required_ids: tuple[int, int] | None = None,
+) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != mode
+            or not 1 <= before.st_size <= maximum_bytes
+            or (required_ids is not None and (before.st_uid, before.st_gid) != required_ids)
+        ):
+            _fail("operational_metrics_input_invalid")
+        raw = os.read(descriptor, maximum_bytes + 1)
+        if len(raw) != before.st_size or os.read(descriptor, 1):
+            _fail("operational_metrics_input_invalid")
+        after = os.fstat(descriptor)
+        for field in ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns"):
+            if getattr(before, field) != getattr(after, field):
+                _fail("operational_metrics_input_changed")
+        return raw
+    except OSError:
+        raise PublishError("operational_metrics_input_unavailable") from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _latest_base_unixtime() -> int:
+    raw = _read_regular(
+        BASE_STATUS,
+        maximum_bytes=MAXIMUM_BASE_STATUS_BYTES,
+        mode=0o640,
+        required_ids=_backup_status_ids(),
+    )
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                _fail("operational_metrics_input_invalid")
+            result[key] = value
+        return result
+
+    try:
+        parsed = json.loads(raw, object_pairs_hook=unique_object)
+    except Exception:
+        _fail("operational_metrics_input_invalid")
+    if not isinstance(parsed, dict) or set(parsed) != {"object_id", "result"}:
+        _fail("operational_metrics_input_invalid")
+    object_id = parsed.get("object_id")
+    match = BASE_ID_RE.fullmatch(object_id) if isinstance(object_id, str) else None
+    if parsed.get("result") != "ok" or match is None:
+        _fail("operational_metrics_input_invalid")
+    try:
+        created = dt.datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=dt.UTC)
+    except ValueError:
+        _fail("operational_metrics_input_invalid")
+    return int(created.timestamp())
+
+
+def _counters() -> dict[str, int]:
+    schemas = {
+        "base_backup": {"base_backup_failure", "base_backup_success", "version"},
+        "backup_verification": {
+            "backup_verification_failure",
+            "backup_verification_success",
+            "version",
+        },
+        "wal_archive": {
+            "version",
+            "wal_archive_failure_command",
+            "wal_archive_failure_storage",
+            "wal_archive_failure_timeout",
+            "wal_archive_failure_unavailable",
+            "wal_archive_success",
+        },
+    }
+    expected_ids = _counter_status_ids()
+    counters: dict[str, int] = {}
+    for metric, names in schemas.items():
+        counters.update({name: 0 for name in sorted(names - {"version"})})
+        try:
+            COUNTER_STATUS[metric].lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            raise PublishError("operational_metrics_input_unavailable") from None
+        raw = _read_regular(
+            COUNTER_STATUS[metric],
+            maximum_bytes=MAXIMUM_BASE_STATUS_BYTES,
+            mode=0o640,
+            required_ids=expected_ids[metric],
+        )
+        try:
+            value = json.loads(raw)
+        except (UnicodeError, json.JSONDecodeError):
+            _fail("operational_metrics_input_invalid")
+        if not isinstance(value, dict) or set(value) != names or value.get("version") != 1:
+            _fail("operational_metrics_input_invalid")
+        if any(
+            isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= (1 << 53) - 1
+            for name, item in value.items()
+            if name != "version"
+        ):
+            _fail("operational_metrics_input_invalid")
+        counters.update({name: value[name] for name in sorted(names - {"version"})})
+    return counters
+
+
+def _wal_oldest_ready_unixtime(now: int) -> int:
+    try:
+        directory = os.open(
+            PG_ARCHIVE_STATUS, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        )
+    except OSError:
+        raise PublishError("operational_metrics_input_unavailable") from None
+    try:
+        names = os.listdir(directory)
+        if len(names) > MAXIMUM_ARCHIVE_STATUS_ENTRIES:
+            _fail("operational_metrics_input_too_large")
+        oldest: int | None = None
+        for name in names:
+            match = WAL_STATUS_RE.fullmatch(name)
+            if match is None:
+                _fail("operational_metrics_input_invalid")
+            try:
+                item = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            except OSError:
+                raise PublishError("operational_metrics_input_changed") from None
+            if not stat.S_ISREG(item.st_mode) or item.st_nlink != 1:
+                _fail("operational_metrics_input_invalid")
+            if match.group(1) == "ready":
+                modified = int(item.st_mtime)
+                oldest = modified if oldest is None else min(oldest, modified)
+        return now if oldest is None else min(oldest, now)
+    finally:
+        os.close(directory)
+
+
+def _storage() -> tuple[dict[str, int], dict[str, float]]:
+    byte_values: dict[str, int] = {}
+    ratio_values: dict[str, float] = {}
+    try:
+        for component, path in STORAGE_ROOTS.items():
+            values = os.statvfs(path)
+            if values.f_blocks <= 0 or values.f_frsize <= 0:
+                _fail("operational_metrics_storage_invalid")
+            byte_values[component] = values.f_bavail * values.f_frsize
+            ratio_values[component] = values.f_bavail / values.f_blocks
+    except OSError:
+        raise PublishError("operational_metrics_input_unavailable") from None
+    return byte_values, ratio_values
+
+
+def _output_ids() -> tuple[int, int]:
+    try:
+        return 0, grp.getgrnam("memory-metrics").gr_gid
+    except KeyError:
+        raise PublishError("operational_metrics_output_invalid") from None
+
+
+def _write_status(payload: dict[str, object]) -> None:
+    try:
+        owner_id, group_id = _output_ids()
+        root = OUTPUT_ROOT.lstat()
+    except OSError:
+        raise PublishError("operational_metrics_output_invalid") from None
+    if (
+        not stat.S_ISDIR(root.st_mode)
+        or OUTPUT_ROOT.is_symlink()
+        or root.st_uid != owner_id
+        or root.st_gid != group_id
+        or stat.S_IMODE(root.st_mode) != 0o750
+    ):
+        _fail("operational_metrics_output_invalid")
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")
+    temporary = OUTPUT_ROOT / f".status.{secrets.token_hex(8)}.tmp"
+    descriptor = -1
+    directory = -1
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o640,
+        )
+        os.fchmod(descriptor, 0o640)
+        os.fchown(descriptor, owner_id, group_id)
+        if os.write(descriptor, raw) != len(raw):
+            _fail("operational_metrics_output_failed")
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(temporary, OUTPUT_PATH)
+        directory = os.open(OUTPUT_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        os.fsync(directory)
+    except OSError:
+        raise PublishError("operational_metrics_output_failed") from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if directory >= 0:
+            os.close(directory)
+        with suppress(OSError):
+            temporary.unlink(missing_ok=True)
+
+
+def _now_unixtime() -> int:
+    return int(dt.datetime.now(tz=dt.UTC).timestamp())
+
+
+def publish() -> None:
+    if os.geteuid() != 0:
+        _fail("operational_metrics_root_required")
+    now = _now_unixtime()
+    latest_base = _latest_base_unixtime()
+    if latest_base > now:
+        _fail("operational_metrics_input_invalid")
+    storage_bytes, storage_ratios = _storage()
+    _write_status(
+        {
+            "generated_at_unixtime": now,
+            "latest_base_unixtime": latest_base,
+            "result_counters": _counters(),
+            "storage_free_bytes": storage_bytes,
+            "storage_free_ratio": storage_ratios,
+            "version": 1,
+            "wal_oldest_ready_unixtime": _wal_oldest_ready_unixtime(now),
+        }
+    )
+
+
+def main() -> int:
+    try:
+        publish()
+    except Exception as error:
+        code = str(error) if isinstance(error, PublishError) else "operational_metrics_failed"
+        print(code, file=sys.stderr)
+        return 1
+    print("operational_metrics_published")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -6,7 +6,12 @@ import hashlib
 import json
 import os
 import subprocess
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
+from types import ModuleType
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS = ROOT / "deploy" / "memory-node" / "scripts"
@@ -29,6 +34,7 @@ ENTRY_POINTS = (
     "kivra-memory-metrics-exporter",
     "kivra-memory-operator-report",
     "kivra-memory-operator-report-run",
+    "kivra-memory-retention-cap-check",
     "kivra-memory-scan-operational-canaries",
     "kivra-memory-scan-public-artifact",
     "kivra-memory-sealed-restore-reconcile",
@@ -39,6 +45,19 @@ ENTRY_POINTS = (
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_fixture_drop_ins(repository: Path) -> None:
+    drop_ins = {
+        "client-auth/kivra-memory-api.service.d/30-client-token-auth.conf": "client\n",
+        "sealed-content/kivra-memory-api.service.d/20-sealed-content.conf": "api\n",
+        "sealed-content/kivra-memory-codex-ingress.service.d/20-sealed-content.conf": ("ingress\n"),
+    }
+    root = repository / "deploy" / "memory-node" / "systemd"
+    for relative, content in drop_ins.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
 
 
 def _release(tmp_path: Path, *, owner_read_only: bool = False) -> tuple[Path, Path, Path]:
@@ -59,6 +78,7 @@ def _release(tmp_path: Path, *, owner_read_only: bool = False) -> tuple[Path, Pa
         "executable_sha256": {},
         "revision": REVISION,
         "source_archive_sha256": digest,
+        "systemd_drop_in_sha256": {},
         "version": 1,
     }
     (release / "RELEASE_MANIFEST.json").write_text(
@@ -83,6 +103,108 @@ def test_release_scripts_are_executable_and_content_free() -> None:
     )
     assert "stderr=subprocess.DEVNULL" in audit
     assert "SELECT version_num FROM alembic_version" in audit
+
+
+def _load_audit() -> ModuleType:
+    loader = SourceFileLoader("installed_audit", str(AUDIT))
+    spec = spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def _drop_in_fixture(
+    tmp_path: Path,
+) -> tuple[ModuleType, Path, Path, dict[str, str], str]:
+    module = _load_audit()
+    source = tmp_path / "source-systemd"
+    installed = tmp_path / "installed-systemd"
+    entries = {
+        "client-auth/kivra-memory-api.service.d/30-client-token-auth.conf": "client\n",
+        "sealed-content/kivra-memory-api.service.d/20-sealed-content.conf": "api\n",
+        "sealed-content/kivra-memory-codex-ingress.service.d/20-sealed-content.conf": ("ingress\n"),
+    }
+    for relative, content in entries.items():
+        source_path = source / relative
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text(content, encoding="utf-8")
+        _, target_directory, filename = Path(relative).parts
+        installed_path = installed / target_directory / filename
+        installed_path.parent.mkdir(parents=True, exist_ok=True)
+        installed_path.write_text(content, encoding="utf-8")
+        installed_path.chmod(0o644)
+    reviewed_local = installed / "kivra-memory-codex-ingress.service.d" / "10-network-policy.conf"
+    reviewed_local.write_text("reviewed local network policy\n", encoding="utf-8")
+    reviewed_local.chmod(0o644)
+    manifest = {relative: module._sha256(source / relative) for relative in entries}
+    return module, source, installed, manifest, module._sha256(reviewed_local)
+
+
+def test_installed_audit_inventories_exact_security_drop_ins(tmp_path: Path) -> None:
+    module, source, installed, manifest, reviewed_digest = _drop_in_fixture(tmp_path)
+
+    result = module._installed_systemd_drop_ins(
+        source,
+        installed,
+        manifest,
+        reviewed_digest,
+        required_uid=os.geteuid(),
+    )
+
+    assert result == {
+        **manifest,
+        (
+            "reviewed-local/kivra-memory-codex-ingress.service.d/10-network-policy.conf"
+        ): reviewed_digest,
+    }
+
+
+@pytest.mark.parametrize(
+    ("nasty", "expected"),
+    (
+        ("missing", "installed_systemd_drop_in_missing"),
+        ("extra", "installed_systemd_drop_in_set_mismatch"),
+        ("digest", "installed_systemd_drop_in_mismatch"),
+        ("writable", "installed_systemd_drop_in_invalid"),
+        ("owner", "installed_systemd_drop_in_invalid"),
+        ("local-missing", "reviewed_local_drop_in_missing"),
+        ("local-drift", "reviewed_local_drop_in_mismatch"),
+        ("local-digest-invalid", "reviewed_local_drop_in_digest_invalid"),
+    ),
+)
+def test_installed_audit_rejects_security_drop_in_drift(
+    tmp_path: Path, nasty: str, expected: str
+) -> None:
+    module, source, installed, manifest, reviewed_digest = _drop_in_fixture(tmp_path)
+    target = installed / "kivra-memory-api.service.d" / "30-client-token-auth.conf"
+    reviewed_local = installed / "kivra-memory-codex-ingress.service.d" / "10-network-policy.conf"
+    required_uid = os.geteuid()
+    if nasty == "missing":
+        target.unlink()
+    elif nasty == "extra":
+        (reviewed_local.parent / "99-unreviewed.conf").write_text("extra\n", encoding="utf-8")
+    elif nasty == "digest":
+        target.write_text("changed\n", encoding="utf-8")
+    elif nasty == "writable":
+        target.chmod(0o664)
+    elif nasty == "local-missing":
+        reviewed_local.unlink()
+    elif nasty == "local-drift":
+        reviewed_local.write_text("unreviewed drift\n", encoding="utf-8")
+    elif nasty == "local-digest-invalid":
+        reviewed_digest = "not-a-sha256"
+    else:
+        required_uid += 1
+
+    with pytest.raises(module.AuditError, match=f"^{expected}$"):
+        module._installed_systemd_drop_ins(
+            source,
+            installed,
+            manifest,
+            reviewed_digest,
+            required_uid=required_uid,
+        )
 
 
 def test_pointer_plan_is_bounded_and_apply_is_atomic(tmp_path: Path) -> None:
@@ -243,6 +365,7 @@ def test_prepare_preserves_untracked_operator_inputs(tmp_path: Path) -> None:
     deployment_scripts.mkdir(parents=True)
     deployment_script = deployment_scripts / "kivra-memory-example"
     deployment_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    _write_fixture_drop_ins(repository)
     subprocess.run(["git", "add", "tracked", "deploy"], cwd=repository, check=True)
     subprocess.run(["git", "commit", "--quiet", "-m", "fixture"], cwd=repository, check=True)
     revision = subprocess.run(
@@ -311,6 +434,7 @@ def test_prepare_produces_repeatable_archives_and_read_only_releases(tmp_path: P
     deployment_scripts.mkdir(parents=True)
     deployment_script = deployment_scripts / "kivra-memory-example"
     deployment_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    _write_fixture_drop_ins(repository)
     subprocess.run(["git", "add", "tracked", "deploy"], cwd=repository, check=True)
     subprocess.run(["git", "commit", "--quiet", "-m", "fixture"], cwd=repository, check=True)
     revision = subprocess.run(
@@ -377,6 +501,11 @@ def test_prepare_produces_repeatable_archives_and_read_only_releases(tmp_path: P
         assert manifest["source_archive_sha256"] == archive_digests[-1]
         assert set(manifest["executable_sha256"]) == set(ENTRY_POINTS)
         assert set(manifest["deployment_script_sha256"]) == {"kivra-memory-example"}
+        assert set(manifest["systemd_drop_in_sha256"]) == {
+            "client-auth/kivra-memory-api.service.d/30-client-token-auth.conf",
+            "sealed-content/kivra-memory-api.service.d/20-sealed-content.conf",
+            "sealed-content/kivra-memory-codex-ingress.service.d/20-sealed-content.conf",
+        }
 
     assert archive_digests[0] == archive_digests[1]
 

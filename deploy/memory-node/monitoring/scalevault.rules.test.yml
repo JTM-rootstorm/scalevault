@@ -4,6 +4,41 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  - name: durable-local-backup-failure-counters-fire-and-recover
+    interval: 1m
+    input_series:
+      - series: 'kivra_memory_backup_results_total{kind="base",result="failure"}'
+        values: '0 1x17'
+      - series: 'kivra_memory_backup_verification_results_total{kind="base",result="failure"}'
+        values: '0 1x17'
+      - series: 'kivra_memory_wal_archive_failures_total{reason="storage"}'
+        values: '0 1x17'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ScaleVaultBackupFailure
+        exp_alerts:
+          - exp_labels: {severity: critical, category: backup, kind: base, result: failure}
+            exp_annotations: {summary: "ScaleVault backup failed", response: "backup_failure"}
+      - eval_time: 1m
+        alertname: ScaleVaultBackupVerificationFailure
+        exp_alerts:
+          - exp_labels: {severity: critical, category: backup, kind: base, result: failure}
+            exp_annotations: {summary: "ScaleVault backup verification failed", response: "backup_verification"}
+      - eval_time: 1m
+        alertname: ScaleVaultWALArchiveFailure
+        exp_alerts:
+          - exp_labels: {severity: critical, category: wal, reason: storage}
+            exp_annotations: {summary: "ScaleVault WAL archival failed", response: "wal_failure"}
+      - eval_time: 17m
+        alertname: ScaleVaultBackupFailure
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: ScaleVaultBackupVerificationFailure
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: ScaleVaultWALArchiveFailure
+        exp_alerts: []
+
   - name: adr-0031-age-and-ratio-boundaries-fire-and-recover
     interval: 1m
     input_series:
@@ -214,6 +249,10 @@ tests:
         values: '0 0 0 1 1 1 1 1 1 1'
       - series: 'kivra_memory_database_collector_last_success_unixtime'
         values: '0 0 0 180 240 300 360 420 480 540'
+      - series: 'kivra_memory_operational_collector_up'
+        values: '_ _ _ _ _ _ _ _ _ 1'
+      - series: 'kivra_memory_operational_collector_last_success_unixtime'
+        values: '_ _ _ _ _ _ _ _ _ 540'
       - series: 'kivra_memory_backup_age_seconds{kind="base"}'
         values: '_ _ _ _ _ _ _ _ _ 0'
       - series: 'kivra_memory_wal_oldest_age_seconds'
@@ -282,6 +321,10 @@ tests:
         values: '1x7'
       - series: 'kivra_memory_database_collector_last_success_unixtime'
         values: '0x5 360'
+      - series: 'kivra_memory_operational_collector_up'
+        values: '1x7'
+      - series: 'kivra_memory_operational_collector_last_success_unixtime'
+        values: '0 60 120 180 240 300 360'
       - series: 'up{job="scalevault-memory-node",instance="loopback"}'
         values: '1x7'
       - series: 'up{job="scalevault-postgresql",instance="loopback"}'

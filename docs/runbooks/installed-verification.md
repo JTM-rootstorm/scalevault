@@ -50,6 +50,15 @@ the `scalevault-database-metrics` job. Verify the distinct
 `127.0.0.1:9187`; this supplies the PostgreSQL-up series and must not expose
 payload or replace the bounded ScaleVault collector.
 
+Verify `kivra-memory-operational-metrics.timer` refreshes the fixed
+root:`memory-metrics` mode-`0640` `/run/kivra-memory-metrics/status.json` at
+least every 30 seconds. The publisher alone may read the fixed backup,
+PostgreSQL archive-status, and local storage metadata; the exporter must have
+no `kivra-backup` membership or backup-store path. A missing, malformed, or
+more than 120-second-old snapshot must remove backup/WAL/storage samples and
+set `kivra_memory_operational_collector_up=0`; recovery must restore the full
+fixed-label set without restarting unrelated services.
+
 Generate a report through a fresh
 `kivra-memory-operator-report@<report-id>.service` instance. Verify it accepts
 only its dedicated local login and per-instance tenant credential, creates one
@@ -69,6 +78,10 @@ freshness anchor matches or is monotonically extended before reactivation.
 Operational journal/alert history may not exceed 30 days; content-free
 recovery/acceptance reports may not exceed 400 days. Both need explicit
 operator-chosen byte caps. Missing caps leave installed retention pending.
+Run `kivra-memory-retention-cap-check` against the protected local manifest to
+bind the exact seven surfaces and selected limits, then separately prove each
+underlying subsystem applies both its age and byte bound. Manifest validation
+alone is not live retention evidence and authorizes no deletion.
 External alert delivery is not required for M10.
 
 Apply the complete [NPM drift gate](npm-drift.md), active-provider revocation

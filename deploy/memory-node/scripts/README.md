@@ -11,6 +11,12 @@ contract. Install and operate it only through [`../backup/README.md`](../backup/
 It validates mount boundaries and paths, fails closed on unexpected storage,
 and emits content-free fixed-field status.
 
+`kivra-memory-operational-metrics-publish` is the narrow root one-shot behind
+the local backup/WAL/storage metrics. It reads metadata only from fixed local
+paths, uses no network or provider integration, and atomically replaces one
+fixed-schema root:`memory-metrics` status file below `/run`. Its systemd timer,
+not an ambient command-line path, supplies the production invocation.
+
 `kivra-memory-npm-config-check` validates a protected complete `nginx -T`
 capture for the static ScaleVault NPM invariants. It does not replace the live
 external-source, spoof, backend-counter, listener, or canary gates in the
@@ -49,15 +55,26 @@ systemd units continue to resolve through `/opt/kivra-memory/app`.
 record. It verifies the atomic pointer, root-owned read-only release and source
 archive, revision, source checksum, expected and installed migration, every
 console-entry digest, exact installed unit digests, systemd verification, and
-bounded unit states. Credential files are never opened; only credential name,
-presence, UID, GID, mode, link count, and byte count are reported. Command
-stderr is suppressed so PostgreSQL or systemd diagnostics cannot enter the
-evidence stream. Run it only after all checked-in units are installed:
+bounded unit states. Its digest inventory also requires the exact checked-in
+`client-auth` and `sealed-content` drop-ins at their target service directories
+and rejects extra `.conf` files in those directories. The sole local adaptation
+is the exact installed filename
+`kivra-memory-codex-ingress.service.d/10-network-policy.conf`; supply its
+independently reviewed SHA-256 and the audit binds the verified digest into its
+output. A missing or changed policy, invalid digest, or any other extra
+`.conf` file fails closed. Credential files are never opened; only credential
+name, presence, UID, GID, mode, link count, and byte count are reported.
+Command stderr is suppressed so PostgreSQL or systemd diagnostics cannot enter
+the evidence stream. Run it only after all checked-in units are installed:
 
 ```sh
 /usr/local/libexec/kivra-memory-installed-audit \
+  --codex-network-policy-sha256 REVIEWED_SHA256 \
   > /protected/content-free-evidence/installed-audit.json
 ```
+
+This file/digest gate does not replace the separate live review of effective
+drop-in composition, service hardening, mounts, listeners, or network shape.
 
 None of these helpers is an unattended live installer. Do not embed
 credentials, database URLs, payloads, or private network coordinates in script

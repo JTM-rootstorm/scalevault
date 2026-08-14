@@ -1,0 +1,33 @@
+{
+  "surfaces": {
+    "application_service_journals": {
+      "maximum_age_days": 30,
+      "maximum_bytes": 0
+    },
+    "local_alert_state": {
+      "maximum_age_days": 30,
+      "maximum_bytes": 0
+    },
+    "npm_container_logs": {
+      "maximum_age_days": 30,
+      "maximum_bytes": 0
+    },
+    "postgresql_logs": {
+      "maximum_age_days": 30,
+      "maximum_bytes": 0
+    },
+    "prometheus_history": {
+      "maximum_age_days": 30,
+      "maximum_bytes": 0
+    },
+    "protected_operator_recovery_acceptance_reports": {
+      "maximum_age_days": 400,
+      "maximum_bytes": 0
+    },
+    "tunnel_json": {
+      "maximum_age_days": 30,
+      "maximum_bytes": 0
+    }
+  },
+  "version": 1
+}

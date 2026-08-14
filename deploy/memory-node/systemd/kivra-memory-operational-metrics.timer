@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh ScaleVault fixed-schema operational metrics
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Persistent=true
+Unit=kivra-memory-operational-metrics.service
+
+[Install]
+WantedBy=timers.target

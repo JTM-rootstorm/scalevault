@@ -1,4 +1,4 @@
-"""Dedicated loopback exporter for least-privilege database aggregates."""
+"""Dedicated loopback exporter for bounded database and operational metrics."""
 
 from __future__ import annotations
 
@@ -22,7 +22,11 @@ from kivra_memory.domain.identifiers import is_uuid7
 from kivra_memory.observability.collectors import (
     AggregateSnapshot,
     ObservabilitySnapshotRepository,
+    OperationalSnapshot,
+    OperationalStatusRepository,
+    apply_operational_snapshot,
     apply_snapshot,
+    clear_operational_snapshot,
     clear_snapshot,
 )
 from kivra_memory.observability.metrics import MetricRegistry
@@ -41,6 +45,10 @@ REQUEST_TIMEOUT_SECONDS: Final = 5.0
 
 class SnapshotCollector(Protocol):
     async def collect(self, tenant_id: UUID) -> AggregateSnapshot: ...
+
+
+class OperationalCollector(Protocol):
+    def collect(self, *, now: float | None = None) -> OperationalSnapshot: ...
 
 
 class _BoundedHTTPServer(HTTPServer):
@@ -148,9 +156,30 @@ async def _collect_once(
     return True
 
 
+def _collect_operational_once(
+    repository: OperationalCollector,
+    registry: MetricRegistry,
+    *,
+    now: float | None = None,
+) -> bool:
+    selected_now = time.time() if now is None else now
+    try:
+        snapshot = repository.collect(now=selected_now)
+        apply_operational_snapshot(snapshot, registry)
+    except Exception:
+        clear_operational_snapshot(registry)
+        registry["kivra_memory_operational_collector_up"].set(0)
+        registry["kivra_memory_operational_collector_failures_total"].inc()
+        return False
+    registry["kivra_memory_operational_collector_up"].set(1)
+    registry["kivra_memory_operational_collector_last_success_unixtime"].set(selected_now)
+    return True
+
+
 async def _run(database_url: str, tenant_id: UUID, registry: MetricRegistry) -> None:
     database = Database(database_url)
     repository = ObservabilitySnapshotRepository(database)
+    operational_repository = OperationalStatusRepository()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for selected in (signal.SIGINT, signal.SIGTERM):
@@ -158,6 +187,7 @@ async def _run(database_url: str, tenant_id: UUID, registry: MetricRegistry) -> 
     try:
         while not stop.is_set():
             await _collect_once(repository, tenant_id, registry)
+            _collect_operational_once(operational_repository, registry)
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=REFRESH_SECONDS)
     finally:

@@ -6,9 +6,18 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from kivra_memory.observability.collectors import AggregateSnapshot, QueueAggregate
+from kivra_memory.observability.collectors import (
+    OPERATIONAL_COUNTERS,
+    AggregateSnapshot,
+    OperationalSnapshot,
+    QueueAggregate,
+)
 from kivra_memory.observability.metrics import MetricRegistry
-from kivra_memory.observability.metrics_exporter import _collect_once, _credentials
+from kivra_memory.observability.metrics_exporter import (
+    _collect_once,
+    _collect_operational_once,
+    _credentials,
+)
 from prometheus_client import generate_latest
 
 TENANT_ID = UUID("01970000-0000-7000-8000-000000000001")
@@ -21,6 +30,16 @@ class Repository:
 
     async def collect(self, tenant_id: UUID) -> AggregateSnapshot:
         self.tenant_ids.append(tenant_id)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+class OperationalRepository:
+    def __init__(self, result: OperationalSnapshot | Exception) -> None:
+        self.result = result
+
+    def collect(self, *, now: float | None = None) -> OperationalSnapshot:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -104,6 +123,27 @@ async def test_collection_timeout_fails_visible(
     rendered = generate_latest(registry.prometheus).decode("ascii")
     assert "kivra_memory_database_collector_up 0.0" in rendered
     assert "kivra_memory_database_collector_failures_total 1.0" in rendered
+
+
+def test_operational_collection_failure_clears_stale_samples_without_error_text() -> None:
+    registry = MetricRegistry()
+    snapshot = OperationalSnapshot(
+        100,
+        10,
+        (("backup", 1), ("database", 2), ("monitoring", 3), ("wal", 4)),
+        (("backup", 0.1), ("database", 0.2), ("monitoring", 0.3), ("wal", 0.4)),
+        tuple((name, 1) for name in OPERATIONAL_COUNTERS),
+    )
+    assert _collect_operational_once(OperationalRepository(snapshot), registry, now=1000)
+    assert not _collect_operational_once(
+        OperationalRepository(RuntimeError("SYNTHETIC_PRIVATE_CANARY")), registry, now=1001
+    )
+    rendered = generate_latest(registry.prometheus).decode("ascii")
+    assert "kivra_memory_operational_collector_up 0.0" in rendered
+    assert "kivra_memory_operational_collector_failures_total 1.0" in rendered
+    assert 'kivra_memory_backup_age_seconds{kind="base"}' not in rendered
+    assert 'kivra_memory_storage_free_ratio{component="backup"}' not in rendered
+    assert "SYNTHETIC_PRIVATE_CANARY" not in rendered
 
 
 def test_exporter_refuses_root_before_credential_access(

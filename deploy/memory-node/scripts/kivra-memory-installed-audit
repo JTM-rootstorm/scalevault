@@ -17,6 +17,8 @@ from typing import Never
 REVISION_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 EXPECTED_MIGRATION = "0011_observability_aggregates"
+SYSTEMD_DROP_IN_PROFILES = ("client-auth", "sealed-content")
+REVIEWED_LOCAL_DROP_IN = Path("kivra-memory-codex-ingress.service.d/10-network-policy.conf")
 VALID_UNIT_STATES = {
     "active",
     "activating",
@@ -128,7 +130,105 @@ def _credential_metadata(unit_path: Path) -> list[dict[str, object]]:
     return credentials
 
 
-def _release(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
+def _source_systemd_drop_ins(source_unit_root: Path) -> dict[str, Path]:
+    drop_ins: dict[str, Path] = {}
+    for profile_name in SYSTEMD_DROP_IN_PROFILES:
+        profile = source_unit_root / profile_name
+        if not profile.is_dir() or profile.is_symlink():
+            _fail("release_systemd_drop_in_invalid")
+        for path in sorted(profile.rglob("*")):
+            if path.is_symlink() or (path.is_file() and path.suffix != ".conf"):
+                _fail("release_systemd_drop_in_invalid")
+            if path.is_file():
+                drop_ins[path.relative_to(source_unit_root).as_posix()] = path
+    if not drop_ins:
+        _fail("release_systemd_drop_in_invalid")
+    return drop_ins
+
+
+def _installed_systemd_drop_ins(
+    source_unit_root: Path,
+    installed_unit_root: Path,
+    manifest: object,
+    reviewed_local_sha256: str,
+    *,
+    required_uid: int = 0,
+) -> dict[str, str]:
+    if not isinstance(manifest, dict):
+        _fail("release_manifest_invalid")
+    source_drop_ins = _source_systemd_drop_ins(source_unit_root)
+    source_digests = {name: _sha256(path) for name, path in source_drop_ins.items()}
+    if manifest != source_digests:
+        _fail("release_manifest_invalid")
+
+    expected_by_target: dict[Path, set[str]] = {}
+    installed_digests: dict[str, str] = {}
+    for source_name, expected_digest in sorted(source_digests.items()):
+        parts = Path(source_name).parts
+        if len(parts) != 3:
+            _fail("release_systemd_drop_in_invalid")
+        profile_name, target_directory, filename = parts
+        if profile_name not in SYSTEMD_DROP_IN_PROFILES or not target_directory.endswith(
+            ".service.d"
+        ):
+            _fail("release_systemd_drop_in_invalid")
+        target = installed_unit_root / target_directory
+        expected_by_target.setdefault(target, set()).add(filename)
+        installed = target / filename
+        try:
+            metadata = installed.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            _fail("installed_systemd_drop_in_missing")
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != required_uid
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+        ):
+            _fail("installed_systemd_drop_in_invalid")
+        actual_digest = _sha256(installed)
+        if actual_digest != expected_digest:
+            _fail("installed_systemd_drop_in_mismatch")
+        installed_digests[source_name] = actual_digest
+
+    if not SHA256_RE.fullmatch(reviewed_local_sha256):
+        _fail("reviewed_local_drop_in_digest_invalid")
+    reviewed_local = installed_unit_root / REVIEWED_LOCAL_DROP_IN
+    try:
+        reviewed_metadata = reviewed_local.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        _fail("reviewed_local_drop_in_missing")
+    if (
+        not stat.S_ISREG(reviewed_metadata.st_mode)
+        or reviewed_metadata.st_uid != required_uid
+        or stat.S_IMODE(reviewed_metadata.st_mode) & 0o022
+    ):
+        _fail("reviewed_local_drop_in_invalid")
+    reviewed_actual_digest = _sha256(reviewed_local)
+    if reviewed_actual_digest != reviewed_local_sha256:
+        _fail("reviewed_local_drop_in_mismatch")
+    expected_by_target.setdefault(reviewed_local.parent, set()).add(reviewed_local.name)
+    installed_digests[f"reviewed-local/{REVIEWED_LOCAL_DROP_IN.as_posix()}"] = (
+        reviewed_actual_digest
+    )
+
+    for target, expected_names in expected_by_target.items():
+        try:
+            target_metadata = target.stat(follow_symlinks=False)
+            actual_names = {path.name for path in target.glob("*.conf")}
+        except OSError:
+            _fail("installed_systemd_drop_in_missing")
+        if (
+            not stat.S_ISDIR(target_metadata.st_mode)
+            or target_metadata.st_uid != required_uid
+            or stat.S_IMODE(target_metadata.st_mode) & 0o022
+        ):
+            _fail("installed_systemd_drop_in_invalid")
+        if actual_names != expected_names:
+            _fail("installed_systemd_drop_in_set_mismatch")
+    return installed_digests
+
+
+def _release(args: argparse.Namespace) -> tuple[Path, dict[str, object], dict[str, object]]:
     pointer = Path(args.release_pointer)
     releases_root = Path(args.releases_root).resolve()
     if not pointer.is_absolute() or not pointer.is_symlink():
@@ -156,6 +256,7 @@ def _release(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
         or manifest.get("expected_migration") != migration
         or not isinstance(manifest.get("executable_sha256"), dict)
         or not isinstance(manifest.get("deployment_script_sha256"), dict)
+        or not isinstance(manifest.get("systemd_drop_in_sha256"), dict)
     ):
         _fail("release_manifest_invalid")
     archive = Path(args.archives_root) / f"{revision}.tar"
@@ -217,16 +318,20 @@ def _release(args: argparse.Namespace) -> tuple[Path, dict[str, object]]:
         if actual != expected:
             _fail("installed_deployment_script_mismatch")
         deployment_script_digests[name] = actual
-    return release, {
-        "deployment_script_sha256": deployment_script_digests,
-        "expected_migration": migration,
-        "executable_sha256": executable_digests,
-        "release_manifest_sha256": _sha256(release / "RELEASE_MANIFEST.json"),
-        "revision": revision,
-        "source_archive_sha256": archive_sha256,
-        "tree_non_root_owned_entries": non_root_owned_count,
-        "tree_writable_entries": writable_count,
-    }
+    return (
+        release,
+        {
+            "deployment_script_sha256": deployment_script_digests,
+            "expected_migration": migration,
+            "executable_sha256": executable_digests,
+            "release_manifest_sha256": _sha256(release / "RELEASE_MANIFEST.json"),
+            "revision": revision,
+            "source_archive_sha256": archive_sha256,
+            "tree_non_root_owned_entries": non_root_owned_count,
+            "tree_writable_entries": writable_count,
+        },
+        manifest,
+    )
 
 
 def _audit(args: argparse.Namespace) -> None:
@@ -243,9 +348,15 @@ def _audit(args: argparse.Namespace) -> None:
     ):
         if not Path(raw_path).is_absolute():
             _fail("path_not_absolute")
-    release, result = _release(args)
+    release, result, manifest = _release(args)
     source_unit_root = release / "deploy" / "memory-node" / "systemd"
     installed_unit_root = Path(args.unit_root)
+    systemd_drop_in_digests = _installed_systemd_drop_ins(
+        source_unit_root,
+        installed_unit_root,
+        manifest["systemd_drop_in_sha256"],
+        args.codex_network_policy_sha256,
+    )
     source_units = sorted(
         (
             *source_unit_root.glob("kivra-memory-*.service"),
@@ -304,6 +415,7 @@ def _audit(args: argparse.Namespace) -> None:
             "installed_migration": migration,
             "result": "installed_audit_satisfied",
             "systemd_verify": "pass",
+            "systemd_drop_in_sha256": systemd_drop_in_digests,
             "units": units,
             "version": 1,
         }
@@ -322,6 +434,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--systemd-analyze", default="/usr/bin/systemd-analyze")
     parser.add_argument("--runuser", default="/usr/sbin/runuser")
     parser.add_argument("--psql", default="/usr/bin/psql")
+    parser.add_argument("--codex-network-policy-sha256", required=True)
     return parser
 
 
