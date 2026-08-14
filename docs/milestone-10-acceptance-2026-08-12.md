@@ -3,9 +3,9 @@
 - **Review date:** 2026-08-14
 - **Status:** Not accepted; implementation and evidence collection in progress
 - **Implementation baseline:** `368b302`
-- **Frozen release:** `ea30b71722d47a87d58798ae8e028694839f60b9`
+- **Frozen release:** `d77d1855100e98aa6061dcfbf4511628be2fbf52`
 - **Frozen release archive checksum:**
-  `cacae6a43a46ebdc7c3ca83fb9b59ae9bd58a2cf1404198797a432803086bfb8`
+  `98cfb11c752b40315e53fedf31a6c928002aebf90a136408398a39a1d2975a61`
 - **Evidence revision:** Pending final installed-evidence update
 - **Database migration revision:** Candidate `0011_observability_aggregates`;
   installed preflight remains at `0010_ingress_provider_heads`
@@ -46,7 +46,7 @@ protected operator store and transfer only permitted fields here.
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
 | Architecture and threat decisions accepted | Review | Passed | ADRs 0034 and 0035 are accepted and every active threat row maps implementation, tests, runbooks, and evidence |
-| Complete repository verification | Repository | Passed | Frozen release passed 1,581 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
+| Complete repository verification | Repository | Passed | Frozen release passed 1,584 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
 | Required PostgreSQL 17 integration gate | Durable local | Passed | Frozen release passed all 203 required integration tests with zero skipped and zero failed |
 | Production-relevant PITR durability | Durable local | Passed | Frozen release production-helper PITR gate passed A/B-not-C and corrupt-object rejection; installed-storage drill remains separate |
 | Installed services and credentials hardened | Installed LXC | Pending | Read-only preflight found the prior `c95d66c` layout and migration `0010`; exact M10 installation and audit remain pending |
@@ -86,13 +86,13 @@ and unprovisioned.
 
 Status: **Passed at the frozen release**.
 
-The complete verification command passed with 1,581 Python tests passed and 181
+The complete verification command passed with 1,584 Python tests passed and 181
 environment-gated skips, followed by successful Go vet/tests, deterministic
 protobuf verification, 11 schema validations, and plugin format, lint,
 TypeScript, and six test gates. The local PostgreSQL skips were caused by the
 missing `vector` extension and are superseded for the required database scope
 by the zero-skip PostgreSQL 17 LXC result below. The separately gated PITR test
-is likewise recorded below. The M10 deployment lane passed 126 tests with only
+is likewise recorded below. The M10 deployment lane passed 129 tests with only
 the local `promtool` availability skip. The designated LXC's `promtool` loaded
 all 38 frozen-release rules and passed every checked-in rule scenario.
 
@@ -132,7 +132,7 @@ acceptance blocker.
 
 ## Read-only installed preflight
 
-Status: **Preflight complete; mutation not authorized**.
+Status: **Preflight complete; mutation pending accepted recovery point**.
 
 The designated LXC is healthy on PostgreSQL 17.10 with `vector`, `pg_trgm`,
 `citext`, and `pgcrypto`, and its canonical data directory is the expected
@@ -141,9 +141,10 @@ mounted path. It remains on the prior `c95d66c` release layout and migration
 the M10 inventory; the M10 metrics, backup, retention, destruction, worker, and
 timer units are absent. The three dedicated backup/staging/recovery mounts and
 backup public recipient are absent, and no routine-node recovery private
-identity is present. These are clean stop conditions, not failures or inferred
-authorization. Phase 1 installation, a pre-upgrade recovery point, storage and
-recipient provisioning, and an isolated recovery environment remain pending.
+identity is present. These are clean stop conditions, not failures. Phase 1
+installation remains blocked before schema or grant mutation on an accepted
+pre-upgrade recovery point. Storage and recipient provisioning and an isolated
+recovery environment require later, separate authorization.
 
 ## Installed service and credential hardening
 
