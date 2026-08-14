@@ -23,6 +23,7 @@ def test_retention_cap_manifest_covers_each_surface_separately() -> None:
     assert result["ok"] is True
     assert result["result"] == "retention_cap_manifest_valid"
     assert result["counts"] == {"surfaces": 7}
+    assert isinstance(result["config_sha256"], str)
     assert len(result["config_sha256"]) == 64
 
 

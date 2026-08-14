@@ -63,12 +63,16 @@ def _configure(module: ModuleType, root: Path, monkeypatch: pytest.MonkeyPatch) 
     for name, path in counter_paths.items():
         path.write_text(json.dumps(counter_values[name]))
         path.chmod(0o640)
-    module.BASE_STATUS = base_status
-    module.COUNTER_STATUS = counter_paths
-    module.PG_ARCHIVE_STATUS = archive_status
-    module.OUTPUT_ROOT = output
-    module.OUTPUT_PATH = output / "status.json"
-    module.STORAGE_ROOTS = storage
+    module.__dict__.update(
+        {
+            "BASE_STATUS": base_status,
+            "COUNTER_STATUS": counter_paths,
+            "PG_ARCHIVE_STATUS": archive_status,
+            "OUTPUT_ROOT": output,
+            "OUTPUT_PATH": output / "status.json",
+            "STORAGE_ROOTS": storage,
+        }
+    )
     monkeypatch.setattr(module.os, "geteuid", lambda: 0)
     monkeypatch.setattr(module, "_output_ids", lambda: (os.getuid(), os.getgid()))
     monkeypatch.setattr(module, "_backup_status_ids", lambda: (os.getuid(), os.getgid()))
