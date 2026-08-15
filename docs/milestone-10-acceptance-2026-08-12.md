@@ -16,7 +16,7 @@ remaining required installed-host, installed-storage, and recovery gates
 produce reviewed content-free evidence. Excluded and non-blocking rows are not
 closure gates and must remain explicitly unevaluated unless separately tested.
 
-The tracked closeout plan, accepted ADRs 0034 and 0035, tracked runbooks, and
+The tracked closeout plan, accepted ADRs 0034 through 0036, tracked runbooks, and
 this record are the governing M10 execution authority. The preserved untracked
 archived plan and V2 roadmap are historical planning inputs only; they do not
 authorize live work, reopen Forgejo or archive-continuation gates, or override
@@ -53,7 +53,7 @@ protected operator store and transfer only permitted fields here.
 
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
-| Architecture and threat decisions accepted | Review | Passed | ADRs 0034 and 0035 are accepted and every active threat row maps implementation, tests, runbooks, and evidence |
+| Architecture and threat decisions accepted | Review | Passed | ADRs 0034 through 0036 are accepted and every active threat row maps implementation, tests, runbooks, and evidence |
 | Complete repository verification | Repository | Passed | Frozen release passed 1,589 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
 | Required PostgreSQL 17 integration gate | Durable local | Passed | Frozen release passed all 205 required integration tests with zero skipped and zero failed |
 | Production-relevant PITR durability | Durable local | Passed | Frozen release production-helper PITR gate passed A/B-not-C and corrupt-object rejection; installed-storage drill remains separate |
@@ -88,7 +88,10 @@ and 0035 accept the narrowed local archive boundary and validation-only
 no-prune posture. Every active-topology threat row maps its implementation,
 tests, runbook, and bounded evidence class. Dormant relay, node-agent, OAuth,
 public plugin/submission, and generic enrollment paths remain non-applicable
-and unprovisioned.
+and unprovisioned. ADR 0036 accepts the sole `/mnt/memory` NFS topology,
+permission-bounded store and scratch directories, and the resulting shared
+capacity and dataset-loss fate without weakening the PostgreSQL-aware recovery
+or no-prune gates.
 
 ## Repository verification
 
@@ -170,19 +173,24 @@ root-only installed audit returned `installed_audit_satisfied` at
 `2026-08-15T01:31:55Z`; its protected evidence SHA-256 is
 `deb79277caa10eb63c922feedffc0bc50554a6fde02b052c365c57ca568269e6`.
 
-The three dedicated backup/staging/recovery mounts, backup public recipient,
-and routine-node recovery identity remain absent. Those Phase 2/3 boundaries,
-per-class credential exercises, production monitoring fault evidence, NPM
-proof, and final drill cleanup require later, separate authorization.
-Before Phase 2, that approval must expressly cover the exact mount/device and
-directory provisioning, public-recipient installation, isolated recovery-host
-and private-identity staging boundary, and synthetic sealed-content accounts,
-roots, credentials, drop-ins, internal identity, broker, purge worker, and
-restore-reconcile activation. It must distinguish the disposable
+The encrypted recovery-store directories, local plaintext scratch roots,
+backup public recipient, and routine-node recovery identity remain absent.
+ADR 0036 accepts the existing `/mnt/memory` NFS mount as the sole M10 storage
+mount; no additional `/mnt` mount is required or expected. Those Phase 2/3
+boundaries, per-class credential exercises, production monitoring fault
+evidence, NPM proof, and final drill cleanup require later, separate
+authorization. Before Phase 2, that approval must expressly cover the exact
+encrypted-store and local-scratch directory provisioning, public-recipient
+installation, isolated recovery-host and private-identity staging boundary,
+and synthetic sealed-content accounts, roots, credentials, drop-ins, internal
+identity, broker, purge worker, and restore-reconcile activation. It must
+distinguish the disposable
 create/read/hard-forget activation-preflight fixture from the retained Phase 2
 correlation fixture used by the later installed-PITR erasure drill. Naming a
-backup mount or synthetic fixture does not authorize creating those absent
-prerequisites.
+backup directory or synthetic fixture does not authorize creating those absent
+prerequisites. The encrypted store and canonical PostgreSQL data share the NAS
+dataset and therefore share capacity and dataset-loss fate; directory
+separation provides write-scope isolation, not an independent failure domain.
 
 ## Installed service and credential hardening
 
@@ -292,9 +300,11 @@ workspace. An independent second check found no remaining test workspace or
 pytest scratch root on the LXC. This closes the local encrypted-bundle recovery
 gate; it does not make an external-provider custody or restore claim.
 
-Backblaze handles the offsite failure domain. Provider placement, freshness,
-retention, and retrieval validation are operator-managed and non-blocking. In
-their absence, do not claim that a provider copy exists or has been restored.
+The NAS dataset's nightly backup and daily NAS-to-Backblaze upload are
+operator-managed protection layers. ScaleVault does not configure or evaluate
+their placement, freshness, application consistency, retention, or retrieval
+in M10. Do not claim that either is a current application-consistent PITR point
+or a restored copy without separate operator evidence.
 
 ## Archive continuation evidence
 

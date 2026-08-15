@@ -10,7 +10,7 @@
 
 ## 1. Purpose
 
-This tracked closeout plan, accepted ADRs 0034 and 0035, the tracked runbooks,
+This tracked closeout plan, accepted ADRs 0034 through 0036, the tracked runbooks,
 and the current acceptance record are the governing M10 execution authority.
 The untracked archived plan named above and its untracked V2 roadmap are
 preserved historical planning inputs only. They do not authorize live work,
@@ -252,9 +252,28 @@ Accept a separate amendment to ADR 0027:
 not identify an authorized producer of deletion evidence. Do not introduce a
 speculative recovery catalog or signer in M10.
 
-### 6.3 Documentation reconciliation
+### 6.3 ADR 0036: single-NFS recovery store and local scratch
 
-After both amendments are accepted:
+Accept the deployed storage constraint without manufacturing additional
+mounts:
+
+- `/mnt/memory` is the sole exact M10 storage mount;
+- canonical PostgreSQL data and the encrypted local recovery store reside in
+  separate permission-bounded directories on that mount;
+- plaintext backup staging and isolated recovery scratch reside under their
+  exact local `/var/lib/kivra-memory` roots and are never durable recovery
+  objects;
+- shared mount and dataset placement provides no independent failure domain,
+  capacity pool, or dataset-loss RPO claim;
+- no-prune retention and capacity validation remain mandatory;
+- the private recovery identity remains outside the routine node and every
+  backup object; and
+- nightly NAS protection and NAS-to-Backblaze upload remain operator-managed,
+  with no M10 application-consistency, freshness, or restore claim.
+
+### 6.4 Documentation reconciliation
+
+After all three amendments are accepted:
 
 - update the ADR index and supersession headers;
 - update the M10 acceptance matrix and narrative;
@@ -273,9 +292,9 @@ After both amendments are accepted:
 - preserve explicit no-claim language for Forgejo, Backblaze, and external
   alert delivery.
 
-### 6.4 Phase exit
+### 6.5 Phase exit
 
-- ADRs 0034 and 0035 are accepted.
+- ADRs 0034 through 0036 are accepted.
 - All affected policy and operations documents agree.
 - No M10 matrix row still requires Forgejo, archive continuation, or
   destructive pruning.
@@ -391,18 +410,25 @@ required because it is an active ingress, not because of Forgejo.
 
 ### 8.1 Authorization checkpoint
 
-The installed Phase 1 record leaves the dedicated backup, staging, and recovery
-mounts, backup public recipient, and sealed-content deployment absent. Naming a
-fixture or mount does not authorize provisioning it. Before any backup or
-synthetic sealed mutation, obtain approval that expressly names:
+The installed Phase 1 record leaves the encrypted recovery-store directories,
+local plaintext scratch roots, backup public recipient, and sealed-content
+deployment absent. ADR 0036 accepts the existing `/mnt/memory` NFS mount as the
+sole M10 storage mount; no additional `/mnt` mount is required or expected.
+Naming a fixture or directory does not authorize provisioning it. Before any
+backup or synthetic sealed mutation, obtain approval that expressly names:
 
-- each backup, staging, verification, and recovery device, filesystem, mount
-  unit, mount point, directory root, owner, mode, and allowed capacity change;
+- the existing `/mnt/memory` mount, the exact encrypted store and bounded
+  writable status/verification directories beneath
+  `/mnt/memory/kivra-memory/backups/postgresql-pitr`, the local plaintext
+  staging root `/var/lib/kivra-memory/backup-staging`, and the isolated
+  recovery root `/var/lib/kivra-memory/recovery`, including owner, mode, and
+  allowed capacity change;
 - the public `age` recipient credential source and installed destination on the
   routine node, plus the independently controlled private-identity source and
   its permitted staging boundary;
-- the exact isolated recovery host/environment, recovery mount, service
-  account, verification units, listener prohibition, and teardown boundary;
+- the exact isolated recovery host/environment, its read-only access to the
+  accepted encrypted store, its local recovery root, service account,
+  verification units, listener prohibition, and teardown boundary;
 - the PostgreSQL cluster, helper revision, archive configuration, units/timers,
   capacity budget, maintenance window, and pre-change rollback state; and
 - the synthetic sealed tenant/scope, one disposable activation-preflight
@@ -430,11 +456,21 @@ do not delete a previously accepted recovery object.
 - Provision only the public `age` recipient on the routine backup node.
 - Keep the private recovery identity outside that node and outside every
   backup object.
-- Verify backup, WAL, status, staging, verification, and recovery directory
-  ownership and modes against the checked-in contracts.
-- Verify the recovery mount is separate, empty, and unavailable to routine
-  writers.
-- Confirm sufficient capacity for no-prune retention.
+- Verify `/mnt/memory` is the sole exact storage mount and verify the encrypted
+  store, WAL, status, verification, local staging, and isolated recovery
+  directory ownership and modes against the checked-in contracts.
+- Verify the local staging and isolated recovery roots are empty, are not
+  mounts, are outside `/mnt`, and are unavailable to routine application
+  writers. The recovery environment may read accepted encrypted objects but
+  may write only its exact bounded status/verification paths in that store.
+- Confirm sufficient capacity for no-prune retention on `/mnt/memory` once;
+  database, WAL, and backup labels are views of the same capacity pool and
+  must not be summed.
+- Record that the encrypted store and canonical PostgreSQL data share the NAS
+  dataset and therefore share capacity, outage, corruption, and dataset-loss
+  fate. Nightly NAS protection is operator-managed and is not an
+  application-consistent PITR or restored-copy claim without separate
+  evidence.
 
 ### 8.3 Produce and verify
 
@@ -488,18 +524,20 @@ attempted deletion.
 ### 9.1 Authorization checkpoint
 
 Obtain approval for the exact backup generation, target selector, disposable
-recovery mount, recovery service account, private-identity credential source,
-listener/socket class, and maximum drill duration. Inventory the empty target
-and all processes/mount users before mutation. Authorized writes are confined
-to that disposable mount and protected drill evidence. Rollback is teardown of
-the isolated instance and removal of drill-owned plaintext/scratch artifacts;
-promotion or overlay of production is not authorized.
+local recovery root, recovery service account, private-identity credential
+source, listener/socket class, and maximum drill duration. Inventory the empty
+target and all processes using the accepted encrypted store before mutation.
+Authorized writes are confined to that local recovery root, the exact bounded
+verification/status paths, and protected drill evidence. Rollback is teardown
+of the isolated instance and removal of drill-owned plaintext/scratch
+artifacts; promotion or overlay of production is not authorized.
 
 ### 9.2 Isolation
 
 - Stop all ScaleVault writers, ingress paths, workers, pollers, exporters, and
   destructive services in the recovery environment.
-- Use a disposable empty recovery mount and local-only socket/port.
+- Use a disposable empty local recovery root outside `/mnt` and a local-only
+  socket/port.
 - Supply the private `age` identity only through the protected recovery
   credential boundary.
 - Select a target that proves state A and B are present while later state C is
@@ -927,6 +965,7 @@ the narrowed matrix passes at the exact installed candidate revision.
 |---|---|---|
 | ADR 0034 local archive scope | Passed | Accepted ADR and reconciled acceptance/threat/runbook text |
 | ADR 0035 no-prune retention | Architecture passed; installed validation pending | Accepted ADR; installed validation-only result and no deletion |
+| ADR 0036 single-NFS recovery topology | Architecture passed; installed validation pending | Accepted sole-mount topology, exact permission-bounded directories, shared-fate claim boundary, and local scratch contract |
 | Final repository verification | Passed at frozen release | Frozen candidate `make verify`, PG17 zero-skip gate, and local recovery/rule gates; rerun only for a new runtime candidate |
 | Local signed-archive restoration | Passed at frozen release | Exact anchored history/tree verification and clean isolated local restore |
 | Encrypted local bundle restoration | Passed at frozen release | Real `age` materialization followed by same-anchor clean database restore, wrong-key/corruption rejection, and cleanup |
@@ -934,7 +973,7 @@ the narrowed matrix passes at the exact installed candidate revision.
 | Immutable installed candidate | Passed in Phase 1 | Source checksum, installed revision/migration, unit/executable digests |
 | Installed observability/report DB boundary | Passed in Phase 1 | Both wrapper bindings; grant convergence; payload/table/mutation/cross-tenant denials; snapshot and nine bounded report function results |
 | Installed service hardening | Phase 1 audit passed; lifecycle drills pending separately | Effective unit, credential, privilege, listener, mount, and disabled-surface audit |
-| Installed recovery prerequisites | Pending authorization and provisioning | Exact backup/staging/recovery mounts, public recipient, isolated recovery boundary, and synthetic sealed-content deployment/preflight |
+| Installed recovery prerequisites | Pending authorization and provisioning | Exact sole `/mnt/memory` mount and encrypted-store directories, local plaintext scratch roots, public recipient, isolated recovery boundary, and synthetic sealed-content deployment/preflight |
 | Installed encrypted base/WAL chain | Pending | Verified current encrypted chain, continuity, custody, timer, capacity, and no-prune results |
 | Installed-store PITR | Pending | Production helper A/B-not-C, integrity, RPO/RTO, credential/destruction, and cleanup evidence |
 | Non-Forgejo credential lifecycle | Pending | Replacement, next-use rejection, revocation/session, canary, and cleanup results per active class |
@@ -1002,7 +1041,7 @@ acceptance summary, not the protected operator evidence store.
 
 Milestone 10 closeout is complete when:
 
-1. ADRs 0034 and 0035 are accepted and all policy/runbook/acceptance text agrees
+1. ADRs 0034 through 0036 are accepted and all policy/runbook/acceptance text agrees
    with them.
 2. The final immutable candidate is installed, audited, and rollback-safe.
 3. A current installed encrypted PostgreSQL/WAL chain restores through the
