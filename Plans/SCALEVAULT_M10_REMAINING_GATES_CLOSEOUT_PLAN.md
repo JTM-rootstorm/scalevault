@@ -429,8 +429,11 @@ backup or synthetic sealed mutation, obtain approval that expressly names:
 - the exact isolated recovery host/environment, its read-only access to the
   accepted encrypted store, its local recovery root, service account,
   verification units, listener prohibition, and teardown boundary;
-- the PostgreSQL cluster, helper revision, archive configuration, units/timers,
-  capacity budget, maintenance window, and pre-change rollback state; and
+- the PostgreSQL cluster, helper revision, `memory_backup` role and exact
+  grants, protected pgpass credential, `pg_hba.conf` rows, secret-free recovery
+  configuration digest, archive configuration, controlled PostgreSQL restart,
+  units/timers, capacity budget, maintenance window, and pre-change rollback
+  state; and
 - the synthetic sealed tenant/scope, one disposable activation-preflight
   fixture, the distinct retained Phase 2 correlation fixture, provider
   control/material roots, destruction ledger and both anchor locations, request

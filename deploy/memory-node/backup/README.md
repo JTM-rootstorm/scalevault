@@ -116,8 +116,11 @@ credentials.
    the store and staging directory. Inject interruption, destination loss,
    read-only remount, ENOSPC, and wrong-identity failures; no final object may
    appear.
-7. Merge `postgresql.conf.example` and `pg_hba.conf.example`, reload, force
-   `pg_switch_wal()`, and confirm a complete encrypted WAL object appears.
+7. Merge `postgresql.conf.example` and `pg_hba.conf.example`. Because
+   `archive_mode` is a postmaster setting, perform the authorized controlled
+   PostgreSQL restart; a reload is insufficient. Confirm the canonical cluster
+   returns healthy with the expected system identifier and migration, then
+   force `pg_switch_wal()` and confirm a complete encrypted WAL object appears.
 8. Enable and run the base-backup service once. A base is published only after
    `pg_verifybackup` succeeds on plaintext staging and age encryption completes.
 9. On the isolated recovery host, install the identity and run `verify latest`.
