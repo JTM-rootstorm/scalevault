@@ -190,6 +190,7 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
         module.CONFIG_DIGEST_FILE = config_digest
         module.AGE = age
         module.HELPER_PATH = installed_helper
+        module.STORE.parent.mkdir(parents=True)
         for path, mode in {
             module.STORE: 0o2750,
             module.BASE_ROOT: 0o2750,
