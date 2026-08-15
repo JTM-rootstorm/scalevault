@@ -41,6 +41,7 @@ documentation and do not change these decisions implicitly.
 | [0033](0033-operator-managed-offsite-and-local-alert-acceptance.md) | Accepted | Keep Backblaze transfer operator-managed and make private local alert evaluation, rather than external notification delivery, the M10 acceptance boundary. |
 | [0034](0034-local-signed-archive-m10-acceptance.md) | Accepted | Accept local provider-independent signed-archive and encrypted-bundle recovery for M10 while leaving Forgejo recovery and continuation excluded and unverified. |
 | [0035](0035-no-prune-recovery-retention.md) | Accepted | Give M10 retention zero deletion authority and require validated inventory, capacity alerts, and an exact no-prune result. |
+| [0036](0036-single-nfs-recovery-store-and-local-scratch.md) | Accepted | Use the sole `/mnt/memory` NFS mount for canonical PostgreSQL and its encrypted PITR store, with local plaintext scratch and one shared capacity and failure domain. |
 
 An accepted ADR may be changed only by a later ADR that explicitly supersedes
 or amends it. Implementation changes must preserve the security and authority

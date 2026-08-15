@@ -18,6 +18,23 @@ The [Forgejo recovery runbook](runbooks/forgejo-recovery.md) is retained as
 future, separately authorized guidance. It is not an M10 recovery path or
 acceptance gate.
 
+## Installed storage topology
+
+The routine Memory Node has one NFS mount, `/mnt/memory`. Canonical PostgreSQL
+`PGDATA` remains `/mnt/memory/kivra-memory/postgresql/17/main`; encrypted base,
+WAL, timeline-history, manifest, index, and completion objects are published to
+`/mnt/memory/kivra-memory/backups/postgresql-pitr`. Both trees share the same
+NAS, dataset, mount availability, and capacity pool. Their directory and
+ownership separation limits write scope but is not an independent recovery
+copy or failure domain.
+
+Plaintext backup staging uses local scratch at
+`/var/lib/kivra-memory/backup-staging`. The isolated recovery host materializes
+decrypted drills only below `/var/lib/kivra-memory/recovery`. Neither local path
+is a durable backup, and the recovery private identity remains off the routine
+Memory Node. See
+[ADR 0036](adr/0036-single-nfs-recovery-store-and-local-scratch.md).
+
 ## Recovery invariants
 
 1. Never restore over an active canonical database, active production data
@@ -53,7 +70,8 @@ acceptance gate.
 Follow [Backup operations](runbooks/backup-operations.md). The operator must:
 
 1. confirm the previous local chain is current and sufficient no-prune capacity
-   remains before starting;
+   remains in the one pool shared by canonical `PGDATA` and the encrypted chain
+   before starting;
 2. create an encrypted physical base backup with manifest and WAL continuity;
 3. verify the completed backup independently;
 4. verify the exact local signed-history head and its external rollback anchor;
@@ -74,6 +92,11 @@ capacity. Use [WAL failure](runbooks/wal-failure.md) instead of retry loops that
 could destroy evidence. PBS protection and Backblaze transfer, retention,
 freshness, retrieval, and deletion are operator-managed and outside this
 procedure.
+
+Nightly NAS backups, PBS protection, and Backblaze transfer are operator-managed
+outside this topology. In the absence of separate operator evidence, no
+acceptance result may claim that any such copy exists, is fresh, is independent
+of the NAS dataset, or has been restored successfully.
 
 ## Recovery activation gate
 

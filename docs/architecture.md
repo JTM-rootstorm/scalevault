@@ -50,6 +50,24 @@ and continuous WAL form one verified recovery chain; encryption identity is
 kept outside the objects it protects. A recovery never overlays the active
 cluster.
 
+The installed storage topology is fixed by
+[ADR 0036](adr/0036-single-nfs-recovery-store-and-local-scratch.md). The sole
+NFS mount is `/mnt/memory`. Canonical PostgreSQL `PGDATA` remains at
+`/mnt/memory/kivra-memory/postgresql/17/main`, and the encrypted PostgreSQL PITR
+store is `/mnt/memory/kivra-memory/backups/postgresql-pitr`. Plaintext backup
+staging is bounded local scratch at
+`/var/lib/kivra-memory/backup-staging`; decrypted recovery work on the isolated
+recovery host is rooted at `/var/lib/kivra-memory/recovery`. The recovery
+private identity is not kept on the routine Memory Node.
+
+These directories separate service write scope, not storage failure domains.
+Canonical `PGDATA` and the encrypted PITR chain share the same NFS mount, NAS,
+dataset, and capacity pool. Capacity admission and alerts evaluate their
+combined use; pressure fails closed and does not authorize pruning. Nightly NAS
+backups, PBS protection, and Backblaze operations are operator-managed, and
+ScaleVault makes no existence, freshness, independence, or restore claim for
+them without separate operator evidence.
+
 The signed local archive is an independent semantic recovery source, not a
 second canonical database. A verified encrypted full-history bundle supplies a
 second provider-independent archive copy. Neither archive path contains runtime
@@ -81,7 +99,8 @@ is validation-only under
 object, restore point, and hold is retained. The eight-daily/five-weekly values
 are accumulation and inventory floors, not deletion authority. Capacity
 pressure stops backup production; it does not authorize pruning. PBS protection
-and Backblaze upload remain operator-managed outside ScaleVault's M10 gates.
+and Backblaze upload remain operator-managed outside ScaleVault's M10 gates;
+ADR 0036 does not change ADR 0035's no-prune decision.
 
 ## Observability plane
 
