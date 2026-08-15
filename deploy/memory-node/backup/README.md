@@ -67,10 +67,11 @@ on the routine node. A concrete offsite mount, recipient, custody owner,
 retention policy, and isolated recovery destination are mandatory before
 activation.
 
-Install the public recipient as `root:kivra-backup` mode `0640`. Install
-`REVISION` and `recovery-configuration.sha256` as `root:root` mode `0644`; they
-must contain only their single bounded revision or digest value. The helper
-validates these owners and modes before use.
+Install the public recipient as `root:kivra-backup` mode `0640`. Install the
+immutable release-tree `REVISION` as `root:root` mode `0444`, and the mutable
+`recovery-configuration.sha256` deployment metadata as `root:root` mode
+`0644`. They must contain only their single bounded revision or digest value.
+The helper validates these owners and modes before use.
 
 The helper never accepts a database URL, destination root, binary directory, or
 recipient through ambient environment variables. It emits fixed event/result

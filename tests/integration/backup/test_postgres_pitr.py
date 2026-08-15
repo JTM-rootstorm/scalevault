@@ -164,8 +164,10 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
         recipient.write_text(_run([str(age_keygen), "-y", str(identity)]) + "\n", encoding="ascii")
         release = tmp_path / "REVISION"
         release.write_text("a" * 40 + "\n", encoding="ascii")
+        release.chmod(0o444)
         config_digest = tmp_path / "configuration.sha256"
         config_digest.write_text("b" * 64 + "\n", encoding="ascii")
+        config_digest.chmod(0o644)
 
         module.PG_BINDIR = initdb.parent
         module.PG_DATA = data

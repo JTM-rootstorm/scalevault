@@ -205,7 +205,7 @@ def _validate_identity() -> None:
 
 
 def _deployment_metadata() -> tuple[str, str]:
-    _require_owned(RELEASE_FILE, owner="root", group="root", mode=0o644)
+    _require_owned(RELEASE_FILE, owner="root", group="root", mode=0o444)
     release = _read_small_text(RELEASE_FILE, code="release_metadata_invalid", max_bytes=256)
     _require_owned(CONFIG_DIGEST_FILE, owner="root", group="root", mode=0o644)
     config_digest = _read_small_text(

@@ -5,12 +5,14 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import stat
 import sys
 import tarfile
 from datetime import UTC, datetime, timedelta
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -991,11 +993,61 @@ def test_helper_readme_share_exact_credential_and_metadata_ownership(
     assert ownership_calls == {
         module.RECIPIENT_FILE: ("root", "kivra-backup", 0o640),
         module.IDENTITY_FILE: ("memory-recovery", "memory-recovery", 0o600),
-        module.RELEASE_FILE: ("root", "root", 0o644),
+        module.RELEASE_FILE: ("root", "root", 0o444),
         module.CONFIG_DIGEST_FILE: ("root", "root", 0o644),
     }
 
     readme = " ".join((BACKUP_ROOT / "README.md").read_text().split())
     assert "public recipient as `root:kivra-backup` mode `0640`" in readme
-    assert "`REVISION` and `recovery-configuration.sha256` as `root:root` mode `0644`" in readme
+    assert "immutable release-tree `REVISION` as `root:root` mode `0444`" in readme
+    assert (
+        "`recovery-configuration.sha256` deployment metadata as `root:root` mode `0644`" in readme
+    )
     assert "`memory-recovery` identity as mode `0600`" in readme
+
+
+def _configure_metadata_ownership_for_current_user(
+    module: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        module.pwd,
+        "getpwnam",
+        lambda _name: SimpleNamespace(pw_uid=os.getuid()),
+    )
+    monkeypatch.setattr(
+        module.grp,
+        "getgrnam",
+        lambda _name: SimpleNamespace(gr_gid=os.getgid()),
+    )
+
+
+def test_deployment_metadata_rejects_nonimmutable_release_revision_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load()
+    module.RELEASE_FILE = tmp_path / "REVISION"
+    module.CONFIG_DIGEST_FILE = tmp_path / "recovery-configuration.sha256"
+    module.RELEASE_FILE.write_text("a" * 40, encoding="ascii")
+    module.RELEASE_FILE.chmod(0o644)
+    module.CONFIG_DIGEST_FILE.write_text("b" * 64, encoding="ascii")
+    module.CONFIG_DIGEST_FILE.chmod(0o644)
+    _configure_metadata_ownership_for_current_user(module, monkeypatch)
+
+    with pytest.raises(module.BackupError, match=r"^storage_mode_invalid$"):
+        module._deployment_metadata()
+
+
+def test_deployment_metadata_rejects_nonstandard_configuration_digest_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load()
+    module.RELEASE_FILE = tmp_path / "REVISION"
+    module.CONFIG_DIGEST_FILE = tmp_path / "recovery-configuration.sha256"
+    module.RELEASE_FILE.write_text("a" * 40, encoding="ascii")
+    module.RELEASE_FILE.chmod(0o444)
+    module.CONFIG_DIGEST_FILE.write_text("b" * 64, encoding="ascii")
+    module.CONFIG_DIGEST_FILE.chmod(0o444)
+    _configure_metadata_ownership_for_current_user(module, monkeypatch)
+
+    with pytest.raises(module.BackupError, match=r"^storage_mode_invalid$"):
+        module._deployment_metadata()
