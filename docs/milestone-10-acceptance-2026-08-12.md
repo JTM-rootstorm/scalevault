@@ -3,9 +3,9 @@
 - **Review date:** 2026-08-14
 - **Status:** Not accepted; implementation and evidence collection in progress
 - **Implementation baseline:** `368b302`
-- **Frozen release:** `c49017152446f037e6940533062fc7b8f0448c7f`
+- **Frozen release:** `1790d94831e785639aaaebeca8a7b64512d6358d`
 - **Frozen release archive checksum:**
-  `be05312a92740a49e59635b02ad1f48866bbf73d01420fb3458e34ac44e8e9d2`
+  `c73e2aff370e28132da9061c51d494d41d6b26d0e7b170f3b9e0d93c305d8ea8`
 - **Evidence revision:** Pending final installed-evidence update
 - **Database migration revision:** Candidate `0011_observability_aggregates`;
   installed preflight remains at `0010_ingress_provider_heads`
@@ -46,7 +46,7 @@ protected operator store and transfer only permitted fields here.
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
 | Architecture and threat decisions accepted | Review | Passed | ADRs 0034 and 0035 are accepted and every active threat row maps implementation, tests, runbooks, and evidence |
-| Complete repository verification | Repository | Passed | Frozen release passed 1,584 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
+| Complete repository verification | Repository | Passed | Frozen release passed 1,585 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
 | Required PostgreSQL 17 integration gate | Durable local | Passed | Frozen release passed all 203 required integration tests with zero skipped and zero failed |
 | Production-relevant PITR durability | Durable local | Passed | Frozen release production-helper PITR gate passed A/B-not-C and corrupt-object rejection; installed-storage drill remains separate |
 | Installed services and credentials hardened | Installed LXC | Pending | Read-only preflight found the prior `c95d66c` layout and migration `0010`; exact M10 installation and audit remain pending |
@@ -86,13 +86,13 @@ and unprovisioned.
 
 Status: **Passed at the frozen release**.
 
-The complete verification command passed with 1,584 Python tests passed and 181
+The complete verification command passed with 1,585 Python tests passed and 181
 environment-gated skips, followed by successful Go vet/tests, deterministic
 protobuf verification, 11 schema validations, and plugin format, lint,
 TypeScript, and six test gates. The local PostgreSQL skips were caused by the
 missing `vector` extension and are superseded for the required database scope
 by the zero-skip PostgreSQL 17 LXC result below. The separately gated PITR test
-is likewise recorded below. The M10 deployment lane passed 129 tests with only
+is likewise recorded below. The M10 deployment lane passed 130 tests with only
 the local `promtool` availability skip. The designated LXC's `promtool` loaded
 all 38 frozen-release rules and passed every checked-in rule scenario.
 
