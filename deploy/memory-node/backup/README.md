@@ -34,6 +34,15 @@ exact memberships before activation. Plaintext staging remains mode `0600/0700`.
 Do not grant `kivra-backup` to any application, ingress, worker, exporter, or
 monitoring identity.
 
+NFS ownership is numeric. Before creating the store, record and approve the
+exact UID of `memory-backup`, `memory-recovery`, and `postgres` plus the exact
+GID of `kivra-backup`. Require those values to match on the routine node, NAS,
+and isolated recovery host; matching account names alone is insufficient. On a
+root-squashed export, create the trusted store roots through the NAS-side
+provisioning path or an explicitly reviewed bounded ACL operation. Do not make
+the shared `/mnt/memory/kivra-memory` parent service-writable merely to let a
+service account create its own trust root.
+
 Provision the locked, non-login `memory-recovery` system identity and the
 `verification` directory on the routine node even though the private age
 identity and verification timer remain absent there. Base backup, WAL archive,

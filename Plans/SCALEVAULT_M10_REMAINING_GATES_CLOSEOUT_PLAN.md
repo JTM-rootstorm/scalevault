@@ -417,12 +417,16 @@ sole M10 storage mount; no additional `/mnt` mount is required or expected.
 Naming a fixture or directory does not authorize provisioning it. Before any
 backup or synthetic sealed mutation, obtain approval that expressly names:
 
+- the exact candidate revision, versioned release and source-archive paths,
+  atomic pointer target, helper/unit destinations, active services to quiesce
+  and restart, prior pointer, and rollback procedure;
 - the existing `/mnt/memory` mount, the exact encrypted store and bounded
   writable status/verification directories beneath
   `/mnt/memory/kivra-memory/backups/postgresql-pitr`, the local plaintext
   staging root `/var/lib/kivra-memory/backup-staging`, and the isolated
   recovery root `/var/lib/kivra-memory/recovery`, including owner, mode, and
-  allowed capacity change;
+  allowed capacity change, plus the exact numeric UIDs/GID used by the routine
+  node, NAS, and isolated recovery host for NFS ownership;
 - the public `age` recipient credential source and installed destination on the
   routine node, plus the independently controlled private-identity source and
   its permitted staging boundary;
