@@ -901,6 +901,22 @@ def test_examples_and_runbook_freeze_recovery_invariants() -> None:
     assert "Stop immediately" in readme
 
 
+def test_postgresql_mount_drop_in_supports_root_squashed_storage() -> None:
+    root = ROOT / "deploy" / "memory-node" / "postgresql"
+    drop_in = root.joinpath(
+        "systemd/postgresql@17-main.service.d/10-kivra-memory-mount.conf"
+    ).read_text()
+    readme = " ".join((root / "README.md").read_text().split())
+
+    assert "RequiresMountsFor=/mnt/memory" in drop_in
+    assert "ConditionPathIsMountPoint=/mnt/memory" in drop_in
+    assert "[Service]\n" in drop_in
+    assert "User=postgres\n" in drop_in
+    assert "Group=postgres\n" in drop_in
+    assert "root-squashes UID 0" in readme
+    assert "normal start/stop/reload paths" in readme
+
+
 def test_helper_readme_and_units_share_exact_storage_ownership_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -36,6 +36,13 @@ systemctl daemon-reload
 systemd-analyze verify postgresql@17-main.service
 ```
 
+The instance drop-in runs `pg_ctlcluster` as `postgres:postgres`. This is
+required when the persistent export root-squashes UID 0: the Debian wrapper
+checks the configured data directory before starting the server, and a
+root-run wrapper cannot traverse that otherwise valid directory. PostgreSQL
+itself, its PID file, log, and normal start/stop/reload paths remain owned by
+the dedicated cluster identity.
+
 On a fresh node, after mounting and validating `/mnt/memory`, create the parent
 directories before initializing or restoring the cluster:
 
