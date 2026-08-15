@@ -6,6 +6,10 @@
 - **Frozen release:** `73814b6bf81b229c3cb307ee5ea9ca61295e66f7`
 - **Frozen release archive checksum:**
   `af317aab59d8245c7d40c6b5104c0943d11247a03ee2afb88d22c58b379f7d2c`
+- **Phase 2 source candidate:**
+  `670f005917957af128d320322e0f2cacbe98b1e1`
+- **Phase 2 source archive checksum:**
+  `684c20ae7da2e1a1fae5aa30e8e09c8b503f6d095c3c27caef465da74c6382d0`
 - **Evidence revision:** Pending final installed-evidence update
 - **Database migration revision:** Installed `0011_observability_aggregates`
 
@@ -54,8 +58,8 @@ protected operator store and transfer only permitted fields here.
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
 | Architecture and threat decisions accepted | Review | Passed | ADRs 0034 through 0036 are accepted and every active threat row maps implementation, tests, runbooks, and evidence |
-| Complete repository verification | Repository | Passed | Frozen release passed 1,589 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
-| Required PostgreSQL 17 integration gate | Durable local | Passed | Frozen release passed all 205 required integration tests with zero skipped and zero failed |
+| Complete repository verification | Repository | Passed | Phase 2 source candidate passed 1,595 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
+| Required PostgreSQL 17 integration gate | Durable local | Passed | Phase 2 source candidate passed all 205 required integration tests with zero skipped and zero failed |
 | Production-relevant PITR durability | Durable local | Passed | Frozen release production-helper PITR gate passed A/B-not-C and corrupt-object rejection; installed-storage drill remains separate |
 | Installed services and credentials hardened | Installed LXC | Partial | Exact release, migration, units, systemd credential delivery, canonical service health, and installed audit passed; per-class rotation/custody and remaining live hardening evidence are pending |
 | Encrypted base backup and WAL current | Installed LXC/local recovery storage | Pending | Verified complete local chain not yet recorded; Backblaze transfer is operator-managed and non-blocking |
@@ -95,29 +99,31 @@ or no-prune gates.
 
 ## Repository verification
 
-Status: **Passed at the frozen release**.
+Status: **Passed at the installed Phase 1 release and current Phase 2 source candidate**.
 
-The complete verification command passed with 1,589 Python tests passed and 183
+The current Phase 2 source candidate's complete verification command passed
+with 1,595 Python tests passed and 183
 environment-gated skips, followed by successful Go vet/tests, deterministic
 protobuf verification, 11 schema validations, and plugin format, lint,
 TypeScript, and six test gates. The local PostgreSQL skips were caused by the
 missing `vector` extension and are superseded for the required database scope
 by the zero-skip PostgreSQL 17 LXC result below. The separately gated PITR test
-is likewise recorded below. The M10 deployment lane passed 134 tests with only
+is likewise recorded below. The M10 deployment lane passed 139 tests with only
 the local `promtool` availability skip. The designated LXC's `promtool` loaded
-all 38 frozen-release rules and passed every checked-in rule scenario.
+all 38 candidate rules and passed every checked-in rule scenario.
 
 The current repository includes migration
 `0011_observability_aggregates`, the least-privilege metrics/report role and
 function boundary, the loopback metrics exporter, archive dual-signed
 transition/compromise verification, and `continue-new-target`. Those archive
 continuation capabilities are not exercised or accepted by M10. A second raw
-`git archive` digest independently matched the frozen checksum, and the release
-manifest/tree immutability checks passed.
+`git archive` digest independently matched the current Phase 2 candidate
+checksum. The installed Phase 1 release remains separately bound to its frozen
+checksum and installed audit.
 
 ## Durable PostgreSQL 17 verification
 
-Status: **Passed at the frozen release on the designated Debian recovery LXC**.
+Status: **Passed at the current Phase 2 source candidate on the designated Debian LXC**.
 
 The clean Debian gate must run with PostgreSQL 17 binaries explicitly selected
 and database tests required:
@@ -222,17 +228,25 @@ revocation, next-use, or session test is correctly not applicable.
 Status: **Pending live evidence**.
 
 Post-Phase-1 source candidate
-`8d9d71b94ee291b83dc55676be6d1e401ec844dd` corrects the backup helper's
-immutable `REVISION` mode contract. It is validated but not installed. Its raw
+`670f005917957af128d320322e0f2cacbe98b1e1` aligns the backup helper, units,
+metrics, tests, ADRs, and runbooks with the sole `/mnt/memory` NFS topology and
+local plaintext scratch contract. It is validated but not installed. Its raw
 Git archive SHA-256 is
-`ab0c1bba1e92af67f026b91846b5a3973ef10909443c9b4147b84b996d4fe80d`.
-The behavior-identical documentation descendants passed the complete local
-gate with 1,591 Python tests and 183 expected environment skips; the exact
-source candidate passed all 205 required PostgreSQL 17, production-helper
-PITR, and encrypted-bundle tests with zero skips or failures, plus all 38
-Prometheus rules and scenarios on the designated LXC. The disposable test
-workspace was removed and the live pointer remained on frozen Phase-1 release
-`73814b6` at migration `0011_observability_aggregates`.
+`684c20ae7da2e1a1fae5aa30e8e09c8b503f6d095c3c27caef465da74c6382d0`.
+Removing the accidentally inherited commit signature changed only commit and
+archive metadata. The unsigned candidate and the candidate that ran the gates
+have the identical Git tree
+`6008c08b5c317466bf05f487a35c6a23399f6202` and no file diff, so the verified
+source bytes and behavior are unchanged.
+The exact candidate passed the complete local gate with 1,595 Python tests and
+183 expected environment skips, the focused deployment lane with 139 passed
+and one local `promtool` availability skip, all 205 required PostgreSQL 17,
+production-helper PITR, and encrypted-bundle tests with zero skips or failures,
+and all 38 Prometheus rules and scenarios on the designated LXC. The
+disposable local and LXC test workspaces were removed. The live pointer remained
+on frozen Phase-1 release `73814b6` at migration
+`0011_observability_aggregates`, and the canonical PostgreSQL, API, Codex
+ingress, and tunnel services remained active.
 
 This validation does not install the correction or close the encrypted-chain
 gate. Before Phase 2, select and install the reviewed source candidate under
@@ -443,9 +457,10 @@ relay/OAuth/node-agent surfaces also remain outside this acceptance.
 
 ## Acceptance decision
 
-**Decision: NOT ACCEPTED.** Repository, required PostgreSQL 17, production-helper
-PITR, rule, and local encrypted-bundle gates are complete at the frozen
-release, and the immutable installed Phase 1 candidate and audit also pass.
+**Decision: NOT ACCEPTED.** Repository, required PostgreSQL 17,
+production-helper PITR, rule, and local encrypted-bundle gates pass at the
+current Phase 2 source candidate, and the separately frozen immutable Phase 1
+installation and audit also pass. The Phase 2 candidate is not installed.
 Installed backup/PITR storage, per-class credential lifecycle, monitoring
 activation, scanner, hard-forget, NPM, and final cleanup evidence remain
 pending. Record the later evidence-only revision separately, and change this
