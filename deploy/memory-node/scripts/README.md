@@ -44,12 +44,17 @@ deploy/memory-node/scripts/kivra-memory-release-prepare prepare \
 
 The operator must then review the fixed output, independently verify the
 archive checksum, and change the candidate and archive to `root:root` without
-changing bytes. `plan-pointer` records the expected current pointer and exact
-candidate manifest in a mode-`0600` JSON plan. Review that plan and make it
-`root:root` before the authorized root-only `apply-pointer`; apply fails if the
-pointer or manifest changed and replaces `/opt/kivra-memory/app` atomically.
-The pointer always names a full-revision directory, so the fixed paths in the
-systemd units continue to resolve through `/opt/kivra-memory/app`.
+changing bytes. Prepared release directories are non-writable and
+mode `0555`; regular files are `0444`, or `0555` when executable. This lets the
+dedicated non-root services execute the accepted release without gaining
+mutation authority. Change ownership without dereferencing virtual-environment
+symlinks so interpreter targets outside the release are never modified.
+`plan-pointer` records the expected current pointer and exact candidate manifest
+in a mode-`0600` JSON plan. Review that plan and make it `root:root` before the
+authorized root-only `apply-pointer`; apply fails if the pointer or manifest
+changed and replaces `/opt/kivra-memory/app` atomically. The pointer always names
+a full-revision directory, so the fixed paths in the systemd units continue to
+resolve through `/opt/kivra-memory/app`.
 
 `kivra-memory-installed-audit` is read-only and emits one content-free JSON
 record. It verifies the atomic pointer, root-owned read-only release and source

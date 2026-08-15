@@ -9,7 +9,7 @@ import subprocess
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -107,6 +107,15 @@ def test_release_scripts_are_executable_and_content_free() -> None:
 
 def _load_audit() -> ModuleType:
     loader = SourceFileLoader("installed_audit", str(AUDIT))
+    spec = spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def _load_prepare() -> ModuleType:
+    loader = SourceFileLoader("release_prepare", str(PREPARE))
     spec = spec_from_loader(loader.name, loader)
     assert spec is not None
     module = module_from_spec(spec)
@@ -348,6 +357,100 @@ def test_pointer_apply_rejects_changed_current_pointer(tmp_path: Path) -> None:
     assert os.readlink(pointer) == str(other)
 
 
+def test_pointer_apply_rejects_non_traversable_release(tmp_path: Path) -> None:
+    release, _, _ = _release(tmp_path, owner_read_only=True)
+    pointer = tmp_path / "app"
+    plan = tmp_path / "pointer-plan.json"
+    planned = subprocess.run(
+        [
+            PREPARE,
+            "plan-pointer",
+            "--release",
+            release,
+            "--pointer",
+            pointer,
+            "--expected-current",
+            "absent",
+            "--plan-file",
+            plan,
+        ],
+        capture_output=True,
+        check=False,
+    )
+    assert planned.returncode == 0
+    release.chmod(0o500)
+
+    applied = subprocess.run(
+        [PREPARE, "apply-pointer", "--plan-file", plan],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert applied.returncode != 0
+    assert applied.stdout == ""
+    assert applied.stderr == "release_not_traversable\n"
+    assert not pointer.exists()
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "mode", "expected"),
+    (
+        (".", 0o500, "release_tree_not_traversable"),
+        ("REVISION", 0o400, "release_tree_not_readable"),
+    ),
+)
+def test_installed_audit_rejects_inaccessible_release(
+    tmp_path: Path, relative_path: str, mode: int, expected: str
+) -> None:
+    module = _load_audit()
+    release, releases, archives = _release(tmp_path, owner_read_only=True)
+    pointer = tmp_path / "app"
+    pointer.symlink_to(release)
+    (release / relative_path).chmod(mode)
+
+    with pytest.raises(module.AuditError, match=rf"^{expected}$"):
+        module._release(
+            SimpleNamespace(
+                release_pointer=pointer,
+                releases_root=releases,
+                archives_root=archives,
+                libexec_root=tmp_path / "libexec",
+            ),
+            required_uid=os.geteuid(),
+        )
+
+
+def test_make_read_only_normalizes_modes_without_following_symlinks(
+    tmp_path: Path,
+) -> None:
+    module = _load_prepare()
+    release = tmp_path / "release"
+    nested = release / "nested"
+    nested.mkdir(parents=True, mode=0o700)
+    nested.chmod(0o2770)
+    plain = nested / "plain"
+    plain.write_text("plain\n", encoding="utf-8")
+    plain.chmod(0o600)
+    executable = nested / "executable"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o710)
+    outside = tmp_path / "outside"
+    outside.write_text("outside\n", encoding="utf-8")
+    outside.chmod(0o600)
+    link = nested / "outside-link"
+    link.symlink_to(outside)
+
+    module._make_read_only(release)
+
+    assert release.stat().st_mode & 0o7777 == 0o555
+    assert nested.stat().st_mode & 0o7777 == 0o555
+    assert plain.stat().st_mode & 0o7777 == 0o444
+    assert executable.stat().st_mode & 0o7777 == 0o555
+    assert link.is_symlink()
+    assert outside.stat().st_mode & 0o7777 == 0o600
+
+
 def test_prepare_rejects_tracked_drift_before_writing(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
@@ -549,8 +652,20 @@ def test_prepare_produces_repeatable_archives_and_read_only_releases(tmp_path: P
             f"migration_head={MIGRATION}\n"
         )
         assert archive.stat().st_mode & 0o777 == 0o444
-        assert release.stat().st_mode & 0o222 == 0
-        assert all(path.stat().st_mode & 0o222 == 0 for path in release.rglob("*"))
+        assert release.stat().st_mode & 0o777 == 0o555
+        assert all(
+            path.is_symlink() or path.stat().st_mode & 0o222 == 0 for path in release.rglob("*")
+        )
+        assert all(
+            path.is_symlink() or not path.is_dir() or path.stat().st_mode & 0o7777 == 0o555
+            for path in release.rglob("*")
+        )
+        assert all(
+            path.is_symlink()
+            or not path.is_file()
+            or path.stat().st_mode & 0o7777 in (0o444, 0o555)
+            for path in release.rglob("*")
+        )
         manifest = json.loads((release / "RELEASE_MANIFEST.json").read_text())
         assert manifest["revision"] == revision
         assert manifest["source_archive_sha256"] == archive_digests[-1]

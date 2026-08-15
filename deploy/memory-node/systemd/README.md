@@ -43,7 +43,9 @@ install -d -o memory-exporter -g kivra-memory -m 0700 \
 Treat an already-existing account with unexpected UID, GID, shell, home, or
 group membership as an installation error; inspect and reconcile it rather than
 blindly replacing it. The application tree is root-owned and not writable by a
-service account.
+service account. Every release directory is mode `0555`; regular files are
+`0444`, or `0555` when executable, so service identities can traverse and read
+the immutable tree without gaining write authority.
 
 Do not create `/opt/kivra-memory/app` as a directory. Preserve the prior
 versioned release and select the reviewed candidate only through the atomic

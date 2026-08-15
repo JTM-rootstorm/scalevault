@@ -113,12 +113,13 @@ def _make_read_only(root: Path) -> None:
         for name in files:
             path = Path(current, name)
             if not path.is_symlink():
-                path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o222)
+                mode = stat.S_IMODE(path.stat().st_mode)
+                path.chmod(0o555 if mode & 0o111 else 0o444)
         for name in directories:
             path = Path(current, name)
             if not path.is_symlink():
-                path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o222)
-    root.chmod(stat.S_IMODE(root.stat().st_mode) & ~0o222)
+                path.chmod(0o555)
+    root.chmod(0o555)
 
 
 def _systemd_drop_in_digests(release: Path) -> dict[str, str]:
@@ -245,7 +246,7 @@ def _read_manifest(release: Path) -> dict[str, object]:
     return manifest
 
 
-def _require_installed_release(release: Path) -> None:
+def _require_installed_release(release: Path, manifest: dict[str, object]) -> None:
     expected_uid = 0 if os.geteuid() == 0 else os.geteuid()
     for current, directories, files in os.walk(release, followlinks=False):
         for name in [".", *directories, *files]:
@@ -253,8 +254,28 @@ def _require_installed_release(release: Path) -> None:
             if path.is_symlink():
                 continue
             metadata = path.stat()
-            if metadata.st_uid != expected_uid or stat.S_IMODE(metadata.st_mode) & 0o222:
+            mode = stat.S_IMODE(metadata.st_mode)
+            if metadata.st_uid != expected_uid:
                 _fail("release_not_immutable")
+            if stat.S_ISDIR(metadata.st_mode) and mode != 0o555:
+                _fail("release_not_traversable")
+            if stat.S_ISREG(metadata.st_mode) and mode not in (0o444, 0o555):
+                _fail("release_not_readable")
+            if not stat.S_ISDIR(metadata.st_mode) and not stat.S_ISREG(metadata.st_mode):
+                _fail("release_entry_invalid")
+    executables = manifest.get("executable_sha256")
+    if not isinstance(executables, dict):
+        _fail("release_manifest_invalid")
+    for name in executables:
+        if not isinstance(name, str):
+            _fail("release_manifest_invalid")
+        executable = release / ".venv" / "bin" / name
+        try:
+            metadata = executable.stat(follow_symlinks=False)
+        except OSError:
+            _fail("release_executable_missing")
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o555:
+            _fail("release_executable_invalid")
 
 
 def _current_pointer(pointer: Path) -> str:
@@ -348,7 +369,7 @@ def _apply_pointer(args: argparse.Namespace) -> None:
     if not release.is_absolute() or not pointer.is_absolute():
         _fail("plan_invalid")
     manifest = _read_manifest(release)
-    _require_installed_release(release)
+    _require_installed_release(release, manifest)
     if (
         manifest["revision"] != plan["revision"]
         or _sha256(release / "RELEASE_MANIFEST.json") != plan["release_manifest_sha256"]
