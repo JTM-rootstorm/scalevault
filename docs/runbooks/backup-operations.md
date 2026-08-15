@@ -1,15 +1,23 @@
 # Backup operations
 
-This procedure covers routine PostgreSQL physical backups, verification, local
-encrypted archive bundles, and validation-only retention. It does not prove
-recovery until the corresponding isolated restore drill passes. PBS protection
-and Backblaze upload are operator-managed outside this procedure and are not
-M10 acceptance gates.
+This procedure covers routine PostgreSQL physical base backups and continuous
+WAL archival, isolated verification and PITR, local encrypted archive bundles,
+and validation-only retention. It does not prove recovery until the
+corresponding isolated restore drill passes. Nightly NAS backups and any
+operator-managed Backblaze or PBS protection are outside this procedure and are
+not claimed or accepted by M10.
 
 ## Preconditions
 
-- `/mnt/memory-backup` is the exact dedicated backup mount and is not the
-  canonical data failure domain.
+- `/mnt/memory` is the sole mounted storage root. The encrypted PostgreSQL
+  store is exactly `/mnt/memory/kivra-memory/backups/postgresql-pitr`.
+- The canonical cluster and encrypted store share the same NAS, dataset, and
+  capacity fate. This procedure makes no independent-local-failure-domain
+  claim.
+- Routine plaintext staging is exactly `/var/lib/kivra-memory/backup-staging`;
+  it is a protected local directory, not a mount. Recovery plaintext is exactly
+  `/var/lib/kivra-memory/recovery` on the isolated recovery host, also not a
+  mount.
 - The routine node contains only the public age recipient at
   `/etc/kivra-memory/backup-age-recipient`; the recovery private identity is
   absent.
@@ -22,9 +30,10 @@ M10 acceptance gates.
   ledger at `/var/lib/kivra-memory-sealed/destruction-ledger`; that ledger has
   its own protected, monotonic preservation path.
 
-Stop if the mount is absent, the private recovery identity is present, WAL is
-missing, a prior verification failed, the archive diverged, or the operator
-cannot identify the last complete chain.
+Stop if `/mnt/memory` is absent, shared capacity is unsafe, the private recovery
+identity is present on the routine node, WAL is missing, a prior verification
+failed, the archive diverged, or the operator cannot identify the last complete
+base/WAL chain.
 
 ## Base backup and verification
 
@@ -40,10 +49,14 @@ systemctl show kivra-memory-backup-verify.service -p Result -p ExecMainStatus
 
 Verification needs the separately held private identity and therefore runs on
 the isolated recovery host; the routine node's verification timer remains
-disabled. Review canonical JSON below
-`/mnt/memory-backup/kivra-memory-postgres/status/`. Record only the bounded
-object identifier, timestamps, digests, counts, and fixed reason/result codes.
-Never copy an environment, database URL, WAL contents, or encryption material.
+disabled. The recovery host may read the encrypted backup subtree while writes
+remain limited to its exact `status` and `verification` marker directories. The
+recovery process must not traverse or read the canonical subtree. Review
+canonical JSON below
+`/mnt/memory/kivra-memory/backups/postgresql-pitr/status/`. Record only the
+bounded object identifier, timestamps, digests, counts, and fixed reason/result
+codes. Never copy an environment, database URL, WAL contents, or encryption
+material.
 
 ## Local encrypted archive bundle
 
@@ -115,9 +128,9 @@ anchor.
 
 ## Completion
 
-Confirm only approved timers are enabled, no `.staging` object remains, status
-files parse canonically, no private recovery identity exists on the routine
-node, and bounded status shows the current local primary age and no-prune
-capacity headroom. Schedule an isolated
-[PITR drill](postgresql-pitr.md); backup verification alone is not restore
-acceptance.
+Confirm only approved timers are enabled, no plaintext staging child remains,
+status files parse canonically, no private recovery identity exists on the
+routine node, and bounded status shows the shared-dataset capacity headroom.
+Schedule an isolated [PITR drill](postgresql-pitr.md); backup verification
+alone is not restore acceptance. Clean its plaintext scratch after every
+handled success or failure.

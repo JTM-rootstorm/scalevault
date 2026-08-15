@@ -1,8 +1,9 @@
 # PostgreSQL point-in-time recovery
 
 This procedure restores PostgreSQL 17 into one disposable direct child of
-`/mnt/memory-recovery`. It never overlays `/mnt/memory`, an active production
-cluster, or the recovery-mount root.
+`/var/lib/kivra-memory/recovery` on an isolated recovery host. It never
+overlays `/mnt/memory`, an active production cluster, or the recovery root.
+`/mnt/memory` is the sole mount in this topology.
 
 Run an isolated PITR drill at least monthly and the full physical,
 credential/destruction, and local signed-history/bundle exercise at least
@@ -14,11 +15,17 @@ are not part of this exercise.
 
 1. Use a dedicated isolated recovery host, not the routine Memory Node. Keep
    API, ingress, tunnel, workers, pollers, archive exporters, and destructive
-   services absent or disabled. The canonical data mount must be absent.
+   services absent or disabled. The host may read the encrypted backup subtree;
+   writes remain limited to its exact `status` and `verification` marker
+   directories. The recovery process must have no traversal or read access to
+   the canonical subtree.
 2. Select a verified base-backup object and a target name, time, or LSN within
-   its complete WAL chain. Record safe identifiers and digests only.
-3. Prove `/mnt/memory-recovery` is a separate mount and that the named direct
-   child is new or empty, mode `0700`, and disposable.
+   its complete WAL chain. Record safe identifiers and digests only. Retention
+   is validation-only: do not prune any base, WAL/history object, restore point,
+   or hold for this drill.
+3. Prove `/var/lib/kivra-memory/recovery` is a protected local directory, not a
+   mount, and that the named direct child is new or empty, mode `0700`, and
+   disposable. Restore output must stay outside `/mnt/memory`.
 4. Supply `/etc/kivra-memory/backup-age-identity` only to the restricted
    recovery process. It must not have been stored with the backup or present on
    a routine backup node.
@@ -29,19 +36,21 @@ are not part of this exercise.
 
 Stop on a missing segment, unverifiable manifest, destination symlink or
 nonempty path, wrong system identifier, incompatible release, unknown
-destruction state, active application process, canonical mount, or TCP
-listener.
+destruction state, active application process, recovery-process access to the
+canonical subtree, broader store writes than the exact status/verification
+marker directories, or a TCP listener.
 
 ## Restore and replay
 
 Choose a lower-case drill name matching `[a-z0-9][a-z0-9.-]{0,62}`. Use the
 installed helper as `memory-recovery` with exactly one target selector. The
-destination must be a direct child; `/mnt/memory-recovery` itself is invalid.
+destination must be a direct child; `/var/lib/kivra-memory/recovery` itself is
+invalid.
 
 ```bash
 runuser --user memory-recovery -- \
   /usr/local/libexec/kivra-memory-postgres-backup prepare-restore \
-  <BACKUP_ID> /mnt/memory-recovery/<DRILL_NAME> \
+  <BACKUP_ID> /var/lib/kivra-memory/recovery/<DRILL_NAME> \
   --target-time <UTC_RFC3339_TARGET>
 ```
 
@@ -58,11 +67,11 @@ socket, `listen_addresses=''`, and `archive_mode=off`. The checked PostgreSQL
 
 ```bash
 runuser --user memory-recovery -- /usr/lib/postgresql/17/bin/pg_ctl \
-  --pgdata=/mnt/memory-recovery/<DRILL_NAME> \
-  --log=/mnt/memory-recovery/<DRILL_NAME>-control/postgresql.log \
+  --pgdata=/var/lib/kivra-memory/recovery/<DRILL_NAME> \
+  --log=/var/lib/kivra-memory/recovery/<DRILL_NAME>-control/postgresql.log \
   --wait --timeout=60 \
   --options="-c listen_addresses='' \
-    -c unix_socket_directories='/mnt/memory-recovery/<DRILL_NAME>-control' \
+    -c unix_socket_directories='/var/lib/kivra-memory/recovery/<DRILL_NAME>-control' \
     -c unix_socket_permissions=0700 -c port=55432 -c archive_mode=off \
     -c logging_collector=off -c log_statement=none" \
   start
@@ -100,7 +109,8 @@ hold, index, manifest, or verification marker. The repository test mutates
 disposable fixtures; that is not a safe installed-store procedure.
 
 For each live negative, create a separate, inventoried ciphertext-only copy of
-the selected base object beneath `/mnt/memory-recovery`, without hard links.
+the selected base object beneath `/var/lib/kivra-memory/recovery`, without hard
+links.
 Prove the pristine copy has the same bounded inventory digest as its accepted
 source and shares no inode with it. Corrupt only the copied
 `recovery-manifest.json.age` for the manifest case and only the copied
@@ -108,13 +118,12 @@ source and shares no inode with it. Corrupt only the copied
 place or use it for the positive restore.
 
 Because the helper has a fixed store path, run negatives only after the
-positive PostgreSQL instance is stopped. Unmount the accepted store from the
-isolated host, bind the applicable drill-owned copy at `/mnt/memory-backup`,
-remount that bind read-only, and verify the resolved source and mount options.
-Require `manifest_ciphertext_digest_mismatch` or `ciphertext_digest_mismatch`
-as applicable, nonzero exit, no published destination, and no change to the
-accepted-store inventory. Remove the negative bind before reattaching the
-accepted store read-only. Any mount ambiguity, shared source, hard link, or
+positive PostgreSQL instance is stopped. The accepted dataset remains read-only
+on the isolated host; use the recovery host's drill-owned plaintext copy only
+when the reviewed deployment provides a bounded negative-test mapping. Require
+`manifest_ciphertext_digest_mismatch` or `ciphertext_digest_mismatch` as
+applicable, nonzero exit, no published destination, and no change to the
+accepted-store inventory. Any mount ambiguity, shared source, hard link, or
 accepted-object change fails the drill.
 
 ## Cleanup and evidence

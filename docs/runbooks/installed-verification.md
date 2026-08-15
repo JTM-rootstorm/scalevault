@@ -2,9 +2,9 @@
 
 Repository tests do not prove the installed LXC, NPM, PostgreSQL recovery
 store, or active provider state. Run this checklist after installation,
-upgrade, recovery, and at final M10 acceptance. Forgejo provider state and
-Backblaze/PBS evidence are outside the M10 gate and must not be inferred from
-this checklist.
+upgrade, recovery, and at final M10 acceptance. Forgejo provider state, nightly
+NAS backups, and operator-managed Backblaze/PBS evidence are outside the M10
+gate and must not be inferred from this checklist.
 
 ## Read-only inventory
 
@@ -15,7 +15,19 @@ this checklist.
   third-party enrollment services are absent or disabled;
 - confirm canonical API/PostgreSQL/operator surfaces are local only and Codex
   ingress is the exact private port 8443 listener behind NPM;
-- confirm the routine node lacks the backup recovery private identity.
+- confirm the routine node lacks the backup recovery private identity;
+- confirm `/mnt/memory` is the sole mount in the backup topology, with the
+  encrypted store exactly at
+  `/mnt/memory/kivra-memory/backups/postgresql-pitr`; it shares NAS, dataset,
+  and capacity fate with canonical storage and is not an independent local
+  failure domain;
+- confirm routine plaintext staging is exactly
+  `/var/lib/kivra-memory/backup-staging` and recovery-host plaintext is exactly
+  `/var/lib/kivra-memory/recovery`; neither is a mount; and
+- confirm the recovery host can read accepted encrypted backup objects while
+  writes remain limited to exact status/verification marker directories, and
+  that its recovery process cannot traverse or read the canonical subtree and
+  restores only outside `/mnt/memory`.
 
 ## Service and recovery checks
 
@@ -65,7 +77,8 @@ only its dedicated local login and per-instance tenant credential, creates one
 new mode-`0600` file below `/var/lib/kivra-memory/operator-reports`, and emits
 no report contents to stdout or the journal.
 
-Verify PostgreSQL 17 durability/WAL settings and recovery-chain freshness,
+Verify PostgreSQL 17 durability/WAL settings, continuous WAL archival, a
+verified physical base backup, `pg_verifybackup`, and recovery-chain freshness,
 the exact local signed-history external head anchor, alert rule evaluation,
 fixed-label Prometheus output, root-only report access,
 and content-free journal/NPM/metric/artifact canary scans. Confirm
