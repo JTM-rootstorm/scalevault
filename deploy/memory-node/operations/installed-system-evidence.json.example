@@ -89,6 +89,32 @@
   "security": {
     "destruction_dominance_result": "pending",
     "destruction_scope": "postgresql-local-key-provider-ledger-installed-pitr",
+    "hard_forget_drill": {
+      "synthetic_envelope_scope_result": "pending",
+      "claim_scope": "postgresql-local-key-provider-ledger-installed-pitr",
+      "old_anchor_rejection_result": "pending",
+      "current_anchor_acknowledgement_result": "pending",
+      "provider_backup_excludes_ledger_and_anchor_result": "pending",
+      "protected_drill_manifest_sha256": "PENDING",
+      "provider_backup_active_control_count": "PENDING",
+      "provider_backup_material_count": "PENDING",
+      "provider_backup_byte_count": "PENDING",
+      "provider_backup_inventory_sha256": "PENDING",
+      "phase_2_binding_result": "pending",
+      "base_backup_sha256": "PENDING",
+      "wal_window_sha256": "PENDING",
+      "recovery_target_sha256": "PENDING",
+      "synthetic_correlation_sha256": "PENDING",
+      "restore_reconcile_result": "pending",
+      "stale_active_control_absence_result": "pending",
+      "stale_material_absence_result": "pending",
+      "tombstone_result": "pending",
+      "canonical_cryptographic_erasure_result": "pending",
+      "pitr_correlation_result": "pending",
+      "pitr_unreadability_result": "pending",
+      "drill_cleanup_result": "pending",
+      "drill_second_check_result": "pending"
+    },
     "archive_and_bundle_erasure_claim": "excluded-not-evaluated"
   },
   "monitoring": {

@@ -62,8 +62,19 @@ and optional GitHub ingress when active. Rotatable credentials must record
 replacement, intended operation, next-use rejection, session termination,
 provider revocation when applicable, rollback posture, canary, and cleanup.
 Custody and recovery classes whose old material must remain usable for retained
-objects record `not-applicable` for unsafe rotation/revocation fields and prove
-custody, availability, intended recovery use, canary absence, and cleanup.
+objects record `not-applicable` for `replaced_at_utc`, `revoked_at_utc`,
+old-credential next-use, old-session termination, provider-revocation, and
+rollback fields when those operations would invalidate retained recovery
+objects. They still prove custody separation, availability, intended recovery
+use, canary absence, and cleanup.
+
+Record the synthetic hard-forget drill in `security.hard_forget_drill`. Bind
+the protected manifest, bounded provider inventory, base/WAL/recovery-target,
+and synthetic-correlation digests; record old-anchor rejection, current-anchor
+acknowledgement, reconciliation, tombstone and canonical-completion outcomes,
+PITR unreadability, and cleanup. These fields prove only the local M10
+PostgreSQL/key-provider/ledger/PITR boundary. Do not add identities, paths,
+anchor values, ciphertext, key material, receipts, or provider responses.
 
 Create one `retention_cap_results` entry for each required class: application
 and service journals, PostgreSQL logs, tunnel JSON, NPM/container logs,

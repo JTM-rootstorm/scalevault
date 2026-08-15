@@ -78,6 +78,38 @@ credential_class:
   canary_result: <pass|fail|pending>
   cleanup_result: <pass|fail|pending>
 
+For `custody-recovery` classes whose old material must remain usable for
+retained objects, record `not-applicable` for unsafe replacement, revocation,
+old-next-use, old-session, provider-revocation, and rollback fields. Still
+record the consumer/custody result, intended recovery operation, canary result,
+and cleanup result.
+
+hard_forget_drill:
+  synthetic_envelope_scope_result: <pass|fail|pending>
+  claim_scope: <postgresql-local-key-provider-ledger-installed-pitr>
+  old_anchor_rejection_result: <pass|fail|pending>
+  current_anchor_acknowledgement_result: <pass|fail|pending>
+  provider_backup_excludes_ledger_and_anchor_result: <pass|fail|pending>
+  protected_drill_manifest_sha256: <sha256-or-pending>
+  provider_backup_active_control_count: <integer-or-pending>
+  provider_backup_material_count: <integer-or-pending>
+  provider_backup_byte_count: <integer-or-pending>
+  provider_backup_inventory_sha256: <sha256-or-pending>
+  phase_2_binding_result: <pass|fail|pending>
+  base_backup_sha256: <sha256-or-pending>
+  wal_window_sha256: <sha256-or-pending>
+  recovery_target_sha256: <sha256-or-pending>
+  synthetic_correlation_sha256: <sha256-or-pending>
+  restore_reconcile_result: <pass|fail|pending>
+  stale_active_control_absence_result: <pass|fail|pending>
+  stale_material_absence_result: <pass|fail|pending>
+  tombstone_result: <pass|fail|pending>
+  canonical_cryptographic_erasure_result: <pass|fail|pending>
+  pitr_correlation_result: <pass|fail|pending>
+  pitr_unreadability_result: <pass|fail|pending>
+  drill_cleanup_result: <pass|fail|pending>
+  drill_second_check_result: <pass|fail|pending>
+
 monitoring_scrape_result: <pass|fail|pending>
 monitoring_rule_health_result: <pass|fail|pending>
 monitoring_evaluation_error_count: <integer-or-pending>
