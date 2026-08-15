@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Never, Protocol
@@ -106,6 +106,7 @@ def run_operator_sql_file(
     sql_file: Path,
     *,
     expected_database: str | None = None,
+    variables: Mapping[str, str] | None = None,
 ) -> None:
     """Run operator SQL without exposing the disposable password in argv."""
 
@@ -128,6 +129,7 @@ def run_operator_sql_file(
             "--no-psqlrc",
             "--set=ON_ERROR_STOP=1",
             f"--set=expected_database={expected_database or database}",
+            *(f"--set={name}={value}" for name, value in sorted((variables or {}).items())),
             f"--host={url.host}",
             f"--port={url.port}",
             f"--username={url.username}",

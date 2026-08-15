@@ -30,6 +30,10 @@ def test_binding_activation_is_owner_only_and_fixed_to_wrapper_logins() -> None:
     assert "kivra_memory_operator_report_login" in source
     assert "scalevault_is_uuid_v7" in source
     assert "ON CONFLICT (login_role) DO UPDATE" in source
+    assert "\\error" not in source
+    assert "\\quit" not in source
+    assert source.count("RAISE EXCEPTION") == 3
+    assert source.count("ERRCODE = '22023'") == 3
 
 
 def test_binding_table_is_in_metadata_but_not_runtime_tenant_crud_surface() -> None:

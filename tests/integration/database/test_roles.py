@@ -36,6 +36,9 @@ from .conftest import (
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 ROLE_BOOTSTRAP = REPOSITORY_ROOT / "deploy/memory-node/postgresql/bootstrap_roles.sql"
+OBSERVABILITY_BINDING = (
+    REPOSITORY_ROOT / "deploy/memory-node/postgresql/bind_observability_tenant.sql"
+)
 OWNER_ROLE = "kivra_memory_owner"
 MIGRATOR_ROLE = "kivra_memory_migrator"
 RUNTIME_ROLES = (
@@ -1758,6 +1761,75 @@ def test_migrator_login_uses_database_local_owner_default_without_secret_output(
         engine.dispose()
     assert session_user == MIGRATOR_ROLE
     assert current_user == OWNER_ROLE
+
+
+def test_observability_binding_script_runs_with_postgresql_17_psql(
+    postgresql_server: PostgreSQLTestServer,
+    role_secured_database: AlembicRunner,
+) -> None:
+    with role_secured_database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO tenants (tenant_id, slug, display_name) "
+                "VALUES (:tenant_id, 'binding-script', 'binding-script')"
+            ),
+            {"tenant_id": TENANT_A},
+        )
+
+    run_operator_sql_file(
+        postgresql_server,
+        OBSERVABILITY_BINDING,
+        variables={"tenant_id": str(TENANT_A)},
+    )
+
+    with role_secured_database.engine.begin() as connection:
+        bindings = connection.execute(
+            text(
+                "SELECT login_role FROM observability_tenant_bindings "
+                "WHERE tenant_id = :tenant_id ORDER BY login_role"
+            ),
+            {"tenant_id": TENANT_A},
+        ).scalars()
+        assert tuple(bindings) == (
+            "kivra_memory_metrics",
+            "kivra_memory_operator_report_login",
+        )
+
+
+def test_observability_binding_script_guards_roll_back_without_mutation(
+    postgresql_server: PostgreSQLTestServer,
+    role_secured_database: AlembicRunner,
+) -> None:
+    with role_secured_database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO tenants (tenant_id, slug, display_name) "
+                "VALUES (:tenant_id, 'binding-guards', 'binding-guards')"
+            ),
+            {"tenant_id": TENANT_A},
+        )
+
+    with pytest.raises(RuntimeError, match="binding requires UUIDv7"):
+        run_operator_sql_file(
+            postgresql_server,
+            OBSERVABILITY_BINDING,
+            variables={"tenant_id": "00000000-0000-4000-8000-000000000001"},
+        )
+    with pytest.raises(RuntimeError, match="must target expected_database"):
+        run_operator_sql_file(
+            postgresql_server,
+            OBSERVABILITY_BINDING,
+            expected_database="not_the_connected_database",
+            variables={"tenant_id": str(TENANT_A)},
+        )
+
+    with role_secured_database.engine.begin() as connection:
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM observability_tenant_bindings")
+            ).scalar_one()
+            == 0
+        )
 
 
 def test_observability_and_report_roles_are_function_only_and_tenant_scoped(

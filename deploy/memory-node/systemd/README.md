@@ -88,6 +88,7 @@ read or mutate the binding table:
 
 ```sh
 sudo -u postgres psql --dbname kivra_memory \
+  --set expected_database=kivra_memory \
   --file deploy/memory-node/postgresql/bind_observability_tenant.sql
 ```
 
