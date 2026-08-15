@@ -3,9 +3,9 @@
 - **Review date:** 2026-08-14
 - **Status:** Not accepted; implementation and evidence collection in progress
 - **Implementation baseline:** `368b302`
-- **Frozen release:** `d77d1855100e98aa6061dcfbf4511628be2fbf52`
+- **Frozen release:** `c49017152446f037e6940533062fc7b8f0448c7f`
 - **Frozen release archive checksum:**
-  `98cfb11c752b40315e53fedf31a6c928002aebf90a136408398a39a1d2975a61`
+  `be05312a92740a49e59635b02ad1f48866bbf73d01420fb3458e34ac44e8e9d2`
 - **Evidence revision:** Pending final installed-evidence update
 - **Database migration revision:** Candidate `0011_observability_aggregates`;
   installed preflight remains at `0010_ingress_provider_heads`
