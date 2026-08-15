@@ -1,6 +1,6 @@
 # Milestone 10 security, backup, and operations acceptance
 
-- **Review date:** 2026-08-14
+- **Review date:** 2026-08-15
 - **Status:** Not accepted; implementation and evidence collection in progress
 - **Implementation baseline:** `368b302`
 - **Frozen release:** `73814b6bf81b229c3cb307ee5ea9ca61295e66f7`
@@ -212,6 +212,25 @@ revocation, next-use, or session test is correctly not applicable.
 ## Encrypted base-backup and WAL evidence
 
 Status: **Pending live evidence**.
+
+Post-Phase-1 source candidate
+`8d9d71b94ee291b83dc55676be6d1e401ec844dd` corrects the backup helper's
+immutable `REVISION` mode contract. It is validated but not installed. Its raw
+Git archive SHA-256 is
+`ab0c1bba1e92af67f026b91846b5a3973ef10909443c9b4147b84b996d4fe80d`.
+The behavior-identical documentation descendants passed the complete local
+gate with 1,591 Python tests and 183 expected environment skips; the exact
+source candidate passed all 205 required PostgreSQL 17, production-helper
+PITR, and encrypted-bundle tests with zero skips or failures, plus all 38
+Prometheus rules and scenarios on the designated LXC. The disposable test
+workspace was removed and the live pointer remained on frozen Phase-1 release
+`73814b6` at migration `0011_observability_aggregates`.
+
+This validation does not install the correction or close the encrypted-chain
+gate. Before Phase 2, select and install the reviewed source candidate under
+the exact prerequisite authorization, preserve its immutable archive, rerun
+the installed audit, and confirm the live helper digest. Do not relabel this
+repository result as an installed backup or recovery result.
 
 Record safe base-backup object identifier, ciphertext/manifest digests,
 completed/verified timestamps, WAL continuity result, recovery-window result,
