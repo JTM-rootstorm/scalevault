@@ -3,12 +3,11 @@
 - **Review date:** 2026-08-14
 - **Status:** Not accepted; implementation and evidence collection in progress
 - **Implementation baseline:** `368b302`
-- **Frozen release:** `1790d94831e785639aaaebeca8a7b64512d6358d`
+- **Frozen release:** `73814b6bf81b229c3cb307ee5ea9ca61295e66f7`
 - **Frozen release archive checksum:**
-  `c73e2aff370e28132da9061c51d494d41d6b26d0e7b170f3b9e0d93c305d8ea8`
+  `af317aab59d8245c7d40c6b5104c0943d11247a03ee2afb88d22c58b379f7d2c`
 - **Evidence revision:** Pending final installed-evidence update
-- **Database migration revision:** Candidate `0011_observability_aggregates`;
-  installed preflight remains at `0010_ingress_provider_heads`
+- **Database migration revision:** Installed `0011_observability_aggregates`
 
 This is the final record structure required by the M10 plan. It deliberately
 does not turn source implementation, unrun commands, or prior Milestone 9
@@ -17,10 +16,11 @@ remaining required installed-host, installed-storage, and recovery gates
 produce reviewed content-free evidence. Excluded and non-blocking rows are not
 closure gates and must remain explicitly unevaluated unless separately tested.
 
-The frozen release is the immutable source candidate selected for installation.
-Its repository and durable-local gates are tested and its source archive
-checksum is fixed; installed equality remains pending. The evidence revision is
-the later commit that records reviewed bounded results. It may differ only by
+The frozen release is the immutable source candidate selected and installed in
+Phase 1. Its repository and durable-local gates are tested, its source archive
+checksum is fixed, and the installed audit binds the active pointer, release,
+helpers, units, drop-ins, and migration to that candidate. The evidence revision
+is the later commit that records reviewed bounded results. It may differ only by
 evidence and acceptance text that cannot affect runtime behavior. Any
 executable, configuration, schema, migration, generated-artifact, or dependency
 change creates a new release candidate and requires a new freeze, checksum,
@@ -46,10 +46,10 @@ protected operator store and transfer only permitted fields here.
 | Gate | Required evidence class | Status | Evidence/reference |
 |---|---|---|---|
 | Architecture and threat decisions accepted | Review | Passed | ADRs 0034 and 0035 are accepted and every active threat row maps implementation, tests, runbooks, and evidence |
-| Complete repository verification | Repository | Passed | Frozen release passed 1,585 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
-| Required PostgreSQL 17 integration gate | Durable local | Passed | Frozen release passed all 203 required integration tests with zero skipped and zero failed |
+| Complete repository verification | Repository | Passed | Frozen release passed 1,589 Python tests plus all Go, protobuf, schema, and plugin gates; deterministic source checksum independently matched |
+| Required PostgreSQL 17 integration gate | Durable local | Passed | Frozen release passed all 205 required integration tests with zero skipped and zero failed |
 | Production-relevant PITR durability | Durable local | Passed | Frozen release production-helper PITR gate passed A/B-not-C and corrupt-object rejection; installed-storage drill remains separate |
-| Installed services and credentials hardened | Installed LXC | Pending | Read-only preflight found the prior `c95d66c` layout and migration `0010`; exact M10 installation and audit remain pending |
+| Installed services and credentials hardened | Installed LXC | Partial | Exact release, migration, units, systemd credential delivery, canonical service health, and installed audit passed; per-class rotation/custody and remaining live hardening evidence are pending |
 | Encrypted base backup and WAL current | Installed LXC/local recovery storage | Pending | Verified complete local chain not yet recorded; Backblaze transfer is operator-managed and non-blocking |
 | No-prune recovery retention validates without deletion | Installed recovery storage | Pending | Fixed result, per-class before/after inventory equality, zero deletion attempts, unchanged restore points/holds, and capacity remain pending |
 | Isolated PostgreSQL PITR succeeds | Recovery drill | Partial | Repository A/B-not-C gate passed; installed-storage drill remains pending |
@@ -86,13 +86,13 @@ and unprovisioned.
 
 Status: **Passed at the frozen release**.
 
-The complete verification command passed with 1,585 Python tests passed and 181
+The complete verification command passed with 1,589 Python tests passed and 183
 environment-gated skips, followed by successful Go vet/tests, deterministic
 protobuf verification, 11 schema validations, and plugin format, lint,
 TypeScript, and six test gates. The local PostgreSQL skips were caused by the
 missing `vector` extension and are superseded for the required database scope
 by the zero-skip PostgreSQL 17 LXC result below. The separately gated PITR test
-is likewise recorded below. The M10 deployment lane passed 130 tests with only
+is likewise recorded below. The M10 deployment lane passed 134 tests with only
 the local `promtool` availability skip. The designated LXC's `promtool` loaded
 all 38 frozen-release rules and passed every checked-in rule scenario.
 
@@ -115,13 +115,13 @@ and database tests required:
 make test-m10-database-required
 ```
 
-The required database suite completed with 203 passed, zero skipped, and zero
+The required database suite completed with 205 passed, zero skipped, and zero
 failed while PostgreSQL 17 binaries were explicitly selected. It covered
 zero-to-head and upgrade/downgrade migrations, metadata convergence, RLS and
 capability-role denials, cross-tenant isolation, observability/report
-functions, archive continuation checkpoint reconstruction,
-destruction-ledger recovery, the production-helper PITR gate, and the real
-encrypted-bundle recovery gate.
+functions, real-psql binding success and rollback guards, archive continuation
+checkpoint reconstruction, destruction-ledger recovery, the production-helper
+PITR gate, and the real encrypted-bundle recovery gate.
 
 PostgreSQL continuously invoked the checked-in archive and restore helper
 paths during the PITR gate; recovery included the required A/B-not-C assertion
@@ -130,25 +130,46 @@ durability gate, not the installed backup-store, custody, or timer gates.
 Backblaze offsite handling is an operator-managed concern and is not an M10
 acceptance blocker.
 
-## Read-only installed preflight
+## Installed Phase 1 result
 
-Status: **Preflight complete; mutation pending accepted recovery point**.
+Status: **Passed for release installation; later live gates remain pending**.
 
-The designated LXC is healthy on PostgreSQL 17.10 with `vector`, `pg_trgm`,
-`citext`, and `pgcrypto`, and its canonical data directory is the expected
-mounted path. It remains on the prior `c95d66c` release layout and migration
-`0010_ingress_provider_heads`. Only the API unit is presently installed from
-the M10 inventory; the M10 metrics, backup, retention, destruction, worker, and
-timer units are absent. The three dedicated backup/staging/recovery mounts and
-backup public recipient are absent, and no routine-node recovery private
-identity is present. These are clean stop conditions, not failures. Phase 1
-installation remains blocked before schema or grant mutation on an accepted
-pre-upgrade recovery point. Storage and recipient provisioning and an isolated
-recovery environment require later, separate authorization.
+Before migration, a PostgreSQL 17 physical backup with streamed WAL passed
+`pg_verifybackup` at `2026-08-14T23:45:48Z`. Its manifest SHA-256 is
+`d463504fee27b72b9101d31b2b6fb829e43cef038524067a940dad73e4d258f5` and its
+canonical inventory SHA-256 is
+`f6356f03106f81bd4fdddc0e0b61ef5aff0b95cfbe8f1d5fd99cab129bc721b1`. The
+operator confirmed the exact backup path existed in the PBS snapshot at
+`2026-08-14T23:52:22Z`. The protected recovery point remained byte-identical
+and verified after installation.
+
+The active pointer now selects frozen release
+`73814b6bf81b229c3cb307ee5ea9ca61295e66f7`.
+PostgreSQL is supervised by `postgresql@17-main.service` as the cluster owner on
+the root-squashed canonical mount, and migration `0011_observability_aggregates`
+plus compatibility contract 11 are installed. Bootstrap convergence, exact
+observability capability memberships, the two owner-controlled bindings,
+function success, direct-table denial, arbitrary-tenant denial, and public
+execute denial passed.
+
+The candidate's 21 units and seven deployment/tunnel helpers are installed and
+passed systemd 257 verification. API, Secure MCP Tunnel, and private Codex
+ingress are enabled, active, ready, and bound to their exact expected listener
+classes. Optional workers, backup timers, metrics/report activation, archive
+export, GitHub ingress, destruction broker, and the legacy node-agent remain
+disabled and inactive. Sealed-content drop-ins and state remain absent. The
+root-only installed audit returned `installed_audit_satisfied` at
+`2026-08-15T01:31:55Z`; its protected evidence SHA-256 is
+`deb79277caa10eb63c922feedffc0bc50554a6fde02b052c365c57ca568269e6`.
+
+The three dedicated backup/staging/recovery mounts, backup public recipient,
+and routine-node recovery identity remain absent. Those Phase 2/3 boundaries,
+per-class credential exercises, production monitoring fault evidence, NPM
+proof, and final drill cleanup require later, separate authorization.
 
 ## Installed service and credential hardening
 
-Status: **Pending live evidence**.
+Status: **Phase 1 installation passed; per-class live evidence pending**.
 
 Follow [Installed-system verification](runbooks/installed-verification.md).
 Record accepted unit and executable digests, exact enabled/disabled service
