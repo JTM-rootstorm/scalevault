@@ -16,15 +16,23 @@ remaining required installed-host, installed-storage, and recovery gates
 produce reviewed content-free evidence. Excluded and non-blocking rows are not
 closure gates and must remain explicitly unevaluated unless separately tested.
 
+The tracked closeout plan, accepted ADRs 0034 and 0035, tracked runbooks, and
+this record are the governing M10 execution authority. The preserved untracked
+archived plan and V2 roadmap are historical planning inputs only; they do not
+authorize live work, reopen Forgejo or archive-continuation gates, or override
+the narrowed accepted scope.
+
 The frozen release is the immutable source candidate selected and installed in
 Phase 1. Its repository and durable-local gates are tested, its source archive
 checksum is fixed, and the installed audit binds the active pointer, release,
 helpers, units, drop-ins, and migration to that candidate. The evidence revision
 is the later commit that records reviewed bounded results. It may differ only by
-evidence and acceptance text that cannot affect runtime behavior. Any
-executable, configuration, schema, migration, generated-artifact, or dependency
-change creates a new release candidate and requires a new freeze, checksum,
-installation, and applicable reruns.
+bounded evidence, acceptance, and closeout-authority text that cannot affect
+runtime behavior. Evidence-only commits do not become the installed candidate
+and do not require the frozen repository gates to be rerun. Any executable,
+checked-in deployment configuration, schema, migration, generated-artifact, or
+dependency change creates a new release candidate and requires a new freeze,
+checksum, installation, and applicable reruns.
 
 ## Content-free evidence boundary
 
@@ -166,6 +174,15 @@ The three dedicated backup/staging/recovery mounts, backup public recipient,
 and routine-node recovery identity remain absent. Those Phase 2/3 boundaries,
 per-class credential exercises, production monitoring fault evidence, NPM
 proof, and final drill cleanup require later, separate authorization.
+Before Phase 2, that approval must expressly cover the exact mount/device and
+directory provisioning, public-recipient installation, isolated recovery-host
+and private-identity staging boundary, and synthetic sealed-content accounts,
+roots, credentials, drop-ins, internal identity, broker, purge worker, and
+restore-reconcile activation. It must distinguish the disposable
+create/read/hard-forget activation-preflight fixture from the retained Phase 2
+correlation fixture used by the later installed-PITR erasure drill. Naming a
+backup mount or synthetic fixture does not authorize creating those absent
+prerequisites.
 
 ## Installed service and credential hardening
 
@@ -189,6 +206,8 @@ revocation when applicable, rollback posture, canary result, and cleanup.
 For custody or recovery material that must remain valid for retained objects,
 mark unsafe rotation/revocation fields not applicable and record custody,
 availability, intended recovery use, canary absence, and cleanup instead.
+Such a class does not remain pending solely because an unsafe replacement,
+revocation, next-use, or session test is correctly not applicable.
 
 ## Encrypted base-backup and WAL evidence
 
@@ -397,8 +416,9 @@ relay/OAuth/node-agent surfaces also remain outside this acceptance.
 
 **Decision: NOT ACCEPTED.** Repository, required PostgreSQL 17, production-helper
 PITR, rule, and local encrypted-bundle gates are complete at the frozen
-release. Installed-system, installed backup/PITR storage, credential,
-monitoring activation, scanner, hard-forget, NPM, and final cleanup evidence
-remain pending. Record the later evidence-only revision separately, and change
-this decision only after every required gate passes, cleanup is confirmed, and
+release, and the immutable installed Phase 1 candidate and audit also pass.
+Installed backup/PITR storage, per-class credential lifecycle, monitoring
+activation, scanner, hard-forget, NPM, and final cleanup evidence remain
+pending. Record the later evidence-only revision separately, and change this
+decision only after every required gate passes, cleanup is confirmed, and
 remaining risks are explicitly accepted by the operator.

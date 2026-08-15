@@ -1,22 +1,32 @@
 # ScaleVault Milestone 10 Remaining Gates Closeout Plan
 
-- **Status:** Execution-ready closeout plan
+- **Status:** Execution in progress; Phases 0 and 1 complete
 - **Prepared:** 2026-08-12
 - **Planning baseline:** `17c985a`
-- **Primary execution plan:**
+- **Historical planning input:**
   `Plans/Archives/SCALEVAULT_M10_SECURITY_BACKUP_OPERATIONS_PLAN.md`
 - **Acceptance record:** `docs/milestone-10-acceptance-2026-08-12.md`
 - **Target:** Private, single-owner ScaleVault deployment
 
 ## 1. Purpose
 
+This tracked closeout plan, accepted ADRs 0034 and 0035, the tracked runbooks,
+and the current acceptance record are the governing M10 execution authority.
+The untracked archived plan named above and its untracked V2 roadmap are
+preserved historical planning inputs only. They do not authorize live work,
+reopen Forgejo or archive-continuation gates, or override this plan's narrowed
+scope.
+
 This plan closes the remaining Milestone 10 gates after repository
 implementation, PostgreSQL 17 integration, production-helper PITR, encrypted
-local bundle recovery, and local alert-rule evaluation have passed.
+local bundle recovery, local alert-rule evaluation, architecture
+reconciliation, and installed Phase 1 have passed.
 
-The remaining work is primarily architecture reconciliation, installation of
-the accepted release, installed-system recovery and security drills, production
-monitoring activation, and content-free evidence collection.
+The remaining work is installed-storage provisioning and recovery, live
+security drills, production monitoring activation, installed scanner and NPM
+proof, cleanup, and content-free evidence collection. The acceptance record is
+authoritative for completed-gate status; stale planning-baseline counts below
+remain historical context rather than instructions to recreate evidence.
 
 Forgejo operations and archive continuation are explicitly excluded. Milestone
 10 will not require or perform a Forgejo provider restore, local or remote
@@ -30,7 +40,7 @@ PostgreSQL cluster, monitoring configuration, credential provider, backup
 store, or key-provider store. Each live phase begins with its listed operator
 checkpoint and stop conditions.
 
-## 2. Accepted evidence at the planning baseline
+## 2. Accepted evidence at the planning baseline (historical)
 
 The following evidence is already recorded and does not need to be recreated
 merely to start closeout:
@@ -49,12 +59,22 @@ recorded revisions. They do not prove the currently installed release,
 installed backup store, production Prometheus configuration, current
 credentials, NPM exposure boundary, or cleanup state.
 
-Before final acceptance, rerun the complete repository gate at the final
-candidate revision and preserve a new immutable source checksum.
+The complete repository gate and immutable source checksum are already accepted
+for frozen release `73814b6`. A later evidence-only revision does not become a
+new runtime candidate and does not require that gate to be rerun. If executable
+behavior, checked-in deployment configuration, schema, migration, generated
+artifacts, or dependencies change, freeze the reviewed descendant, preserve a
+new immutable source checksum, and rerun every applicable repository and
+installed gate before acceptance.
 
 ## 3. Scope
 
 ### 3.1 Required closeout work
+
+Items 1 through 4 are completed foundations recorded in the acceptance record.
+Remaining live execution resumes with the prerequisite authorization for item 5;
+their presence here preserves the full dependency chain and does not authorize
+their repetition.
 
 1. Accept architecture amendments for the Forgejo exclusion and M10 no-prune
    retention posture.
@@ -290,8 +310,11 @@ restore the prior immutable release pointer only when its migration
 compatibility is verified. Database downgrade is not authorized by this plan;
 use a reviewed forward repair or obtain separate downgrade/recovery approval.
 
-The currently recorded installed release predates the M10 candidate. Do not run
-installed acceptance against mixed source and installed revisions.
+The acceptance record now binds the installed release to frozen candidate
+`73814b6` and migration `0011_observability_aggregates`. Do not reinstall Phase
+1 or treat a later evidence-only revision as the installed runtime. Stop if live
+inventory no longer matches that frozen candidate or if source and installed
+revisions are mixed.
 
 ### 7.2 Install
 
@@ -356,7 +379,9 @@ required because it is an active ingress, not because of Forgejo.
 
 ### 7.4 Phase exit
 
-- One immutable installed revision matches the evidence revision.
+- One immutable installed revision matches the frozen release. A later
+  evidence revision may differ only by bounded evidence, acceptance, and
+  closeout-authority text that cannot affect runtime behavior.
 - Migration `0011`, owner-controlled tenant bindings, and the tested database
   capability boundaries are installed.
 - No unit or credential has unexplained privilege.
@@ -366,16 +391,38 @@ required because it is an active ingress, not because of Forgejo.
 
 ### 8.1 Authorization checkpoint
 
-Obtain approval for the exact PostgreSQL cluster, backup mount, recipient,
-helper revision, units/timers, capacity budget, and maintenance window. Record
-the pre-change archive configuration and timer states for rollback. Also name
-the dedicated synthetic acceptance tenant/scope, envelope-encrypted fixture,
-and pre-forget key-provider backup root used by the later erasure drill.
-Authorized mutations are limited to that synthetic fixture, the reviewed
-archive configuration, local encrypted backup/WAL/status objects, the
-drill-owned provider backup, and named unit/timer state. On failure, disable the
-new timers/archive command as directed by the WAL-failure runbook, preserve
-already durable encrypted objects, remove only incomplete owned staging, and
+The installed Phase 1 record leaves the dedicated backup, staging, and recovery
+mounts, backup public recipient, and sealed-content deployment absent. Naming a
+fixture or mount does not authorize provisioning it. Before any backup or
+synthetic sealed mutation, obtain approval that expressly names:
+
+- each backup, staging, verification, and recovery device, filesystem, mount
+  unit, mount point, directory root, owner, mode, and allowed capacity change;
+- the public `age` recipient credential source and installed destination on the
+  routine node, plus the independently controlled private-identity source and
+  its permitted staging boundary;
+- the exact isolated recovery host/environment, recovery mount, service
+  account, verification units, listener prohibition, and teardown boundary;
+- the PostgreSQL cluster, helper revision, archive configuration, units/timers,
+  capacity budget, maintenance window, and pre-change rollback state; and
+- the synthetic sealed tenant/scope, one disposable activation-preflight
+  fixture, the distinct retained Phase 2 correlation fixture, provider
+  control/material roots, destruction ledger and both anchor locations, request
+  root, digest-binding and accepted-anchor credential sources, required
+  accounts/groups, API and ingress drop-ins, internal-service identity, broker
+  path/service, purge worker, restore-reconcile unit, pre-forget provider-copy
+  root, and the exact enable/restart operations.
+
+Authorized mutations are limited to those explicitly named provisioning
+targets, the two named synthetic fixtures, the reviewed archive configuration,
+local encrypted backup/WAL/status objects, the drill-owned provider copy, and
+named unit/timer state. Sealed provisioning must follow the checked-in optional
+sealed-content deployment contract and pass its disposable
+create/read/hard-forget activation preflight. The destroyed preflight fixture
+must not be reused as the distinct retained Phase 2 correlation fixture. On
+failure, disable the new timers/archive command and sealed drill units as
+directed by their runbooks, preserve already durable encrypted objects and
+independent destruction authority, remove only incomplete owned staging, and
 do not delete a previously accepted recovery object.
 
 ### 8.2 Custody and storage preflight
@@ -509,10 +556,21 @@ passed its bounded intended-operation probe. If replacement fails, restore
 only the documented prior local configuration while it remains valid; never
 re-enable a credential after provider revocation.
 
-For every active non-Forgejo credential class, record the public class name,
-consumer units, issue/replace/revoke timestamps, fixed intended-operation
-result, fixed old-credential rejection result, old-session termination posture,
-rollback posture, canary result, and cleanup result. Never record the value.
+Classify every active non-Forgejo credential as `rotatable` or
+`custody-recovery` before mutation. For a rotatable class, record the public
+class name, consumer units, issue/replace/revoke timestamps, fixed
+intended-operation result, fixed old-credential rejection result, old-session
+termination posture, rollback posture, canary result, and cleanup result. Never
+record the value.
+
+For a custody/recovery class that must remain available for retained objects or
+requires a separately reviewed migration, do not force rotation merely to
+produce evidence. Mark unsafe replacement, revocation, next-use rejection, and
+session fields `not-applicable`; instead record custody separation,
+availability, intended recovery use, recovery dependency, canary absence, and
+cleanup. This applies in particular to retained backup-recipient identities,
+the sealed digest binder, and per-memory DEK authority. A class does not remain
+pending solely because an unsafe lifecycle action is correctly not applicable.
 
 Required active classes are:
 
@@ -544,9 +602,10 @@ dual-pepper cutover.
 Remove superseded local credential files, temporary probes, staged replacement
 material, and drill sessions according to each authority's runbook. Recheck
 that only the intended current credential is available to each consumer and
-that no revoked credential was restored. Any class without replacement,
+that no revoked credential was restored. A rotatable class without replacement,
 next-use rejection, provider result when applicable, and cleanup evidence
-remains pending.
+remains pending. A custody/recovery class remains pending until its custody,
+availability, intended-use, canary, and cleanup evidence passes.
 
 ## 11. Phase 5: Prove backup-aware hard forget
 
@@ -782,15 +841,23 @@ public exposure boundary.
 
 ### 15.1 Repository gate
 
-At the final candidate revision run:
+Frozen release `73814b6` has already passed the complete repository,
+PostgreSQL 17 zero-skip, local recovery, and rule gates. Evidence-only commits
+that change only bounded evidence, acceptance, or closeout-authority text do
+not create a new candidate and must not be substituted for the installed
+revision.
+
+If a later change affects executable behavior, checked-in deployment
+configuration, schema, migration, generated artifacts, or dependencies, freeze
+that reviewed descendant as the new candidate and run:
 
 ```bash
 make PNPM='npx --yes pnpm@10.15.0' verify
 ```
 
-Run the required PostgreSQL 17 integration gate with database tests forced and
-the Debian PostgreSQL 17 binary directory explicitly selected. No required
-database or recovery test may skip. Re-run:
+For such a new candidate, run the required PostgreSQL 17 integration gate with
+database tests forced and the Debian PostgreSQL 17 binary directory explicitly
+selected. No required database or recovery test may skip. Re-run:
 
 - the installed-helper PITR gate;
 - local signed-history restoration, then encrypted bundle materialization and
@@ -858,22 +925,23 @@ the narrowed matrix passes at the exact installed candidate revision.
 
 | Gate | Planning status | Required closure evidence |
 |---|---|---|
-| ADR 0034 local archive scope | Blocked on decision | Accepted ADR and reconciled acceptance/threat/runbook text |
-| ADR 0035 no-prune retention | Blocked on decision | Accepted ADR; installed validation-only result and no deletion |
-| Final repository verification | Passed at earlier baseline; rerun required | Final candidate `make verify`, PG17 zero-skip gate, local recovery/rule gates |
-| Local signed-archive restoration | Passed at earlier baseline; rerun required | Exact anchored history/tree verification and clean isolated local restore |
-| Encrypted local bundle restoration | Partial; database restore required | Real `age` materialization followed by same-anchor clean database restore, wrong-key/corruption rejection, and cleanup |
+| ADR 0034 local archive scope | Passed | Accepted ADR and reconciled acceptance/threat/runbook text |
+| ADR 0035 no-prune retention | Architecture passed; installed validation pending | Accepted ADR; installed validation-only result and no deletion |
+| Final repository verification | Passed at frozen release | Frozen candidate `make verify`, PG17 zero-skip gate, and local recovery/rule gates; rerun only for a new runtime candidate |
+| Local signed-archive restoration | Passed at frozen release | Exact anchored history/tree verification and clean isolated local restore |
+| Encrypted local bundle restoration | Passed at frozen release | Real `age` materialization followed by same-anchor clean database restore, wrong-key/corruption rejection, and cleanup |
 | Archive continuation/exporter append | Excluded | No closure evidence required; no continuation or resumed-exporter claim permitted |
-| Immutable installed candidate | Pending | Source checksum, installed revision/migration, unit/executable digests |
-| Installed observability/report DB boundary | Pending | Both wrapper bindings; grant convergence; payload/table/mutation/cross-tenant denials; snapshot and nine bounded report function results |
-| Installed service hardening | Pending | Effective unit, credential, privilege, listener, mount, and disabled-surface audit |
+| Immutable installed candidate | Passed in Phase 1 | Source checksum, installed revision/migration, unit/executable digests |
+| Installed observability/report DB boundary | Passed in Phase 1 | Both wrapper bindings; grant convergence; payload/table/mutation/cross-tenant denials; snapshot and nine bounded report function results |
+| Installed service hardening | Phase 1 audit passed; lifecycle drills pending separately | Effective unit, credential, privilege, listener, mount, and disabled-surface audit |
+| Installed recovery prerequisites | Pending authorization and provisioning | Exact backup/staging/recovery mounts, public recipient, isolated recovery boundary, and synthetic sealed-content deployment/preflight |
 | Installed encrypted base/WAL chain | Pending | Verified current encrypted chain, continuity, custody, timer, capacity, and no-prune results |
 | Installed-store PITR | Pending | Production helper A/B-not-C, integrity, RPO/RTO, credential/destruction, and cleanup evidence |
 | Non-Forgejo credential lifecycle | Pending | Replacement, next-use rejection, revocation/session, canary, and cleanup results per active class |
 | Backup-aware hard forget | Pending | Exact pre-forget correlation binding plus ledger/tombstone/material and stale key-provider/fresh-PITR non-resurrection within the ADR 0034 boundary |
 | Production-local monitoring | Partial | Installed scrape/rules, local fault pending/firing/recovery, zero eval errors, reports and byte caps |
-| Leakage and cross-process canaries | Pending | Exact scanner fields and fixed zero-match/result codes |
-| NPM exposure boundary | Pending | External spoof rejection and zero backend-contact proof |
+| Leakage and cross-process canaries | Repository gates passed; installed captures pending | Exact scanner fields and fixed zero-match/result codes |
+| NPM exposure boundary | Static contracts passed; external proof pending | External spoof rejection and zero backend-contact proof |
 | Cleanup and final bookkeeping | Pending | Exact teardown inventory, second check, source checksum, migration, final decision |
 | Forgejo operations | Excluded | No closure evidence required; no success claim permitted |
 | Backblaze provider evidence | Non-blocking | No closure evidence required; no offsite-copy claim permitted |
