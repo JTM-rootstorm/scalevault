@@ -70,9 +70,10 @@ identity in an independent custody boundary and install it owned by the
 dedicated `memory-recovery` identity as mode `0600` only on an isolated recovery
 host. Run prepared PostgreSQL under that same non-root drill identity so its
 bounded `restore_command` can decrypt WAL. Do not enable the verification timer
-on the routine node. A concrete offsite mount, recipient, custody owner,
-retention policy, and isolated recovery destination are mandatory before
-activation.
+on the routine node. The exact encrypted-store directory, recipient, custody
+owner, no-prune capacity policy, and isolated local recovery destination are
+mandatory before activation. No additional or offsite mount is required by
+this deployment contract.
 
 Install the public recipient as `root:kivra-backup` mode `0640`. Install the
 immutable release-tree `REVISION` as `root:root` mode `0444`, and the mutable
@@ -94,9 +95,10 @@ credentials.
 
 ## Provisioning and activation order
 
-1. Create the one `/mnt/memory` mount, the fixed store children, and the two
-   local plaintext directory roots with the exact ownership and modes above.
-   The helper will not create or repair these trusted roots.
+1. Verify the existing `/mnt/memory` mount, then create the fixed store
+   children and the two local plaintext directory roots with the exact
+   ownership and modes above. The helper will not create or repair these
+   trusted roots.
 2. Install `kivra-memory-postgres-backup` at
    `/usr/local/libexec/kivra-memory-postgres-backup`, owned by root and not
    writable by its service identity.
