@@ -29,11 +29,12 @@ def _configure(module: ModuleType, root: Path, monkeypatch: pytest.MonkeyPatch) 
     base_status = root / "latest-base.json"
     archive_status = root / "archive_status"
     output = root / "output"
-    storage = {component: root / component for component in module.STORAGE_ROOTS}
+    memory_capacity = root / "memory-capacity"
+    monitoring_capacity = root / "monitoring-capacity"
     archive_status.mkdir()
     output.mkdir(mode=0o750)
     output.chmod(0o750)
-    for path in storage.values():
+    for path in (memory_capacity, monitoring_capacity):
         path.mkdir()
     base_status.write_text(
         json.dumps({"object_id": "20260813T120000Z-0123456789abcdef", "result": "ok"})
@@ -70,7 +71,8 @@ def _configure(module: ModuleType, root: Path, monkeypatch: pytest.MonkeyPatch) 
             "PG_ARCHIVE_STATUS": archive_status,
             "OUTPUT_ROOT": output,
             "OUTPUT_PATH": output / "status.json",
-            "STORAGE_ROOTS": storage,
+            "MEMORY_CAPACITY_ROOT": memory_capacity,
+            "MONITORING_CAPACITY_ROOT": monitoring_capacity,
         }
     )
     monkeypatch.setattr(module.os, "geteuid", lambda: 0)
@@ -112,6 +114,10 @@ def test_publisher_emits_only_fixed_content_free_status(
     assert status["wal_oldest_ready_unixtime"] == 1_786_622_460
     assert status["result_counters"]["wal_archive_success"] == 1
     assert set(status["storage_free_bytes"]) == {"backup", "database", "monitoring", "wal"}
+    assert status["storage_free_bytes"]["backup"] == status["storage_free_bytes"]["database"]
+    assert status["storage_free_bytes"]["database"] == status["storage_free_bytes"]["wal"]
+    assert status["storage_free_ratio"]["backup"] == status["storage_free_ratio"]["database"]
+    assert status["storage_free_ratio"]["database"] == status["storage_free_ratio"]["wal"]
     assert module.OUTPUT_PATH.stat().st_mode & 0o777 == 0o640
     assert str(tmp_path) not in output.out + output.err + module.OUTPUT_PATH.read_text()
 
@@ -209,6 +215,32 @@ def test_missing_never_emitted_counters_publish_as_zero_baseline(
     }
 
 
+def test_storage_preserves_fixed_labels_from_one_shared_memory_capacity_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load()
+    _configure(module, tmp_path, monkeypatch)
+    memory_values = os.statvfs(module.MEMORY_CAPACITY_ROOT)
+    monitoring_values = os.statvfs(module.MONITORING_CAPACITY_ROOT)
+    calls: list[Path] = []
+
+    def statvfs(path: Path) -> os.statvfs_result:
+        calls.append(Path(path))
+        if Path(path) == module.MEMORY_CAPACITY_ROOT:
+            return memory_values
+        if Path(path) == module.MONITORING_CAPACITY_ROOT:
+            return monitoring_values
+        raise AssertionError(f"unexpected capacity source: {path}")
+
+    monkeypatch.setattr(module.os, "statvfs", statvfs)
+
+    free_bytes, free_ratios = module._storage()
+
+    assert calls == [module.MEMORY_CAPACITY_ROOT, module.MONITORING_CAPACITY_ROOT]
+    assert free_bytes["backup"] == free_bytes["database"] == free_bytes["wal"]
+    assert free_ratios["backup"] == free_ratios["database"] == free_ratios["wal"]
+
+
 def test_operational_metrics_units_keep_backup_store_out_of_exporter() -> None:
     publisher = (SYSTEMD / "kivra-memory-operational-metrics.service").read_text()
     timer = (SYSTEMD / "kivra-memory-operational-metrics.timer").read_text()
@@ -218,7 +250,10 @@ def test_operational_metrics_units_keep_backup_store_out_of_exporter() -> None:
     assert "RestrictAddressFamilies=AF_UNIX" in publisher
     assert "ReadWritePaths=/run/kivra-memory-metrics" in publisher
     assert "RuntimeDirectoryMode=0750" in publisher
-    assert publisher.count("ReadOnlyPaths=-/mnt/memory-backup") == 3
+    assert "RequiresMountsFor=/mnt/memory\n" in publisher
+    assert "ConditionPathIsMountPoint=/mnt/memory\n" in publisher
+    assert "/mnt/memory-backup" not in publisher
+    assert publisher.count("ReadOnlyPaths=-/mnt/memory/kivra-memory/backups/postgresql-pitr") == 3
     assert "OnUnitActiveSec=30s" in timer
     assert "ReadOnlyPaths=-/run/kivra-memory-metrics/status.json" in exporter
     assert "/mnt/memory-backup" not in exporter

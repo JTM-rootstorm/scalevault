@@ -33,15 +33,15 @@ PG_SOCKET = Path("/run/postgresql")
 PG_PORT = 5432
 PG_DATABASE = "kivra_memory"
 PG_BACKUP_ROLE = "memory_backup"
-BACKUP_MOUNT = Path("/mnt/memory-backup")
-PLAINTEXT_STAGING_MOUNT = Path("/mnt/memory-backup-staging")
-STORE = BACKUP_MOUNT / "kivra-memory-postgres"
+STORAGE_MOUNT = Path("/mnt/memory")
+STORE = STORAGE_MOUNT / "kivra-memory/backups/postgresql-pitr"
 BASE_ROOT = STORE / "base"
 WAL_ROOT = STORE / "wal"
 STATUS_ROOT = STORE / "status"
 VERIFICATION_ROOT = STORE / "verification"
 STAGING_ROOT = STORE / ".staging"
-RECOVERY_MOUNT = Path("/mnt/memory-recovery")
+PLAINTEXT_STAGING_ROOT = Path("/var/lib/kivra-memory/backup-staging")
+RECOVERY_ROOT = Path("/var/lib/kivra-memory/recovery")
 RECIPIENT_FILE = Path("/etc/kivra-memory/backup-age-recipient")
 IDENTITY_FILE = Path("/etc/kivra-memory/backup-age-identity")
 RELEASE_FILE = Path("/opt/kivra-memory/app/REVISION")
@@ -102,6 +102,10 @@ def _require_exact_mount(path: Path, *, writable: bool) -> None:
         _fail("required_mount_access_denied")
 
 
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
+
+
 def _require_directory(path: Path, *, mode: int | None = None) -> None:
     try:
         info = path.lstat()
@@ -141,9 +145,8 @@ def _require_fd_owned(descriptor: int, *, owner: str, group: str, mode: int) -> 
         _fail("storage_owner_invalid")
 
 
-def _ensure_store(*, staging_writable: bool = True) -> None:
-    _require_exact_mount(BACKUP_MOUNT, writable=False)
-    _require_owned(BACKUP_MOUNT, owner="root", group=STORE_GROUP, mode=0o750)
+def _ensure_store(*, status_writable: bool = True, staging_writable: bool = True) -> None:
+    _require_exact_mount(STORAGE_MOUNT, writable=False)
     contracts = {
         STORE: (STORE_OWNER, STORE_GROUP, 0o2750),
         BASE_ROOT: (STORE_OWNER, STORE_GROUP, 0o2750),
@@ -152,14 +155,67 @@ def _ensure_store(*, staging_writable: bool = True) -> None:
         VERIFICATION_ROOT: (RECOVERY_GROUP, STORE_GROUP, 0o2750),
         STAGING_ROOT: (STORE_OWNER, STORE_GROUP, 0o2770),
     }
+    storage_mount = _resolved(STORAGE_MOUNT)
+    store = _resolved(STORE)
+    pg_data = _resolved(PG_DATA, must_exist=False)
+    expected_paths = {
+        STORE: storage_mount / "kivra-memory/backups/postgresql-pitr",
+        BASE_ROOT: store / "base",
+        WAL_ROOT: store / "wal",
+        STATUS_ROOT: store / "status",
+        VERIFICATION_ROOT: store / "verification",
+        STAGING_ROOT: store / ".staging",
+    }
+    if any(_resolved(path) != expected for path, expected in expected_paths.items()):
+        _fail("storage_layout_invalid")
+    if any(os.path.ismount(path) for path in contracts):
+        _fail("storage_layout_invalid")
+    if _paths_overlap(store, pg_data):
+        _fail("storage_layout_invalid")
+    subroots = tuple(_resolved(path) for path in contracts if path != STORE)
+    if any(
+        _paths_overlap(left, right)
+        for index, left in enumerate(subroots)
+        for right in subroots[index + 1 :]
+    ):
+        _fail("storage_layout_invalid")
     for path, (owner, group, mode) in contracts.items():
         _require_directory(path, mode=mode)
         _require_owned(path, owner=owner, group=group, mode=mode)
     if not os.access(STORE, os.R_OK | os.X_OK):
         _fail("store_access_denied")
-    writable_paths = (STATUS_ROOT, STAGING_ROOT) if staging_writable else (STATUS_ROOT,)
+    writable_paths = tuple(
+        path
+        for path, required in (
+            (STATUS_ROOT, status_writable),
+            (STAGING_ROOT, staging_writable),
+        )
+        if required
+    )
     if not all(os.access(path, os.W_OK | os.X_OK) for path in writable_paths):
         _fail("store_access_denied")
+
+
+def _require_local_scratch(path: Path, *, owner: str, group: str) -> None:
+    _require_directory(path, mode=0o700)
+    _require_owned(path, owner=owner, group=group, mode=0o700)
+    resolved = _resolved(path)
+    if (
+        path not in {PLAINTEXT_STAGING_ROOT, RECOVERY_ROOT}
+        or not path.is_absolute()
+        or Path("/mnt") == resolved
+        or Path("/mnt") in resolved.parents
+        or os.path.ismount(path)
+        or _paths_overlap(resolved, _resolved(STORE, must_exist=False))
+        or _paths_overlap(resolved, _resolved(PG_DATA, must_exist=False))
+        or _paths_overlap(
+            _resolved(PLAINTEXT_STAGING_ROOT, must_exist=False),
+            _resolved(RECOVERY_ROOT, must_exist=False),
+        )
+    ):
+        _fail("local_scratch_invalid")
+    if not os.access(path, os.W_OK | os.X_OK):
+        _fail("local_scratch_access_denied")
 
 
 def _require_regular_file(
@@ -353,6 +409,7 @@ def _record_operational_result(
 ) -> None:
     """Durably increment one fixed content-free operational result counter."""
 
+    _ensure_store(staging_writable=False)
     if metric not in {"base_backup", "backup_verification", "wal_archive"}:
         _fail("operational_counter_invalid")
     schemas: dict[str, dict[str, int]] = {
@@ -935,14 +992,13 @@ def base_backup() -> None:
     _ensure_store()
     if not os.access(BASE_ROOT, os.W_OK | os.X_OK):
         _fail("store_access_denied")
-    _require_exact_mount(PLAINTEXT_STAGING_MOUNT, writable=True)
-    _require_owned(PLAINTEXT_STAGING_MOUNT, owner=STORE_OWNER, group=STORE_OWNER, mode=0o700)
+    _require_local_scratch(PLAINTEXT_STAGING_ROOT, owner=STORE_OWNER, group=STORE_OWNER)
     _validate_recipient()
     for binary in ("pg_basebackup", "pg_verifybackup", "psql"):
         _require_executable(PG_BINDIR / binary)
     backup_id = _new_id()
     stage = STAGING_ROOT / f"base-{backup_id}"
-    plaintext_stage = PLAINTEXT_STAGING_MOUNT / backup_id
+    plaintext_stage = PLAINTEXT_STAGING_ROOT / backup_id
     plain = plaintext_stage / "plain"
     stage.mkdir(mode=STORE_DIRECTORY_MODE)
     stage.chmod(STORE_DIRECTORY_MODE)
@@ -1033,7 +1089,7 @@ def base_backup() -> None:
         if plaintext_created:
             try:
                 shutil.rmtree(plaintext_stage)
-                _fsync_dir(PLAINTEXT_STAGING_MOUNT)
+                _fsync_dir(PLAINTEXT_STAGING_ROOT)
             except OSError as exc:
                 raise BackupError("plaintext_cleanup_failed") from exc
     _replace_json(STATUS_ROOT / "latest-base.json", {"object_id": backup_id, "result": "ok"})
@@ -1245,11 +1301,10 @@ def _safe_extract(archive_path: Path, destination: Path) -> None:
 
 
 def _require_recovery_destination(destination: Path) -> bool:
-    _require_exact_mount(RECOVERY_MOUNT, writable=True)
-    _require_owned(RECOVERY_MOUNT, owner="root", group=RECOVERY_GROUP, mode=0o770)
+    _require_local_scratch(RECOVERY_ROOT, owner=RECOVERY_GROUP, group=RECOVERY_GROUP)
     if (
         not destination.is_absolute()
-        or destination.parent != RECOVERY_MOUNT
+        or destination.parent != RECOVERY_ROOT
         or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,62}", destination.name)
     ):
         _fail("recovery_destination_invalid")
@@ -1281,7 +1336,7 @@ def _base_object(backup_id: str) -> tuple[Path, dict[str, Any]]:
     index = _read_index(root / "index.json", kind="base_backup")
     if index.get("object_id") != backup_id:
         _fail("manifest_invalid")
-    manifest = _encrypted_manifest(root, index, kind="base_backup", temporary_root=RECOVERY_MOUNT)
+    manifest = _encrypted_manifest(root, index, kind="base_backup", temporary_root=RECOVERY_ROOT)
     if manifest.get("object_id") != backup_id or manifest.get("postgres_major") != 17:
         _fail("manifest_invalid")
     encrypted = root / "backup.tar.age"
@@ -1292,11 +1347,11 @@ def _base_object(backup_id: str) -> tuple[Path, dict[str, Any]]:
 
 
 def prepare_restore(backup_id: str, destination_arg: str, target_kind: str, target: str) -> None:
-    _require_exact_mount(BACKUP_MOUNT, writable=False)
+    _ensure_store(status_writable=False, staging_writable=False)
     destination = Path(destination_arg)
     destination_existed = _require_recovery_destination(destination)
     encrypted, manifest = _base_object(backup_id)
-    tar_path = RECOVERY_MOUNT / f".{backup_id}.{secrets.token_hex(8)}.tar"
+    tar_path = RECOVERY_ROOT / f".{backup_id}.{secrets.token_hex(8)}.tar"
     try:
         _decrypt_file(encrypted, tar_path)
         if _sha256(tar_path) != manifest["plaintext_sha256"]:
@@ -1360,18 +1415,18 @@ def restore_wal(wal_name: str, destination_arg: str) -> None:
     destination = Path(destination_arg)
     if not destination.is_absolute() or destination.name != wal_name:
         _fail("wal_restore_destination_invalid")
-    _require_exact_mount(RECOVERY_MOUNT, writable=True)
-    _require_owned(RECOVERY_MOUNT, owner="root", group=RECOVERY_GROUP, mode=0o770)
+    _ensure_store(status_writable=False, staging_writable=False)
+    _require_local_scratch(RECOVERY_ROOT, owner=RECOVERY_GROUP, group=RECOVERY_GROUP)
     try:
-        relative = destination.relative_to(RECOVERY_MOUNT)
+        relative = destination.relative_to(RECOVERY_ROOT)
     except ValueError as exc:
         raise BackupError("wal_restore_destination_invalid") from exc
     if len(relative.parts) < 3 or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,62}", relative.parts[0]):
         _fail("wal_restore_destination_invalid")
-    drill_root = RECOVERY_MOUNT / relative.parts[0]
+    drill_root = RECOVERY_ROOT / relative.parts[0]
     if (
         _resolved(drill_root) != drill_root
-        or RECOVERY_MOUNT not in _resolved(destination.parent).parents
+        or RECOVERY_ROOT not in _resolved(destination.parent).parents
     ):
         _fail("wal_restore_destination_invalid")
     _require_directory(WAL_ROOT, mode=0o2770)
@@ -1417,7 +1472,7 @@ def restore_wal(wal_name: str, destination_arg: str) -> None:
         manifest_before = os.fstat(manifest_fd)
         if _sha256_fd(manifest_fd, max_bytes=1024 * 1024) != index["manifest_ciphertext_sha256"]:
             _fail("manifest_ciphertext_digest_mismatch")
-        temporary_manifest = RECOVERY_MOUNT / f"manifest-{secrets.token_hex(8)}.json"
+        temporary_manifest = RECOVERY_ROOT / f"manifest-{secrets.token_hex(8)}.json"
         try:
             _decrypt_fd(manifest_fd, temporary_manifest)
             manifest = _validate_manifest(
@@ -1467,16 +1522,16 @@ def restore_wal(wal_name: str, destination_arg: str) -> None:
 
 
 def verify_backup(backup_id: str) -> None:
+    _ensure_store(staging_writable=False)
     if backup_id == "latest":
         latest = _read_manifest_like_status(STATUS_ROOT / "latest-base.json")
         backup_id = latest
-    _require_exact_mount(BACKUP_MOUNT, writable=False)
-    destination = RECOVERY_MOUNT / f"verify-{backup_id}"
+    destination = RECOVERY_ROOT / f"verify-{backup_id}"
     if destination.exists():
         _fail("verification_destination_exists")
     _require_recovery_destination(destination)
     encrypted, manifest = _base_object(backup_id)
-    tar_path = RECOVERY_MOUNT / f".{backup_id}.{secrets.token_hex(8)}.tar"
+    tar_path = RECOVERY_ROOT / f".{backup_id}.{secrets.token_hex(8)}.tar"
     try:
         _decrypt_file(encrypted, tar_path)
         if _sha256(tar_path) != manifest["plaintext_sha256"]:
@@ -1846,7 +1901,7 @@ def retain() -> None:
     # prove a recoverable chain. Until a separately authenticated PITR result
     # and exact base/WAL/timeline/restore-point dependency catalog exist, every
     # deletion target is ambiguous and retention is a validation-only no-op.
-    capacity = shutil.disk_usage(BACKUP_MOUNT)
+    capacity = shutil.disk_usage(STORAGE_MOUNT)
     if capacity.total <= 0 or capacity.free * 10 < capacity.total:
         _fail("capacity_below_no_prune_floor")
     _replace_json(

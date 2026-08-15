@@ -16,27 +16,25 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Never
 
-BASE_STATUS = Path("/mnt/memory-backup/kivra-memory-postgres/status/latest-base.json")
+BASE_STATUS = Path("/mnt/memory/kivra-memory/backups/postgresql-pitr/status/latest-base.json")
 COUNTER_STATUS = {
     "base_backup": Path(
-        "/mnt/memory-backup/kivra-memory-postgres/status/operational-counters-base-backup.json"
+        "/mnt/memory/kivra-memory/backups/postgresql-pitr/status/operational-counters-base-backup.json"
     ),
     "backup_verification": Path(
-        "/mnt/memory-backup/kivra-memory-postgres/status/operational-counters-backup-verification.json"
+        "/mnt/memory/kivra-memory/backups/postgresql-pitr/status/operational-counters-backup-verification.json"
     ),
     "wal_archive": Path(
-        "/mnt/memory-backup/kivra-memory-postgres/status/operational-counters-wal-archive.json"
+        "/mnt/memory/kivra-memory/backups/postgresql-pitr/status/operational-counters-wal-archive.json"
     ),
 }
 PG_ARCHIVE_STATUS = Path("/mnt/memory/kivra-memory/postgresql/17/main/pg_wal/archive_status")
 OUTPUT_ROOT = Path("/run/kivra-memory-metrics")
 OUTPUT_PATH = OUTPUT_ROOT / "status.json"
-STORAGE_ROOTS = {
-    "backup": Path("/mnt/memory-backup"),
-    "database": Path("/mnt/memory/kivra-memory/postgresql/17/main"),
-    "monitoring": Path("/var/lib/prometheus"),
-    "wal": Path("/mnt/memory/kivra-memory/postgresql/17/main/pg_wal"),
-}
+# Preserve fixed metric labels while reading the shared NFS capacity exactly once.
+MEMORY_CAPACITY_ROOT = Path("/mnt/memory")
+MONITORING_CAPACITY_ROOT = Path("/var/lib/prometheus")
+SHARED_MEMORY_STORAGE_COMPONENTS = ("backup", "database", "wal")
 BASE_ID_RE = re.compile(r"\A([0-9]{8}T[0-9]{6}Z)-[0-9a-f]{16}\Z")
 WAL_STATUS_RE = re.compile(
     r"\A(?:[0-9A-F]{24}(?:\.[0-9A-F]{8}\.backup)?|[0-9A-F]{8}\.history)\.(ready|done)\Z"
@@ -222,8 +220,15 @@ def _storage() -> tuple[dict[str, int], dict[str, float]]:
     byte_values: dict[str, int] = {}
     ratio_values: dict[str, float] = {}
     try:
-        for component, path in STORAGE_ROOTS.items():
-            values = os.statvfs(path)
+        sources = {
+            "memory": os.statvfs(MEMORY_CAPACITY_ROOT),
+            "monitoring": os.statvfs(MONITORING_CAPACITY_ROOT),
+        }
+        for component, source in (
+            *((component, "memory") for component in SHARED_MEMORY_STORAGE_COMPONENTS),
+            ("monitoring", "monitoring"),
+        ):
+            values = sources[source]
             if values.f_blocks <= 0 or values.f_frsize <= 0:
                 _fail("operational_metrics_storage_invalid")
             byte_values[component] = values.f_bavail * values.f_frsize

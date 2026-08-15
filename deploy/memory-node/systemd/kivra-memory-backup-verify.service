@@ -1,8 +1,7 @@
 [Unit]
 Description=Verify latest ScaleVault encrypted PostgreSQL base backup
-RequiresMountsFor=/mnt/memory-backup /mnt/memory-recovery
-ConditionPathIsMountPoint=/mnt/memory-backup
-ConditionPathIsMountPoint=/mnt/memory-recovery
+RequiresMountsFor=/mnt/memory
+ConditionPathIsMountPoint=/mnt/memory
 ConditionFileNotEmpty=/etc/kivra-memory/backup-age-identity
 
 [Service]
@@ -40,6 +39,6 @@ KeyringMode=private
 LimitCORE=0
 CapabilityBoundingSet=
 IPAddressDeny=any
-ReadOnlyPaths=/mnt/memory-backup/kivra-memory-postgres /etc/kivra-memory/backup-age-identity
-ReadWritePaths=/mnt/memory-recovery /mnt/memory-backup/kivra-memory-postgres/status /mnt/memory-backup/kivra-memory-postgres/verification
+ReadOnlyPaths=/mnt/memory/kivra-memory/backups/postgresql-pitr /etc/kivra-memory/backup-age-identity
+ReadWritePaths=/var/lib/kivra-memory/recovery /mnt/memory/kivra-memory/backups/postgresql-pitr/status /mnt/memory/kivra-memory/backups/postgresql-pitr/verification
 TimeoutStartSec=4h

@@ -35,23 +35,24 @@ def _load() -> Any:
 
 
 def _configure(module: Any, temporary: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    backup_mount = temporary / "backup"
-    recovery_mount = temporary / "recovery"
-    plaintext_staging_mount = temporary / "plaintext-staging"
-    pg_data = temporary / "pg"
-    for path in (backup_mount, recovery_mount, plaintext_staging_mount, pg_data / "pg_wal"):
+    storage_mount = temporary / "memory"
+    recovery_root = temporary / "local" / "recovery"
+    plaintext_staging_root = temporary / "local" / "backup-staging"
+    pg_data = storage_mount / "kivra-memory" / "postgresql" / "17" / "main"
+    for path in (storage_mount, recovery_root, plaintext_staging_root, pg_data / "pg_wal"):
         path.mkdir(parents=True, mode=0o700)
-    module.BACKUP_MOUNT = backup_mount
-    module.PLAINTEXT_STAGING_MOUNT = plaintext_staging_mount
-    module.STORE = backup_mount / "kivra-memory-postgres"
+    module.STORAGE_MOUNT = storage_mount
+    module.STORE = storage_mount / "kivra-memory" / "backups" / "postgresql-pitr"
     module.BASE_ROOT = module.STORE / "base"
     module.WAL_ROOT = module.STORE / "wal"
     module.STATUS_ROOT = module.STORE / "status"
     module.VERIFICATION_ROOT = module.STORE / "verification"
     module.STAGING_ROOT = module.STORE / ".staging"
-    module.RECOVERY_MOUNT = recovery_mount
+    module.PLAINTEXT_STAGING_ROOT = plaintext_staging_root
+    module.RECOVERY_ROOT = recovery_root
     module.PG_DATA = pg_data
     module.PG_WAL = pg_data / "pg_wal"
+    module.STORE.parent.mkdir(parents=True)
     for path, mode in {
         module.STORE: 0o2750,
         module.BASE_ROOT: 0o2750,
@@ -63,9 +64,7 @@ def _configure(module: Any, temporary: Path, monkeypatch: pytest.MonkeyPatch) ->
         path.mkdir(mode=mode)
         path.chmod(mode)
     monkeypatch.setattr(module, "_require_owned", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        module.os.path, "ismount", lambda path: Path(path) in {backup_mount, recovery_mount}
-    )
+    monkeypatch.setattr(module.os.path, "ismount", lambda path: Path(path) == storage_mount)
 
 
 def _index(backup_id: str, created: datetime) -> dict[str, object]:
@@ -211,9 +210,13 @@ def test_helper_uses_fixed_paths_arguments_and_no_environment_redirects() -> Non
 
     assert SCRIPT.stat().st_mode & stat.S_IXUSR
     assert 'PG_BINDIR = Path("/usr/lib/postgresql/17/bin")' in source
-    assert 'BACKUP_MOUNT = Path("/mnt/memory-backup")' in source
-    assert 'PLAINTEXT_STAGING_MOUNT = Path("/mnt/memory-backup-staging")' in source
-    assert 'RECOVERY_MOUNT = Path("/mnt/memory-recovery")' in source
+    assert 'STORAGE_MOUNT = Path("/mnt/memory")' in source
+    assert 'STORE = STORAGE_MOUNT / "kivra-memory/backups/postgresql-pitr"' in source
+    assert 'PLAINTEXT_STAGING_ROOT = Path("/var/lib/kivra-memory/backup-staging")' in source
+    assert 'RECOVERY_ROOT = Path("/var/lib/kivra-memory/recovery")' in source
+    assert "BACKUP_MOUNT" not in source
+    assert "PLAINTEXT_STAGING_MOUNT" not in source
+    assert "RECOVERY_MOUNT" not in source
     assert "os.environ" not in source
     assert "shell=True" not in source
     assert "stderr=subprocess.DEVNULL" in source
@@ -225,6 +228,99 @@ def test_helper_uses_fixed_paths_arguments_and_no_environment_redirects() -> Non
     assert "--wal-method=stream" in source
     assert "_stream_stable_fd" in source
     assert "_scan_tar" in source
+
+
+def test_missing_storage_mount_fails_before_backup_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load()
+    _configure(module, tmp_path, monkeypatch)
+    monkeypatch.setattr(module.os.path, "ismount", lambda _path: False)
+    monkeypatch.setattr(sys, "argv", [str(module.HELPER_PATH), "base-backup"])
+
+    assert module.main() == 1
+
+    assert not list(module.STAGING_ROOT.iterdir())
+    assert not list(module.PLAINTEXT_STAGING_ROOT.iterdir())
+    assert not list(module.BASE_ROOT.iterdir())
+
+
+def test_single_mount_store_rejects_overlap_symlink_and_wrong_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    overlap = _load()
+    _configure(overlap, tmp_path / "overlap", monkeypatch)
+    overlap.PG_DATA = overlap.STORE
+    overlap.PG_WAL = overlap.PG_DATA / "pg_wal"
+    with pytest.raises(overlap.BackupError, match=r"^storage_layout_invalid$"):
+        overlap._ensure_store()
+
+    symlinked = _load()
+    _configure(symlinked, tmp_path / "symlinked", monkeypatch)
+    external = tmp_path / "external-staging"
+    external.mkdir()
+    symlinked.STAGING_ROOT.rmdir()
+    symlinked.STAGING_ROOT.symlink_to(external, target_is_directory=True)
+    with pytest.raises(symlinked.BackupError, match=r"^storage_layout_invalid$"):
+        symlinked._ensure_store()
+
+    wrong_mode = _load()
+    _configure(wrong_mode, tmp_path / "wrong-mode", monkeypatch)
+    wrong_mode.STATUS_ROOT.chmod(0o2750)
+    with pytest.raises(wrong_mode.BackupError, match=r"^directory_mode_invalid$"):
+        wrong_mode._ensure_store()
+
+    nested_mount = _load()
+    _configure(nested_mount, tmp_path / "nested-mount", monkeypatch)
+    monkeypatch.setattr(
+        nested_mount.os.path,
+        "ismount",
+        lambda path: Path(path) in {nested_mount.STORAGE_MOUNT, nested_mount.STORE},
+    )
+    with pytest.raises(nested_mount.BackupError, match=r"^storage_layout_invalid$"):
+        nested_mount._ensure_store()
+
+
+def test_local_plaintext_roots_are_non_mount_directories_outside_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load()
+    _configure(module, tmp_path, monkeypatch)
+
+    module._require_local_scratch(
+        module.PLAINTEXT_STAGING_ROOT,
+        owner=module.STORE_OWNER,
+        group=module.STORE_OWNER,
+    )
+    module._require_local_scratch(
+        module.RECOVERY_ROOT,
+        owner=module.RECOVERY_GROUP,
+        group=module.RECOVERY_GROUP,
+    )
+
+    monkeypatch.setattr(
+        module.os.path,
+        "ismount",
+        lambda path: Path(path) in {module.STORAGE_MOUNT, module.PLAINTEXT_STAGING_ROOT},
+    )
+    with pytest.raises(module.BackupError, match=r"^local_scratch_invalid$"):
+        module._require_local_scratch(
+            module.PLAINTEXT_STAGING_ROOT,
+            owner=module.STORE_OWNER,
+            group=module.STORE_OWNER,
+        )
+    monkeypatch.setattr(module.os.path, "ismount", lambda path: Path(path) == module.STORAGE_MOUNT)
+
+    unsafe = module.STORE / "plaintext"
+    unsafe.mkdir(mode=0o700)
+    unsafe.chmod(0o700)
+    module.PLAINTEXT_STAGING_ROOT = unsafe
+    with pytest.raises(module.BackupError, match=r"^local_scratch_invalid$"):
+        module._require_local_scratch(
+            unsafe,
+            owner=module.STORE_OWNER,
+            group=module.STORE_OWNER,
+        )
 
 
 def test_archive_wal_is_atomic_idempotent_and_rejects_mismatched_duplicate(
@@ -373,7 +469,7 @@ def test_restore_wal_rejects_valid_name_symlinked_to_external_object_before_read
         (external / name).write_bytes(b"crafted")
         (external / name).chmod(0o640)
     (module.WAL_ROOT / wal_name).symlink_to(external, target_is_directory=True)
-    drill = module.RECOVERY_MOUNT / "drill" / "pg_wal"
+    drill = module.RECOVERY_ROOT / "drill" / "pg_wal"
     drill.mkdir(parents=True)
     reached = False
 
@@ -414,12 +510,12 @@ def test_recovery_destination_is_exact_empty_direct_child(
     module = _load()
     _configure(module, tmp_path, monkeypatch)
 
-    accepted = module.RECOVERY_MOUNT / "drill-01"
+    accepted = module.RECOVERY_ROOT / "drill-01"
     module._require_recovery_destination(accepted)
     assert accepted.is_dir()
     with pytest.raises(module.BackupError, match=r"^recovery_destination_invalid$"):
-        module._require_recovery_destination(module.RECOVERY_MOUNT / "nested" / "drill")
-    occupied = module.RECOVERY_MOUNT / "occupied"
+        module._require_recovery_destination(module.RECOVERY_ROOT / "nested" / "drill")
+    occupied = module.RECOVERY_ROOT / "occupied"
     occupied.mkdir(mode=0o700)
     (occupied / "PG_VERSION").write_text("17")
     with pytest.raises(module.BackupError, match=r"^recovery_destination_not_empty$"):
@@ -649,7 +745,7 @@ def test_encrypted_manifest_digest_authentication_and_exact_schema(
     monkeypatch.setattr(module, "_decrypt_file", decrypt)
     assert (
         module._encrypted_manifest(
-            root, index, kind="base_backup", temporary_root=module.RECOVERY_MOUNT
+            root, index, kind="base_backup", temporary_root=module.RECOVERY_ROOT
         )["system_identifier"]
         == "123456789"
     )
@@ -657,7 +753,7 @@ def test_encrypted_manifest_digest_authentication_and_exact_schema(
     manifest["unexpected"] = "synthetic"
     with pytest.raises(module.BackupError, match=r"^manifest_invalid$"):
         module._encrypted_manifest(
-            root, index, kind="base_backup", temporary_root=module.RECOVERY_MOUNT
+            root, index, kind="base_backup", temporary_root=module.RECOVERY_ROOT
         )
 
 
@@ -839,21 +935,39 @@ def test_units_are_mount_gated_sandboxed_and_have_bounded_schedules() -> None:
     retention = (SYSTEMD / "kivra-memory-backup-retention.service").read_text()
     all_services = (base, verify, retention)
 
-    assert "ConditionPathIsMountPoint=/mnt/memory-backup" in base
-    assert "ConditionPathIsMountPoint=/mnt/memory-backup-staging" in base
+    assert "RequiresMountsFor=/mnt/memory" in base
+    assert "ConditionPathIsMountPoint=/mnt/memory" in base
+    assert base.count("ConditionPathIsMountPoint=") == 1
     assert "ConditionFileNotEmpty=/etc/kivra-memory/backup-age-recipient" in base
     assert "LoadCredential=postgres-pgpass:" in base
     assert "PGPASSFILE=/run/credentials/" in base
     assert "backup-age-identity" not in base
     assert "Group=kivra-backup" in base
-    assert "ConditionPathIsMountPoint=/mnt/memory-recovery" in verify
+    assert (
+        "ReadWritePaths=/mnt/memory/kivra-memory/backups/postgresql-pitr "
+        "/var/lib/kivra-memory/backup-staging\n" in base
+    )
+    assert "RequiresMountsFor=/mnt/memory" in verify
+    assert "ConditionPathIsMountPoint=/mnt/memory" in verify
+    assert verify.count("ConditionPathIsMountPoint=") == 1
     assert "ConditionFileNotEmpty=/etc/kivra-memory/backup-age-identity" in verify
     assert "ConditionPathIsRegularFile=" not in base
     assert "ConditionPathIsRegularFile=" not in verify
     assert "Group=memory-recovery" in verify
     assert "SupplementaryGroups=kivra-backup" in verify
-    assert "ReadOnlyPaths=/mnt/memory-backup/kivra-memory-postgres\n" in retention
-    assert "ReadWritePaths=/mnt/memory-backup/kivra-memory-postgres/status\n" in retention
+    assert (
+        "ReadOnlyPaths=/mnt/memory/kivra-memory/backups/postgresql-pitr "
+        "/etc/kivra-memory/backup-age-identity\n" in verify
+    )
+    assert (
+        "ReadWritePaths=/var/lib/kivra-memory/recovery "
+        "/mnt/memory/kivra-memory/backups/postgresql-pitr/status "
+        "/mnt/memory/kivra-memory/backups/postgresql-pitr/verification\n" in verify
+    )
+    assert "ReadOnlyPaths=/mnt/memory/kivra-memory/backups/postgresql-pitr\n" in retention
+    assert "ReadWritePaths=/mnt/memory/kivra-memory/backups/postgresql-pitr/status\n" in retention
+    assert "/mnt/memory-backup" not in "".join(all_services)
+    assert "/mnt/memory-recovery" not in "".join(all_services)
     for unit in all_services:
         for setting in (
             "NoNewPrivileges=true",
@@ -932,27 +1046,37 @@ def test_helper_readme_and_units_share_exact_storage_ownership_contract(
     monkeypatch.setattr(module, "_require_owned", record)
     monkeypatch.setattr(module.os, "access", lambda _path, _mode: True)
     module._ensure_store()
+    module._require_local_scratch(
+        module.PLAINTEXT_STAGING_ROOT, owner="memory-backup", group="memory-backup"
+    )
+    module._require_local_scratch(
+        module.RECOVERY_ROOT, owner="memory-recovery", group="memory-recovery"
+    )
 
     assert ownership_calls == {
-        module.BACKUP_MOUNT: ("root", "kivra-backup", 0o750),
         module.STORE: ("memory-backup", "kivra-backup", 0o2750),
         module.BASE_ROOT: ("memory-backup", "kivra-backup", 0o2750),
         module.WAL_ROOT: ("memory-backup", "kivra-backup", 0o2770),
         module.STATUS_ROOT: ("memory-backup", "kivra-backup", 0o2770),
         module.VERIFICATION_ROOT: ("memory-recovery", "kivra-backup", 0o2750),
         module.STAGING_ROOT: ("memory-backup", "kivra-backup", 0o2770),
+        module.PLAINTEXT_STAGING_ROOT: ("memory-backup", "memory-backup", 0o700),
+        module.RECOVERY_ROOT: ("memory-recovery", "memory-recovery", 0o700),
     }
 
     readme = " ".join((BACKUP_ROOT / "README.md").read_text().split())
-    assert "backup mount as `root:kivra-backup` mode `0750`" in readme
+    assert "`/mnt/memory` is the only mount in this topology" in readme
     assert "store and `base` as `memory-backup:kivra-backup` mode `2750`" in readme
     assert "`wal`, `status`, and `.staging` as `memory-backup:kivra-backup` mode `2770`" in readme
     assert "`verification` as `memory-recovery:kivra-backup` mode `2750`" in readme
     assert (
-        "staging mount is a distinct, local controlled filesystem owned by "
+        "staging directory is `/var/lib/kivra-memory/backup-staging`, owned by "
         "`memory-backup:memory-backup` mode `0700`" in readme
     )
-    assert "recovery mount as `root:memory-recovery` mode `0770`" in readme
+    assert (
+        "recovery-host plaintext root is `/var/lib/kivra-memory/recovery`, owned by "
+        "`memory-recovery:memory-recovery` mode `0700`" in readme
+    )
 
     base = (SYSTEMD / "kivra-memory-base-backup.service").read_text()
     verify = (SYSTEMD / "kivra-memory-backup-verify.service").read_text()
@@ -961,7 +1085,7 @@ def test_helper_readme_and_units_share_exact_storage_ownership_contract(
     assert "User=memory-backup\nGroup=kivra-backup" in retention
     assert "User=memory-recovery\nGroup=memory-recovery" in verify
     assert "SupplementaryGroups=kivra-backup" in verify
-    assert "/kivra-memory-postgres/verification" in verify
+    assert "/kivra-memory/backups/postgresql-pitr/verification" in verify
 
 
 def test_helper_readme_share_exact_credential_and_metadata_ownership(

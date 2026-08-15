@@ -1,8 +1,8 @@
 [Unit]
 Description=ScaleVault verified PostgreSQL recovery-chain retention
 After=kivra-memory-base-backup.service
-RequiresMountsFor=/mnt/memory-backup
-ConditionPathIsMountPoint=/mnt/memory-backup
+RequiresMountsFor=/mnt/memory
+ConditionPathIsMountPoint=/mnt/memory
 
 [Service]
 Type=oneshot
@@ -38,6 +38,6 @@ KeyringMode=private
 LimitCORE=0
 CapabilityBoundingSet=
 IPAddressDeny=any
-ReadOnlyPaths=/mnt/memory-backup/kivra-memory-postgres
-ReadWritePaths=/mnt/memory-backup/kivra-memory-postgres/status
+ReadOnlyPaths=/mnt/memory/kivra-memory/backups/postgresql-pitr
+ReadWritePaths=/mnt/memory/kivra-memory/backups/postgresql-pitr/status
 TimeoutStartSec=1h

@@ -116,13 +116,13 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
     age = Path(age_path)
     age_keygen = Path(age_keygen_path)
     module = _load()
-    data = tmp_path / "source-data"
+    storage_mount = tmp_path / "memory"
+    data = storage_mount / "kivra-memory" / "postgresql" / "17" / "main"
     socket_dir = tmp_path / "source-socket"
-    backup_mount = tmp_path / "backup-mount"
-    recovery_mount = tmp_path / "recovery-mount"
-    plaintext_staging_mount = tmp_path / "plaintext-staging-mount"
-    for path in (socket_dir, backup_mount, recovery_mount, plaintext_staging_mount):
-        path.mkdir(mode=0o700)
+    recovery_root = tmp_path / "local" / "recovery"
+    plaintext_staging_root = tmp_path / "local" / "backup-staging"
+    for path in (storage_mount, data.parent, socket_dir, recovery_root, plaintext_staging_root):
+        path.mkdir(parents=True, mode=0o700)
     source_port = _port()
     installed_helper = tmp_path / "kivra-memory-postgres-backup"
     _run(
@@ -155,7 +155,7 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
         )
     source_running = False
     restored_running = False
-    restored = recovery_mount / "pitr-drill"
+    restored = recovery_root / "pitr-drill"
     try:
         identity = tmp_path / "identity.txt"
         _run([str(age_keygen), "-o", str(identity)])
@@ -175,15 +175,15 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
         module.PG_SOCKET = socket_dir
         module.PG_PORT = source_port
         module.PG_DATABASE = "postgres"
-        module.BACKUP_MOUNT = backup_mount
-        module.PLAINTEXT_STAGING_MOUNT = plaintext_staging_mount
-        module.STORE = backup_mount / "kivra-memory-postgres"
+        module.STORAGE_MOUNT = storage_mount
+        module.STORE = storage_mount / "kivra-memory" / "backups" / "postgresql-pitr"
         module.BASE_ROOT = module.STORE / "base"
         module.WAL_ROOT = module.STORE / "wal"
         module.STATUS_ROOT = module.STORE / "status"
         module.VERIFICATION_ROOT = module.STORE / "verification"
         module.STAGING_ROOT = module.STORE / ".staging"
-        module.RECOVERY_MOUNT = recovery_mount
+        module.PLAINTEXT_STAGING_ROOT = plaintext_staging_root
+        module.RECOVERY_ROOT = recovery_root
         module.RECIPIENT_FILE = recipient
         module.IDENTITY_FILE = identity
         module.RELEASE_FILE = release
@@ -202,14 +202,10 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
             path.chmod(mode)
         monkeypatch.setattr(module, "_require_owned", lambda *args, **kwargs: None)
         monkeypatch.setattr(module, "_require_fd_owned", lambda *args, **kwargs: None)
-        original_ismount = module.os.path.ismount
         monkeypatch.setattr(
             module.os.path,
             "ismount",
-            lambda path: (
-                Path(path) in {backup_mount, recovery_mount, plaintext_staging_mount}
-                or original_ismount(path)
-            ),
+            lambda path: Path(path) == storage_mount,
         )
 
         installed_helper.write_text(
@@ -228,15 +224,15 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
             f"helper.PG_SOCKET = helper.Path({str(socket_dir)!r})\n"
             f"helper.PG_PORT = {source_port}\n"
             "helper.PG_DATABASE = 'postgres'\n"
-            f"helper.BACKUP_MOUNT = helper.Path({str(backup_mount)!r})\n"
-            f"helper.PLAINTEXT_STAGING_MOUNT = helper.Path({str(plaintext_staging_mount)!r})\n"
-            "helper.STORE = helper.BACKUP_MOUNT / 'kivra-memory-postgres'\n"
+            f"helper.STORAGE_MOUNT = helper.Path({str(storage_mount)!r})\n"
+            "helper.STORE = helper.STORAGE_MOUNT / 'kivra-memory/backups/postgresql-pitr'\n"
             "helper.BASE_ROOT = helper.STORE / 'base'\n"
             "helper.WAL_ROOT = helper.STORE / 'wal'\n"
             "helper.STATUS_ROOT = helper.STORE / 'status'\n"
             "helper.VERIFICATION_ROOT = helper.STORE / 'verification'\n"
             "helper.STAGING_ROOT = helper.STORE / '.staging'\n"
-            f"helper.RECOVERY_MOUNT = helper.Path({str(recovery_mount)!r})\n"
+            f"helper.PLAINTEXT_STAGING_ROOT = helper.Path({str(plaintext_staging_root)!r})\n"
+            f"helper.RECOVERY_ROOT = helper.Path({str(recovery_root)!r})\n"
             f"helper.RECIPIENT_FILE = helper.Path({str(recipient)!r})\n"
             f"helper.IDENTITY_FILE = helper.Path({str(identity)!r})\n"
             f"helper.RELEASE_FILE = helper.Path({str(release)!r})\n"
@@ -245,9 +241,7 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
             f"helper.HELPER_PATH = helper.Path({str(installed_helper)!r})\n"
             "helper._require_owned = lambda *args, **kwargs: None\n"
             "helper._require_fd_owned = lambda *args, **kwargs: None\n"
-            "mounts = {helper.BACKUP_MOUNT, helper.PLAINTEXT_STAGING_MOUNT, "
-            "helper.RECOVERY_MOUNT}\n"
-            "helper.os.path.ismount = lambda path: helper.Path(path) in mounts\n"
+            "helper.os.path.ismount = lambda path: helper.Path(path) == helper.STORAGE_MOUNT\n"
             "raise SystemExit(helper.main())\n",
             encoding="utf-8",
         )
@@ -280,7 +274,7 @@ def test_encrypted_base_backup_and_named_restore_point_pitr(
         source_running = False
 
         wal_object = next(path for path in module.WAL_ROOT.iterdir() if len(path.name) == 24)
-        negative_root = recovery_mount / "negative" / "pg_wal"
+        negative_root = recovery_root / "negative" / "pg_wal"
         negative_root.mkdir(parents=True, mode=0o700)
         for member_name in ("recovery-manifest.json.age", "segment.age"):
             member = wal_object / member_name

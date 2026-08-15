@@ -16,23 +16,23 @@ The helper has no environment-controlled paths. Its installed contract is:
 |---|---|
 | PostgreSQL tools | `/usr/lib/postgresql/17/bin` |
 | Canonical cluster | `/mnt/memory/kivra-memory/postgresql/17/main` |
-| independently mounted backup filesystem | `/mnt/memory-backup` |
-| controlled plaintext staging mount | `/mnt/memory-backup-staging` |
-| encrypted store | `/mnt/memory-backup/kivra-memory-postgres` |
-| isolated recovery filesystem | `/mnt/memory-recovery` |
+| only mounted storage root | `/mnt/memory` |
+| encrypted store | `/mnt/memory/kivra-memory/backups/postgresql-pitr` |
+| routine-node plaintext staging | `/var/lib/kivra-memory/backup-staging` |
+| isolated recovery-host plaintext | `/var/lib/kivra-memory/recovery` |
 | public age recipient | `/etc/kivra-memory/backup-age-recipient` |
 | recovery-only private identity | `/etc/kivra-memory/backup-age-identity` |
 
-All three mount points must be real mount points, not directories on `/`. Create the
-backup mount as `root:kivra-backup` mode `0750`. Create the store and `base`
-as `memory-backup:kivra-backup` mode `2750`; create `wal`, `status`, and
-`.staging` as `memory-backup:kivra-backup` mode `2770` (setgid). Create
+`/mnt/memory` is the only mount in this topology; the store is a directory
+beneath it, not an independent backup mount or failure domain. Create the store
+and `base` as `memory-backup:kivra-backup` mode `2750`; create `wal`, `status`,
+and `.staging` as `memory-backup:kivra-backup` mode `2770` (setgid). Create
 `verification` as `memory-recovery:kivra-backup` mode `2750`. Encrypted objects
-and content-free metadata are mode `0640`. Add only `memory-backup`, `postgres`, and the isolated
-`memory-recovery` identity to `kivra-backup`; confirm those exact memberships
-before activation. Plaintext staging remains mode `0600/0700`. Do not grant
-`kivra-backup` to any application, ingress, worker, exporter, or monitoring
-identity.
+and content-free metadata are mode `0640`. Add only `memory-backup`, `postgres`,
+and the isolated `memory-recovery` identity to `kivra-backup`; confirm those
+exact memberships before activation. Plaintext staging remains mode `0600/0700`.
+Do not grant `kivra-backup` to any application, ingress, worker, exporter, or
+monitoring identity.
 
 Provision the locked, non-login `memory-recovery` system identity and the
 `verification` directory on the routine node even though the private age
@@ -42,14 +42,21 @@ directory. On the isolated recovery host, the same named identity writes only
 digest-bound verification markers; `memory-backup` reads them through
 `kivra-backup` and cannot replace them.
 
-Create the isolated recovery mount as `root:memory-recovery` mode `0770`. The
-fixed staging mount is a distinct, local controlled filesystem owned by
-`memory-backup:memory-backup` mode `0700`. It must not be an offsite/NAS/cloud
-destination. `pg_basebackup` and `pg_verifybackup` use a unique child there;
-only the resulting age ciphertext and encrypted recovery manifest are written
-to the backup failure domain. The child is removed on handled success/failure.
-After power loss, inspect and remove only a positively identified valid-ID
-staging child before retrying.
+The routine staging directory is `/var/lib/kivra-memory/backup-staging`, owned
+by `memory-backup:memory-backup` mode `0700`; it is not a mount. The isolated
+recovery-host plaintext root is `/var/lib/kivra-memory/recovery`, owned by
+`memory-recovery:memory-recovery` mode `0700`; it too is not a mount.
+`pg_basebackup` and `pg_verifybackup` use a unique staging child. Only the
+resulting age ciphertext and encrypted recovery manifest are written beneath
+the encrypted store. Remove that child on handled success or failure. After a
+power loss, inspect and remove only a positively identified valid-ID staging
+child before retrying.
+
+This is a same-NAS, same-dataset, and same-capacity fate arrangement: the
+canonical cluster and encrypted backup store share `/mnt/memory`. It does not
+claim independent local durability or an independent local failure domain.
+Nightly NAS backups and any operator-managed Backblaze or PBS protection are
+outside this deployment contract and are not claimed or accepted here.
 
 The split is deliberate: PostgreSQL needs group write only to publish WAL
 objects and status through `.staging`; it must not be able to replace retained
@@ -87,9 +94,9 @@ credentials.
 
 ## Provisioning and activation order
 
-1. Create the independently mounted backup and controlled local staging
-   filesystems and every fixed store child with the exact ownership and modes
-   above. The helper will not create or repair these trusted roots.
+1. Create the one `/mnt/memory` mount, the fixed store children, and the two
+   local plaintext directory roots with the exact ownership and modes above.
+   The helper will not create or repair these trusted roots.
 2. Install `kivra-memory-postgres-backup` at
    `/usr/local/libexec/kivra-memory-postgres-backup`, owned by root and not
    writable by its service identity.
@@ -103,9 +110,10 @@ credentials.
    `/opt/kivra-memory/app/REVISION`. Write a SHA-256 of the reviewed,
    secret-free recovery configuration manifest to
    `/etc/kivra-memory/recovery-configuration.sha256`.
-6. Exercise age encrypt/decrypt and atomic publication using synthetic bytes on
-   both failure domains and the staging mount. Inject interruption, destination loss, read-only
-   remount, ENOSPC, and wrong-identity failures; no final object may appear.
+6. Exercise age encrypt/decrypt and atomic publication using synthetic bytes in
+   the store and staging directory. Inject interruption, destination loss,
+   read-only remount, ENOSPC, and wrong-identity failures; no final object may
+   appear.
 7. Merge `postgresql.conf.example` and `pg_hba.conf.example`, reload, force
    `pg_switch_wal()`, and confirm a complete encrypted WAL object appears.
 8. Enable and run the base-backup service once. A base is published only after
@@ -150,23 +158,21 @@ After an uncatchable process or host failure, inspect `.staging` without reading
 payloads, preserve evidence, and remove only a positively identified stale
 `base-<valid-id>` or `wal-<valid-name>-<nonce>` child before retrying.
 
-On the isolated recovery host:
+On the isolated recovery host, use the installed helper to verify a selected
+backup (or `latest`) and prepare exactly one target selector. `--target-time`
+requires an explicit UTC ISO 8601 value; `--target-lsn` requires an uppercase
+PostgreSQL LSN. The destination must be one new or empty mode-0700 direct child
+of `/var/lib/kivra-memory/recovery`, never a path below `/mnt/memory`.
+Canonical storage, nested paths, symlinks, existing data, unsafe archive
+members, wrong PostgreSQL major, damaged ciphertext, failed authentication, and
+digest mismatch are rejected. The helper extracts safely, reruns
+`pg_verifybackup`, writes recovery settings with `recovery_target_action='pause'`,
+and creates `recovery.signal`. It does not start PostgreSQL.
 
-```text
-kivra-memory-postgres-backup verify BACKUP_ID
-kivra-memory-postgres-backup verify latest
-kivra-memory-postgres-backup prepare-restore BACKUP_ID \
-  /mnt/memory-recovery/DRILL_NAME --target-name RESTORE_POINT
-```
-
-`--target-time` requires an explicit UTC ISO 8601 value; `--target-lsn` requires
-an uppercase PostgreSQL LSN. The destination must be one new or empty mode-0700
-direct child of the recovery mount. Canonical storage, nested paths, symlinks,
-existing data, unsafe archive members, wrong PostgreSQL major, damaged
-ciphertext, failed authentication, and digest mismatch are rejected. The
-helper extracts safely, reruns `pg_verifybackup`, writes recovery settings with
-`recovery_target_action='pause'`, and creates `recovery.signal`. It does not
-start PostgreSQL.
+The recovery host may receive the same NAS dataset with accepted base/WAL
+objects read-only and writes limited to the exact `status` and `verification`
+marker directories. The recovery process must have no traversal or read access
+to the canonical subtree, and every restore output stays outside `/mnt/memory`.
 
 Before starting an isolated cluster, prove the canonical application units,
 workers, ingress, tunnel, poller, and exporter are stopped and disabled; use a
@@ -226,9 +232,10 @@ restore is the proof.
 
 ## Stop conditions
 
-Stop immediately if the backup mount disappears, WAL backlog threatens
-canonical capacity, the last verified chain could be pruned, restore resolves
-outside the isolated mount, the recovery identity is present on the routine
-node, authentication or checksum verification fails, or services/listeners are
-active on the recovery node. Preserve names, fixed result codes, hashes, and
-timestamps only; never preserve payloads or secret-bearing command output.
+Stop immediately if `/mnt/memory` disappears, the shared dataset lacks capacity,
+WAL backlog threatens canonical capacity, the last verified chain could be
+pruned, restore resolves below `/mnt/memory`, the recovery identity is present
+on the routine node, authentication or checksum verification fails, or
+services/listeners are active on the recovery node. Preserve names, fixed result
+codes, hashes, and timestamps only; never preserve payloads or secret-bearing
+command output.

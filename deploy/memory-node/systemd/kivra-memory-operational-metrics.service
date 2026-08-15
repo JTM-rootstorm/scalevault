@@ -1,8 +1,8 @@
 [Unit]
 Description=ScaleVault fixed-schema operational metrics publisher
 After=postgresql@17-main.service
-RequiresMountsFor=/mnt/memory /mnt/memory-backup
-ConditionPathIsMountPoint=/mnt/memory-backup
+RequiresMountsFor=/mnt/memory
+ConditionPathIsMountPoint=/mnt/memory
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -44,10 +44,10 @@ RestrictAddressFamilies=AF_UNIX
 IPAddressDeny=any
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 AmbientCapabilities=CAP_DAC_READ_SEARCH
-ReadOnlyPaths=/mnt/memory-backup/kivra-memory-postgres/status/latest-base.json
-ReadOnlyPaths=-/mnt/memory-backup/kivra-memory-postgres/status/operational-counters-base-backup.json
-ReadOnlyPaths=-/mnt/memory-backup/kivra-memory-postgres/status/operational-counters-backup-verification.json
-ReadOnlyPaths=-/mnt/memory-backup/kivra-memory-postgres/status/operational-counters-wal-archive.json
+ReadOnlyPaths=/mnt/memory/kivra-memory/backups/postgresql-pitr/status/latest-base.json
+ReadOnlyPaths=-/mnt/memory/kivra-memory/backups/postgresql-pitr/status/operational-counters-base-backup.json
+ReadOnlyPaths=-/mnt/memory/kivra-memory/backups/postgresql-pitr/status/operational-counters-backup-verification.json
+ReadOnlyPaths=-/mnt/memory/kivra-memory/backups/postgresql-pitr/status/operational-counters-wal-archive.json
 ReadOnlyPaths=/mnt/memory/kivra-memory/postgresql/17/main/pg_wal/archive_status
 ReadOnlyPaths=/var/lib/prometheus
 ReadWritePaths=/run/kivra-memory-metrics

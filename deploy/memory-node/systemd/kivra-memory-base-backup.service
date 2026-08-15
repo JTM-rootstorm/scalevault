@@ -2,9 +2,8 @@
 Description=ScaleVault encrypted PostgreSQL base backup
 After=postgresql@17-main.service
 Requires=postgresql@17-main.service
-RequiresMountsFor=/mnt/memory-backup /mnt/memory-backup-staging
-ConditionPathIsMountPoint=/mnt/memory-backup
-ConditionPathIsMountPoint=/mnt/memory-backup-staging
+RequiresMountsFor=/mnt/memory
+ConditionPathIsMountPoint=/mnt/memory
 ConditionFileNotEmpty=/etc/kivra-memory/backup-age-recipient
 
 [Service]
@@ -47,5 +46,5 @@ LimitCORE=0
 CapabilityBoundingSet=
 IPAddressDeny=any
 ReadOnlyPaths=/etc/kivra-memory/backup-age-recipient /etc/kivra-memory/recovery-configuration.sha256 /opt/kivra-memory/app/REVISION
-ReadWritePaths=/mnt/memory-backup/kivra-memory-postgres /mnt/memory-backup-staging
+ReadWritePaths=/mnt/memory/kivra-memory/backups/postgresql-pitr /var/lib/kivra-memory/backup-staging
 TimeoutStartSec=4h
