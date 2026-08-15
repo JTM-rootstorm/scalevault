@@ -63,6 +63,7 @@ kivra-memory-scan-public-artifact = "kivra_memory.security.leakage_scanner:main"
 kivra-memory-scan-operational-canaries = "kivra_memory.security.operational_canary:main"
 kivra-memory-operator-report = "kivra_memory.observability.report_main:main"
 kivra-memory-operator-report-run = "kivra_memory.observability.report_runner:main"
+kivra-memory-pitr-verify = "kivra_memory.tools.postgres_pitr_verify:main"
 kivra-memory-retention-cap-check = "kivra_memory.observability.retention_caps:main"
 kivra-memory-metrics-exporter = "kivra_memory.observability.metrics_exporter:main"
 

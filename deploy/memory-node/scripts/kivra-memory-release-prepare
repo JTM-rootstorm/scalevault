@@ -33,6 +33,7 @@ ENTRY_POINTS = (
     "kivra-memory-metrics-exporter",
     "kivra-memory-operator-report",
     "kivra-memory-operator-report-run",
+    "kivra-memory-pitr-verify",
     "kivra-memory-retention-cap-check",
     "kivra-memory-scan-operational-canaries",
     "kivra-memory-scan-public-artifact",
